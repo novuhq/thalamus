@@ -204,13 +204,9 @@ class OpenAIProvider implements Provider {
     params: RequestParams,
     conversationId: string,
   ): ResponseCreateParamsStreaming {
-    const allMessages = params.sessionId
-      ? [params.message]
-      : [...(params.history ?? []), params.message];
-
     return {
       model: this.model,
-      input: openaiTransformer.toInput(allMessages) as ResponseCreateParamsStreaming['input'],
+      input: openaiTransformer.toInput(params.messages) as ResponseCreateParamsStreaming['input'],
       stream: true,
       conversation: { id: conversationId },
       ...(this.instructions ? { instructions: this.instructions } : {}),

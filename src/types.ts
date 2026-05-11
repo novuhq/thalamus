@@ -16,12 +16,10 @@ export interface Message {
 }
 
 export interface RequestParams {
-  /** The user's message for this turn. Always role: user. */
-  message: Message;
+  /** Messages for this turn. May include system, user, and assistant messages. */
+  messages: Message[];
   /** Opaque session identifier returned by a prior response. Absent means start a new session. */
   sessionId?: string;
-  /** Prior conversation for session recovery when sessionId is absent. Provider ignores when sessionId is present. */
-  history?: Message[];
   /** Pass-through options forwarded directly to the underlying provider SDK call. */
   providerOptions?: Record<string, unknown>;
 }

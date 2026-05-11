@@ -55,7 +55,7 @@ describe('stream — new session', () => {
 
     const rt = createAnthropicProvider(config);
     const result = await rt.stream({
-      message: { role: 'user', content: 'Hi' } as never,
+      messages: [{ role: 'user', content: 'Hi' } as never],
     });
 
     const parts = [];
@@ -87,7 +87,7 @@ describe('stream — resume session', () => {
     const rt = createAnthropicProvider(config);
     await collectStream(
       await rt.stream({
-        message: { role: 'user', content: 'next' } as never,
+        messages: [{ role: 'user', content: 'next' } as never],
         sessionId: 'sess_existing',
       }),
     );
@@ -109,7 +109,7 @@ describe('send', () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    const response = await rt.send({ message: { role: 'user', content: 'ping' } as never });
+    const response = await rt.send({ messages: [{ role: 'user', content: 'ping' } as never] });
     expect(response.content).toBe('Done.');
   });
 });
@@ -125,7 +125,7 @@ describe('error mapping', () => {
     mockSend.mockResolvedValue({});
 
     const result = await createAnthropicProvider(config).stream({
-      message: { role: 'user', content: 'x' } as never,
+      messages: [{ role: 'user', content: 'x' } as never],
     });
     result.response.catch(() => {});
 

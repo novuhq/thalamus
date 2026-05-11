@@ -56,7 +56,7 @@ describe('stream — new session (conversation)', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      message: { role: 'user', content: 'Hi' } as never,
+      messages: [{ role: 'user', content: 'Hi' } as never],
     });
 
     const parts = [];
@@ -84,7 +84,7 @@ describe('stream — resume session (conversation)', () => {
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        message: { role: 'user', content: 'next' } as never,
+        messages: [{ role: 'user', content: 'next' } as never],
         sessionId: 'conv_existing',
       }),
     );
@@ -96,8 +96,8 @@ describe('stream — resume session (conversation)', () => {
   });
 });
 
-describe('history seeding', () => {
-  it('prepends history to input when no sessionId', async () => {
+describe('multiple messages', () => {
+  it('passes all messages as input', async () => {
     mockConversationsCreate.mockResolvedValue({ id: 'conv_hist' });
     mockResponsesCreate.mockReturnValue(
       makeStream([
@@ -108,8 +108,10 @@ describe('history seeding', () => {
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        message: { role: 'user', content: 'current' } as never,
-        history: [{ role: 'user', content: 'prior' } as never],
+        messages: [
+          { role: 'system', content: 'You are helpful' } as never,
+          { role: 'user', content: 'current' } as never,
+        ],
       }),
     );
 
@@ -143,7 +145,7 @@ describe('tool call streaming', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      message: { role: 'user', content: 'weather?' } as never,
+      messages: [{ role: 'user', content: 'weather?' } as never],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -173,7 +175,7 @@ describe('refusal handling', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      message: { role: 'user', content: 'do something bad' } as never,
+      messages: [{ role: 'user', content: 'do something bad' } as never],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -196,7 +198,7 @@ describe('error handling', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      message: { role: 'user', content: 'x' } as never,
+      messages: [{ role: 'user', content: 'x' } as never],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);

@@ -212,7 +212,10 @@ class AnthropicProvider implements Provider {
 
       const sseStream = await this.client.beta.sessions.events.stream(sessionId);
       await this.client.beta.sessions.events.send(sessionId, {
-        events: [{ type: 'user.message', content: toContentBlocks(params.message.content) }],
+        events: [{
+          type: 'user.message' as const,
+          content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
+        }],
       });
 
       const acc = new ResponseAccumulator();

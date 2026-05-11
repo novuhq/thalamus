@@ -5,7 +5,6 @@ export default defineConfig({
     index: 'src/index.ts',
     'anthropic/index': 'src/anthropic/index.ts',
     'openai/index': 'src/openai/index.ts',
-    'bedrock/index': 'src/bedrock/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,

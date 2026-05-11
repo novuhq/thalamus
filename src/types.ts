@@ -81,4 +81,3 @@ export interface Provider {
 
 export const ANTHROPIC = 'anthropic' as const;
 export const OPENAI = 'openai' as const;
-export const BEDROCK = 'bedrock' as const;

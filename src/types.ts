@@ -7,7 +7,8 @@ export enum MessageRole {
 export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mediaType: string }
-  | { type: 'image-url'; url: string };
+  | { type: 'image-url'; url: string }
+  | { type: 'file'; data: string; mediaType: string; name?: string };
 
 export interface Message {
   role: MessageRole;
@@ -15,9 +16,12 @@ export interface Message {
 }
 
 export interface RequestParams {
-  messages: Message[];
+  /** The user's message for this turn. Always role: user. */
+  message: Message;
   /** Opaque session identifier returned by a prior response. Absent means start a new session. */
   sessionId?: string;
+  /** Prior conversation for session recovery when sessionId is absent. Provider ignores when sessionId is present. */
+  history?: Message[];
   /** Pass-through options forwarded directly to the underlying provider SDK call. */
   providerOptions?: Record<string, unknown>;
 }

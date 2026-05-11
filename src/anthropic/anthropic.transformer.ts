@@ -1,0 +1,38 @@
+import type { Message } from '../types.js';
+import type { AnthropicContentBlock } from './anthropic.types.js';
+
+/**
+ * Converts a Message's content to Anthropic content blocks.
+ */
+export function toContentBlocks(content: Message['content']): AnthropicContentBlock[] {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+
+  const blocks: AnthropicContentBlock[] = [];
+  for (const part of content) {
+    switch (part.type) {
+      case 'text':
+        blocks.push({ type: 'text', text: part.text });
+        break;
+      case 'image':
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: part.mediaType, data: part.data },
+        });
+        break;
+      case 'image-url':
+        blocks.push({ type: 'image', source: { type: 'url', url: part.url } });
+        break;
+      case 'file':
+        blocks.push({
+          type: 'document',
+          source: { type: 'base64', media_type: part.mediaType, data: part.data },
+          title: part.name ?? null,
+        });
+        break;
+    }
+  }
+
+  return blocks;
+}

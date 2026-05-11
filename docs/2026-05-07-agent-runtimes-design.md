@@ -93,53 +93,54 @@ const BEDROCK = 'bedrock' as const;
 ### Input
 
 ```typescript
-interface AgentRuntimeParams {
-  messages: AgentRuntimeMessage[];           // new message(s) for this turn
-  history?: AgentRuntimeMessage[];           // prior conversation context (bounded)
-  sessionId?: string;
-  providerOptions?: Record<string, unknown>;
-  abortSignal?: AbortSignal;
+interface RequestParams {
+  message: Message;                          // the user's message for this turn
+  sessionId?: string;                        // resume existing session
+  history?: Message[];                       // prior conversation for session recovery
+  providerOptions?: Record<string, unknown>; // provider-specific pass-through
 }
 
-enum AgentRuntimeMessageRole {
+enum MessageRole {
   USER = 'user',
   ASSISTANT = 'assistant',
   SYSTEM = 'system',
 }
 
-interface AgentRuntimeMessage {
-  role: AgentRuntimeMessageRole;
-  content: string | AgentRuntimeContentPart[];
-  createdAt?: string;
+interface Message {
+  role: MessageRole;
+  content: string | ContentPart[];
 }
 
-type AgentRuntimeContentPart =
+type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mediaType: string }   // base64 inline
   | { type: 'image-url'; url: string }                    // URL reference
   | { type: 'file'; data: string; mediaType: string; name?: string };
 ```
 
-`messages` contains the new message(s) for the current turn — typically a system message with per-turn context and the user's latest message. `history` contains prior conversation context, assembled from ConversationActivity (bounded, typically last 20 entries). The caller (Novu) assembles both from its existing data model.
+> **Design change (decided during implementation):** `message` is singular, not `messages[]`. Every managed agent turn is exactly one user message — the subscriber typed one thing. The original spec had `messages[]` to allow smuggling per-turn system context alongside the user message, but implementation revealed this creates ambiguity: Anthropic managed agents have no per-turn system message mechanism (system prompt is on the agent config), Bedrock agents accept only a single `inputText`, and the `[System]:` prefix hack is unreliable. Per-turn context belongs in `providerOptions` (e.g. OpenAI `instructions`) or platform-level config (agent system prompt, session resources), not in the message array. Singular `message` makes the DX impossible to misuse.
 
-**When is `history` populated?** Under normal operation, the first turn of a conversation has no history — the user just said "Hello" and there's nothing prior. On all subsequent turns, `sessionId` is present and the provider's server-side session already has full context, so `history` is ignored. `history` exists primarily as a **session recovery and seeding mechanism** for cases where a new provider session must be created with existing conversation context:
+`message` is the user's message for this turn. Always `role: user`. The provider converts it to the platform's native format (Anthropic content blocks, OpenAI input messages, Bedrock inputText).
+
+`sessionId` is a first-class field for resuming provider sessions. On the first turn it's omitted — the provider creates a new session. On subsequent turns, the caller passes the session ID returned from the previous turn. This is the primary mechanism for multi-turn continuity.
+
+`history` is only needed when `sessionId` is absent and there is prior conversation context to recover. This is a **session recovery mechanism**, not the normal path.
+
+**When is `history` populated?** Under normal operation, the first turn of a conversation has no history — the user just said "Hello" and there's nothing prior. On all subsequent turns, `sessionId` is present and the provider's server-side session already has full context, so `history` is not needed. `history` exists for edge cases:
 
 - **Session expiry.** Provider session timed out (e.g. Claude session expired after inactivity). The worker detects a 404/410 on resume, clears `externalSessionId`, and re-invokes with `sessionId` absent and `history` populated from ConversationActivity — so the agent doesn't lose memory mid-conversation.
 - **Provider migration.** User switches an agent from one provider to another mid-conversation. The old session ID is meaningless for the new provider. `history` carries the conversation context forward.
 - **Replay after provider-side data loss.** Novu is the source of truth for conversation history, not the provider. `history` enables reconstruction.
 
-**Provider contract for `messages` and `history`:**
+**Provider contract for `message` and `history`:**
 
-- Always process `messages` — these are the inputs for this turn.
-- When creating a new session (no `sessionId`): use `history` to seed the provider session/conversation if present and the provider supports it. On a brand-new conversation, `history` will be empty — this is the normal case.
+- Always process `message` — this is the input for this turn.
+- When creating a new session (no `sessionId`): use `history` to seed the provider session if present and the provider supports it. On a brand-new conversation, `history` will be absent — this is the normal case.
 - When resuming a session (with `sessionId`): ignore `history` — the provider's session already has full context.
-- Stateless providers (future): concatenate `[...history, ...messages]` internally.
 
-`content` can be a plain string for text-only messages, or an array of `AgentRuntimeContentPart` for multimodal messages (e.g. a subscriber sends a screenshot with a question). Each provider's `MessageTransformer` maps content parts to the provider's native format — Claude uses `{ type: 'image', source: { type: 'base64', ... } }`, OpenAI uses `{ type: 'image_url', image_url: { url } }`.
+`content` can be a plain string for text-only messages, or an array of `ContentPart` for multimodal messages (e.g. a subscriber sends a screenshot with a question). Each provider's transformer converts content parts to the provider's native format — Claude uses `{ type: 'image', source: { type: 'base64', ... } }`, OpenAI uses `{ type: 'image_url', image_url: { url } }`.
 
-`sessionId` is a first-class field for resuming provider sessions. On the first turn it's omitted — the provider creates a new session. On subsequent turns, the caller passes the session ID returned from the previous turn. This is the primary mechanism for multi-turn continuity. Inspired by `agent-sdk-core`'s explicit `resumeSessionId` pattern — keeping session management discoverable rather than buried in `providerOptions`.
-
-`providerOptions` is the escape hatch for provider-specific configuration (Claude session settings, OpenAI response parameters, model overrides, etc.) that doesn't map to the generic interface.
+`providerOptions` is the escape hatch for provider-specific configuration (Claude session settings, OpenAI `instructions`, model overrides, etc.) that doesn't map to the generic interface.
 
 ### Output
 
@@ -199,18 +200,16 @@ Stream part types are a discriminated union on the `type` field — extensible b
 
 When `finishReason` is `'requires-action'`, the stream completes and the consumer should inspect `response.actionsRequired` to determine what's needed (e.g. tool confirmations — providers like Bedrock can request multiple actions in a single turn). Then re-invoke `stream()` with `response.sessionId` and the action results in `providerOptions`.
 
-### Message Transformer
+### Content Transformer
 
-Each provider implements a `MessageTransformer` to convert between the generic format and provider-specific API format:
+Each provider has an internal content transformer that converts `ContentPart[]` to the provider's native content block format. The transformer is a pure format converter — no role-based logic, no message filtering.
 
 ```typescript
-interface MessageTransformer<TProviderMessage> {
-  toProviderMessages(messages: AgentRuntimeMessage[]): TProviderMessage[];
-  toAgentRuntimeResponse(providerResponse: unknown): AgentRuntimeResponse;
-}
+// Example: Anthropic transformer (internal to the provider)
+function toContentBlocks(content: Message['content']): AnthropicContentBlock[];
 ```
 
-Transformers are exported publicly — usable standalone for self-hosted bridge users who want to convert Novu's message format to a provider's format without using the full runtime.
+Transformers are internal implementation details of each provider. The provider calls the transformer inside `stream()`/`send()` — consumers never interact with it directly.
 
 ---
 
@@ -276,12 +275,9 @@ const runtime = thalamus.anthropic({
 });
 
 const result = await runtime.stream({
-  messages: [
-    { role: AgentRuntimeMessageRole.SYSTEM, content: 'You are a support agent.' },
-    { role: AgentRuntimeMessageRole.USER, content: 'Help me with billing' },
-  ],
-  // history is omitted on first turn — provider creates a new session
-  // on subsequent turns: history: [...prior messages], sessionId: 'session_abc'
+  message: { role: MessageRole.USER, content: 'Help me with billing' },
+  // first turn: no sessionId, no history — provider creates a new session
+  // subsequent turns: sessionId: 'session_abc' (history not needed, server has context)
 });
 
 for await (const part of result.stream) {
@@ -526,7 +522,7 @@ class ManagedRuntime implements AgentRuntime {
       organizationId: context.organizationId,
       integrationIdentifier: context.integrationIdentifier,
       platform: context.platform,
-      messages,
+      message,
       history,
       providerOptions: this.buildProviderOptions(context),
     });
@@ -537,7 +533,7 @@ class ManagedRuntime implements AgentRuntime {
       agentId: context.agent._id,
       conversationId: context.conversation._id,
       // ... same fields ...
-      messages: [],  // continuation, not a new user message
+      message: { role: MessageRole.USER, content: '' },
       sessionId: context.conversation.externalSessionId,
       providerOptions: {
         toolConfirmation: {
@@ -558,7 +554,7 @@ class ManagedAgentWorker {
     const provider = this.resolveProvider(job.data);
 
     const result = await provider.stream({
-      messages: job.data.messages,
+      message: job.data.message,
       history: job.data.history,
       sessionId: job.data.sessionId,
       providerOptions: job.data.providerOptions,
@@ -690,8 +686,8 @@ A thin helper in `@novu/framework` converts agent handler context to the package
 ```typescript
 // @novu/framework/thalamus
 export function toRuntimeParams(ctx: AgentContext): {
-  messages: AgentRuntimeMessage[];
-  history: AgentRuntimeMessage[];
+  message: Message;
+  history: Message[];
 };
 ```
 
@@ -706,28 +702,9 @@ const anthropic = thalamus.anthropic({ apiKey: '...', agentId: '...' });
 
 const myAgent = agent('support-bot', {
   onMessage: async (ctx) => {
-    const { messages, history } = toRuntimeParams(ctx);
-    const result = await anthropic.send({ messages, history });
+    const { message, history } = toRuntimeParams(ctx);
+    const result = await anthropic.send({ message, history });
     return result.content;
-  },
-});
-```
-
-Or use just the transformer for direct SDK usage:
-
-```typescript
-import { toRuntimeParams } from '@novu/framework/thalamus';
-import { anthropicTransformer } from '@novu/thalamus/anthropic';
-
-const myAgent = agent('support-bot', {
-  onMessage: async (ctx) => {
-    const { messages, history } = toRuntimeParams(ctx);
-    const claudeMessages = anthropicTransformer.toProviderMessages([...history, ...messages]);
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      messages: claudeMessages,
-    });
-    return response.content[0].text;
   },
 });
 ```

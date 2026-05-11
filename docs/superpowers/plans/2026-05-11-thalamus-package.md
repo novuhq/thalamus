@@ -262,10 +262,10 @@ export interface Message {
 }
 
 export interface RequestParams {
-  messages: Message[];
+  message: Message;
   sessionId?: string;
+  history?: Message[];
   providerOptions?: Record<string, unknown>;
-  // `history` added in Phase 3 (OpenAI needs it for session seeding)
 }
 
 export interface Usage {
@@ -397,69 +397,52 @@ The transformer's job: convert `Message[]` → Anthropic content blocks. Tested 
 ```typescript
 // __tests__/anthropic/anthropic.transformer.test.ts
 import { describe, expect, it } from 'vitest';
-import { anthropicTransformer } from '../../src/anthropic/anthropic.transformer.js';
-import { MessageRole } from '../../src/types.js';
-import type { Message } from '../../src/types.js';
+import { toContentBlocks } from '../../src/anthropic/anthropic.transformer.js';
 
-describe('anthropicTransformer.toProviderMessages', () => {
-  it('converts a USER text message to a text block', () => {
-    const messages: Message[] = [
-      { role: MessageRole.USER, content: 'Hello!' },
-    ];
-    expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
+describe('toContentBlocks', () => {
+  it('converts a string to a single text block', () => {
+    expect(toContentBlocks('Hello!')).toEqual([
       { type: 'text', text: 'Hello!' },
     ]);
   });
 
-  it('prefixes SYSTEM messages with [System]:', () => {
-    const messages: Message[] = [
-      { role: MessageRole.SYSTEM, content: 'You are a support agent.' },
-    ];
-    expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
-      { type: 'text', text: '[System]: You are a support agent.' },
+  it('converts a text content part', () => {
+    expect(toContentBlocks([{ type: 'text', text: 'Hello!' }])).toEqual([
+      { type: 'text', text: 'Hello!' },
     ]);
   });
 
-  it('skips ASSISTANT messages (session owns its own history)', () => {
-    const messages: Message[] = [
-      { role: MessageRole.ASSISTANT, content: 'Previous response' },
-      { role: MessageRole.USER, content: 'Follow-up' },
-    ];
-    const result = anthropicTransformer.toProviderMessages(messages);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ type: 'text', text: 'Follow-up' });
-  });
-
   it('converts base64 image content parts', () => {
-    const messages: Message[] = [
-      {
-        role: MessageRole.USER,
-        content: [{ type: 'image', data: 'abc123', mediaType: 'image/png' }],
-      },
-    ];
-    expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
+    expect(toContentBlocks([{ type: 'image', data: 'abc123', mediaType: 'image/png' }])).toEqual([
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc123' } },
     ]);
   });
 
   it('converts image-url content parts', () => {
-    const messages: Message[] = [
-      {
-        role: MessageRole.USER,
-        content: [{ type: 'image-url', url: 'https://example.com/img.png' }],
-      },
-    ];
-    expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
+    expect(toContentBlocks([{ type: 'image-url', url: 'https://example.com/img.png' }])).toEqual([
       { type: 'image', source: { type: 'url', url: 'https://example.com/img.png' } },
     ]);
   });
 
-  it('handles mixed system + user messages', () => {
-    const messages: Message[] = [
-      { role: MessageRole.SYSTEM, content: 'context' },
-      { role: MessageRole.USER, content: 'question' },
-    ];
-    expect(anthropicTransformer.toProviderMessages(messages)).toHaveLength(2);
+  it('converts a file content part to a document block', () => {
+    expect(toContentBlocks([{ type: 'file', data: 'cGRm', mediaType: 'application/pdf', name: 'report.pdf' }])).toEqual([
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'cGRm' }, title: 'report.pdf' },
+    ]);
+  });
+
+  it('sets document title to null when file has no name', () => {
+    const result = toContentBlocks([{ type: 'file', data: 'dGV4dA==', mediaType: 'text/plain' }]);
+    expect(result[0]).toMatchObject({ type: 'document', title: null });
+  });
+
+  it('converts mixed content parts in order', () => {
+    const result = toContentBlocks([
+      { type: 'text', text: 'Look at this:' },
+      { type: 'image', data: 'abc', mediaType: 'image/jpeg' },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ type: 'text' });
+    expect(result[1]).toMatchObject({ type: 'image' });
   });
 });
 ```
@@ -509,22 +492,31 @@ function contentToBlocks(
   return blocks;
 }
 
-export const anthropicTransformer = {
-  toProviderMessages(messages: Message[]): AnthropicContentBlock[] {
-    const blocks: AnthropicContentBlock[] = [];
-    for (const msg of messages) {
-      if (msg.role === MessageRole.ASSISTANT) continue;
-      blocks.push(...contentToBlocks(msg.role, msg.content));
-    }
-    return blocks;
-  },
+export function toContentBlocks(content: Message['content']): AnthropicContentBlock[] {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
 
-  // Utility for standalone users — converts a response summary back to Response.
-  toResponse(resp: unknown): Response {
-    const r = resp as { content: string; sessionId?: string; finishReason?: Response['finishReason']; usage?: Response['usage'] };
-    return { content: r.content, sessionId: r.sessionId, finishReason: r.finishReason ?? 'stop', usage: r.usage };
-  },
-};
+  const blocks: AnthropicContentBlock[] = [];
+  for (const part of content) {
+    switch (part.type) {
+      case 'text':
+        blocks.push({ type: 'text', text: part.text });
+        break;
+      case 'image':
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: part.mediaType, data: part.data } });
+        break;
+      case 'image-url':
+        blocks.push({ type: 'image', source: { type: 'url', url: part.url } });
+        break;
+      case 'file':
+        blocks.push({ type: 'document', source: { type: 'base64', media_type: part.mediaType, data: part.data }, title: part.name ?? null });
+        break;
+    }
+  }
+
+  return blocks;
+}
 ```
 
 - [ ] **Step 4: Run transformer tests — expect PASS**
@@ -610,7 +602,7 @@ describe('stream — new session', () => {
 
     const rt = createAnthropicProvider(config);
     const result = await rt.stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      message: { role: 'user', content: 'Hi' } as never,
     });
 
     const parts = [];
@@ -642,7 +634,7 @@ describe('stream — resume session', () => {
     const rt = createAnthropicProvider(config);
     await collectStream(
       await rt.stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        message: { role: 'user', content: 'next' } as never,
         sessionId: 'sess_existing',
       }),
     );
@@ -664,7 +656,7 @@ describe('send', () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    const response = await rt.send({ messages: [{ role: 'user', content: 'ping' } as never] });
+    const response = await rt.send({ message: { role: 'user', content: 'ping' } as never });
     expect(response.content).toBe('Done.');
   });
 });
@@ -688,7 +680,7 @@ describe('error mapping', () => {
     mockSend.mockResolvedValue({});
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'x' } as never],
+      message: { role: 'user', content: 'x' } as never,
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -789,7 +781,7 @@ class AnthropicProvider implements Provider {
       const sseStream = await (this.client.beta.sessions.events as any).stream(sessionId);
 
       await (this.client.beta.sessions.events as any).send(sessionId, {
-        events: [{ type: 'user.message', content: anthropicTransformer.toProviderMessages(params.messages) }],
+        events: [{ type: 'user.message', content: anthropicTransformer.toInput(params.messages) }],
       });
 
       let accumulatedContent = '';
@@ -980,12 +972,12 @@ Add after the `messages` field:
 history?: Message[];
 ```
 
-Full updated `RequestParams`:
+Verify `RequestParams` already has `history` (added during Phase 2):
 ```typescript
 export interface RequestParams {
-  messages: Message[];
-  history?: Message[];   // ← new: used by OpenAI and Bedrock for session seeding
+  message: Message;
   sessionId?: string;
+  history?: Message[];
   providerOptions?: Record<string, unknown>;
 }
 ```
@@ -1081,12 +1073,12 @@ import { openaiTransformer } from '../../src/openai/openai.transformer.js';
 import { MessageRole } from '../../src/types.js';
 import type { Message } from '../../src/types.js';
 
-describe('openaiTransformer.toProviderMessages', () => {
+describe('openaiTransformer.toInput', () => {
   it('converts a USER text message', () => {
     const messages: Message[] = [
       { role: MessageRole.USER, content: 'Hello' },
     ];
-    expect(openaiTransformer.toProviderMessages(messages)).toEqual([
+    expect(openaiTransformer.toInput(messages)).toEqual([
       { role: 'user', content: 'Hello' },
     ]);
   });
@@ -1095,7 +1087,7 @@ describe('openaiTransformer.toProviderMessages', () => {
     const messages: Message[] = [
       { role: MessageRole.SYSTEM, content: 'Be helpful' },
     ];
-    expect(openaiTransformer.toProviderMessages(messages)).toEqual([
+    expect(openaiTransformer.toInput(messages)).toEqual([
       { role: 'system', content: 'Be helpful' },
     ]);
   });
@@ -1104,7 +1096,7 @@ describe('openaiTransformer.toProviderMessages', () => {
     const messages: Message[] = [
       { role: MessageRole.ASSISTANT, content: 'Prior answer' },
     ];
-    expect(openaiTransformer.toProviderMessages(messages)).toEqual([
+    expect(openaiTransformer.toInput(messages)).toEqual([
       { role: 'assistant', content: 'Prior answer' },
     ]);
   });
@@ -1116,7 +1108,7 @@ describe('openaiTransformer.toProviderMessages', () => {
         content: [{ type: 'image-url', url: 'https://example.com/img.jpg' }],
       },
     ];
-    expect(openaiTransformer.toProviderMessages(messages)).toEqual([
+    expect(openaiTransformer.toInput(messages)).toEqual([
       { role: 'user', content: [{ type: 'input_image', image_url: { url: 'https://example.com/img.jpg' } }] },
     ]);
   });
@@ -1128,7 +1120,7 @@ describe('openaiTransformer.toProviderMessages', () => {
         content: [{ type: 'image', data: 'abc123', mediaType: 'image/jpeg' }],
       },
     ];
-    expect(openaiTransformer.toProviderMessages(messages)).toEqual([
+    expect(openaiTransformer.toInput(messages)).toEqual([
       { role: 'user', content: [{ type: 'input_image', image_url: { url: 'data:image/jpeg;base64,abc123' } }] },
     ]);
   });
@@ -1151,7 +1143,7 @@ import {
 import type { OpenAIInputMessage } from './openai.types.js';
 
 export const openaiTransformer = {
-  toProviderMessages(messages: Message[]): OpenAIInputMessage[] {
+  toInput(messages: Message[]): OpenAIInputMessage[] {
     return messages.map((msg) => {
       const role =
         msg.role === MessageRole.USER ? 'user'
@@ -1253,7 +1245,7 @@ describe('stream — new session', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      message: { role: 'user', content: 'Hi' } as never,
     });
 
     const parts = [];
@@ -1280,7 +1272,7 @@ describe('stream — resume session', () => {
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        message: { role: 'user', content: 'next' } as never,
         sessionId: 'resp_prev',
       }),
     );
@@ -1302,7 +1294,7 @@ describe('history seeding', () => {
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        messages: [{ role: 'user', content: 'current' } as never],
+        message: { role: 'user', content: 'current' } as never,
         history: [{ role: 'user', content: 'prior' } as never],
       }),
     );
@@ -1319,7 +1311,7 @@ describe('error handling', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'x' } as never],
+      message: { role: 'user', content: 'x' } as never,
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -1417,7 +1409,7 @@ class OpenAIProvider implements Provider {
 
       const createParams: Record<string, unknown> = {
         model: this.model,
-        input: openaiTransformer.toProviderMessages(allMessages),
+        input: openaiTransformer.toInput(allMessages),
         stream: true,
       };
       if (this.instructions) createParams.instructions = this.instructions;
@@ -1653,12 +1645,12 @@ import { bedrockTransformer } from '../../src/bedrock/bedrock.transformer.js';
 import { MessageRole } from '../../src/types.js';
 import type { Message } from '../../src/types.js';
 
-describe('bedrockTransformer.toProviderMessages', () => {
+describe('bedrockTransformer.toInput', () => {
   it('returns a single-element array with USER message text', () => {
     const messages: Message[] = [
       { role: MessageRole.USER, content: 'Hello Bedrock' },
     ];
-    expect(bedrockTransformer.toProviderMessages(messages)).toEqual(['Hello Bedrock']);
+    expect(bedrockTransformer.toInput(messages)).toEqual(['Hello Bedrock']);
   });
 
   it('prepends SYSTEM messages as context', () => {
@@ -1666,7 +1658,7 @@ describe('bedrockTransformer.toProviderMessages', () => {
       { role: MessageRole.SYSTEM, content: 'You are a billing assistant.' },
       { role: MessageRole.USER, content: 'What is my balance?' },
     ];
-    const [inputText] = bedrockTransformer.toProviderMessages(messages);
+    const [inputText] = bedrockTransformer.toInput(messages);
     expect(inputText).toContain('[System]: You are a billing assistant.');
     expect(inputText).toContain('What is my balance?');
   });
@@ -1676,7 +1668,7 @@ describe('bedrockTransformer.toProviderMessages', () => {
       { role: MessageRole.ASSISTANT, content: 'Previous response' },
       { role: MessageRole.USER, content: 'Next question' },
     ];
-    expect(bedrockTransformer.toProviderMessages(messages)).toEqual(['Next question']);
+    expect(bedrockTransformer.toInput(messages)).toEqual(['Next question']);
   });
 
   it('extracts only text parts from content arrays (images become empty, files become text)', () => {
@@ -1689,7 +1681,7 @@ describe('bedrockTransformer.toProviderMessages', () => {
         ],
       },
     ];
-    const [inputText] = bedrockTransformer.toProviderMessages(messages);
+    const [inputText] = bedrockTransformer.toInput(messages);
     expect(inputText).toContain('describe this:');
     expect(inputText).toContain('[File notes.txt]');
   });
@@ -1723,7 +1715,7 @@ function messageToText(msg: Message): string {
 }
 
 export const bedrockTransformer = {
-  toProviderMessages(messages: Message[]): string[] {
+  toInput(messages: Message[]): string[] {
     const parts: string[] = [];
     for (const msg of messages) {
       if (msg.role === MessageRole.ASSISTANT) continue;
@@ -1810,7 +1802,7 @@ describe('stream — new session', () => {
     );
 
     const result = await createBedrockProvider(config).stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      message: { role: 'user', content: 'Hi' } as never,
     });
 
     const parts = [];
@@ -1833,7 +1825,7 @@ describe('stream — resume session', () => {
 
     await collectStream(
       await createBedrockProvider(config).stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        message: { role: 'user', content: 'next' } as never,
         sessionId: 'my-uuid',
       }),
     );
@@ -1864,7 +1856,7 @@ describe('returnControl → requires-action', () => {
     );
 
     const result = await createBedrockProvider(config).stream({
-      messages: [{ role: 'user', content: 'do it' } as never],
+      message: { role: 'user', content: 'do it' } as never,
     });
     await collectStream(result);
     const response = await result.response;
@@ -1881,7 +1873,7 @@ describe('error handling', () => {
     mockSend.mockRejectedValue(err);
 
     const result = await createBedrockProvider(config).stream({
-      messages: [{ role: 'user', content: 'x' } as never],
+      message: { role: 'user', content: 'x' } as never,
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -1988,7 +1980,7 @@ class BedrockProvider implements Provider {
         ? params.messages
         : [...(params.history ?? []), ...params.messages];
 
-      const [inputText] = bedrockTransformer.toProviderMessages(allMessages);
+      const [inputText] = bedrockTransformer.toInput(allMessages);
 
       yield { type: 'stream-start', sessionId };
 
@@ -2127,12 +2119,12 @@ git commit -m "feat: add AWS Bedrock Agents provider"
 
 **What gets added here:**
 - `mapStream()` in stream-utils — now that all three providers exist, it's clear this is generally useful
-- `MessageTransformer<T>` interface — now that we have three transformers, extracting the interface makes sense (you can see the pattern)
 - Remaining `Message` fields (`createdAt`)
-- `file` handling in the Anthropic transformer (skipped in Phase 2 since it wasn't needed)
 - Smoke tests verifying all subpath exports
 
-### Task 1: Add mapStream and MessageTransformer interface
+> Note: Transformers are internal pure functions per provider (e.g. `toContentBlocks` for Anthropic). No shared `MessageTransformer<T>` interface is needed — each transformer has a different signature matching its provider's format. The `file` content part was already handled during Phase 2 implementation.
+
+### Task 1: Add mapStream and createdAt
 
 **Files:**
 - Modify: `src/stream-utils.ts`
@@ -2163,71 +2155,21 @@ export async function* mapStream<T>(
 }
 ```
 
-- [ ] **Step 2: Add MessageTransformer interface and createdAt to src/types.ts**
+- [ ] **Step 2: Add createdAt to src/types.ts**
 
 Add `createdAt` to `Message`:
 ```typescript
 export interface Message {
   role: MessageRole;
   content: string | ContentPart[];
-  createdAt?: string;  // ← new
+  createdAt?: string;
 }
 ```
 
-Add `MessageTransformer` interface (now that we have three transformers, the pattern is clear):
-```typescript
-export interface MessageTransformer<TProviderMessage> {
-  toProviderMessages(messages: Message[]): TProviderMessage[];
-  toResponse(providerResponse: unknown): Response;
-}
-```
-
-- [ ] **Step 3: Update all three transformers to declare the interface type**
-
-In `src/anthropic/anthropic.transformer.ts`, update the export line:
-```typescript
-import type { AnthropicContentBlock } from './anthropic.types.js';
-import type { MessageTransformer } from '../types.js';
-
-export const anthropicTransformer: MessageTransformer<AnthropicContentBlock> = {
-  // ... (same implementation, just typed explicitly now)
-```
-
-In `src/openai/openai.transformer.ts`:
-```typescript
-import type { OpenAIInputMessage } from './openai.types.js';
-import type { MessageTransformer } from '../types.js';
-
-export const openaiTransformer: MessageTransformer<OpenAIInputMessage> = {
-  // ...
-```
-
-In `src/bedrock/bedrock.transformer.ts`:
-```typescript
-import type { MessageTransformer } from '../types.js';
-
-export const bedrockTransformer: MessageTransformer<string> = {
-  // ...
-```
-
-- [ ] **Step 4: Add `file` handling to the Anthropic transformer**
-
-The Anthropic transformer in Phase 2 skipped `file` parts. Now that `file` is in the shared types (added in Phase 4), add it:
-
-In `src/anthropic/anthropic.transformer.ts`, add a `case 'file':` branch to `contentToBlocks`:
-```typescript
-case 'file':
-  blocks.push({
-    type: 'text',
-    text: `[File ${part.name ?? 'attachment'}]: ${part.data}`,
-  });
-  break;
-```
-
-- [ ] **Step 5: Run all tests — expect PASS**
+- [ ] **Step 3: Run all tests — expect PASS**
 
 Run: `pnpm test`
-Expected: All 38 tests still pass.
+Expected: All tests still pass.
 
 ### Task 2: Smoke tests and build verification
 
@@ -2273,19 +2215,19 @@ describe('subpath exports', () => {
   it('anthropic subpath exports factory and transformer', async () => {
     const { createAnthropicProvider, anthropicTransformer } = await import('../src/anthropic/index.js');
     expect(typeof createAnthropicProvider).toBe('function');
-    expect(typeof anthropicTransformer.toProviderMessages).toBe('function');
+    expect(typeof anthropicTransformer.toInput).toBe('function');
   });
 
   it('openai subpath exports factory and transformer', async () => {
     const { createOpenAIProvider, openaiTransformer } = await import('../src/openai/index.js');
     expect(typeof createOpenAIProvider).toBe('function');
-    expect(typeof openaiTransformer.toProviderMessages).toBe('function');
+    expect(typeof openaiTransformer.toInput).toBe('function');
   });
 
   it('bedrock subpath exports factory and transformer', async () => {
     const { createBedrockProvider, bedrockTransformer } = await import('../src/bedrock/index.js');
     expect(typeof createBedrockProvider).toBe('function');
-    expect(typeof bedrockTransformer.toProviderMessages).toBe('function');
+    expect(typeof bedrockTransformer.toInput).toBe('function');
   });
 });
 ```
@@ -2322,7 +2264,7 @@ Tests  45 passed (45)
 
 ```bash
 git add -A
-git commit -m "feat: add mapStream, MessageTransformer interface, and build verification"
+git commit -m "feat: add mapStream, createdAt, and build verification"
 ```
 
 ---
@@ -2336,4 +2278,4 @@ This table shows how `src/types.ts` grew — each addition motivated by a concre
 | `MessageRole`, `Message`, `RequestParams` (messages + sessionId), `Response` (content + finishReason), stream parts (text-delta, thinking, tool-use, stream-start, finish, error), `StreamResult`, `Provider`, `ANTHROPIC` | 2 | Minimum needed for Anthropic |
 | `history` on params, `OPENAI`, error subclasses | 3 | OpenAI history seeding + richer error codes |
 | `file` content part, `actionsRequired` on response, `ActionRequired`, `provider-event` stream part, `BEDROCK` | 4 | Bedrock file fallback, returnControl, trace events |
-| `createdAt` on messages, `MessageTransformer<T>` interface, `mapStream()` | 5 | Polish — now that all three exist, patterns are clear |
+| `createdAt` on messages, `mapStream()` | 5 | Polish — now that all three exist, patterns are clear |

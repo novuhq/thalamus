@@ -1,0 +1,56 @@
+{
+  "name": "@novu/thalamus",
+  "version": "0.1.0",
+  "description": "Provider-agnostic managed AI agent runtime for Novu",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    },
+    "./anthropic": {
+      "import": "./dist/anthropic/index.mjs",
+      "require": "./dist/anthropic/index.cjs",
+      "types": "./dist/anthropic/index.d.ts"
+    },
+    "./openai": {
+      "import": "./dist/openai/index.mjs",
+      "require": "./dist/openai/index.cjs",
+      "types": "./dist/openai/index.d.ts"
+    },
+    "./bedrock": {
+      "import": "./dist/bedrock/index.mjs",
+      "require": "./dist/bedrock/index.cjs",
+      "types": "./dist/bedrock/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.30",
+    "openai": ">=4.70",
+    "@aws-sdk/client-bedrock-agent-runtime": ">=3.700"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": { "optional": true },
+    "openai": { "optional": true },
+    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "openai": "latest",
+    "@aws-sdk/client-bedrock-agent-runtime": "latest",
+    "@biomejs/biome": "latest",
+    "tsup": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

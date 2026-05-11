@@ -153,6 +153,12 @@ function* mapEvent(
   }
 }
 
+export interface AnthropicProviderConfig {
+  apiKey: string;
+  agentId: string;
+  environmentId: string;
+}
+
 class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
@@ -161,7 +167,7 @@ class AnthropicProvider implements Provider {
   private readonly agentId: string;
   private readonly environmentId: string;
 
-  constructor(config: { apiKey: string; agentId: string; environmentId: string }) {
+  constructor(config: AnthropicProviderConfig) {
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
@@ -219,7 +225,7 @@ class AnthropicProvider implements Provider {
       agent: this.agentId,
       environment_id: this.environmentId,
     });
-    
+
     return session.id;
   }
 
@@ -228,10 +234,6 @@ class AnthropicProvider implements Provider {
   }
 }
 
-export function createAnthropicProvider(config: {
-  apiKey: string;
-  agentId: string;
-  environmentId: string;
-}): Provider {
+export function createAnthropicProvider(config: AnthropicProviderConfig): Provider {
   return new AnthropicProvider(config);
 }

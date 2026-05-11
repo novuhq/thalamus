@@ -47,13 +47,14 @@ export interface OpenAIProviderConfig {
 class ResponseAccumulator {
   content = '';
   sessionId: string | undefined;
+  conversationId: string | undefined;
   finishReason: Response['finishReason'] = 'stop';
   usage: Usage | undefined;
 
   toResponse(): Response {
     return {
       content: this.content,
-      sessionId: this.sessionId,
+      sessionId: this.conversationId ?? this.sessionId,
       finishReason: this.finishReason,
       usage: this.usage,
     };
@@ -68,7 +69,8 @@ function* mapEvent(
     // --- lifecycle ---
     case 'response.created': {
       acc.sessionId = event.response.id;
-      yield { type: 'stream-start', sessionId: acc.sessionId };
+      acc.conversationId = event.response.conversation?.id;
+      yield { type: 'stream-start', sessionId: acc.conversationId ?? acc.sessionId };
       break;
     }
     case 'response.in_progress': {
@@ -107,6 +109,13 @@ function* mapEvent(
       break;
     }
 
+    // --- refusal ---
+    case 'response.refusal.delta': {
+      acc.finishReason = 'refused';
+      yield { type: 'refusal', text: event.delta };
+      break;
+    }
+
     // --- reasoning / thinking ---
     case 'response.reasoning_summary_text.delta': {
       yield { type: 'thinking', text: event.delta };
@@ -114,10 +123,28 @@ function* mapEvent(
     }
 
     // --- function / tool calls ---
-    case 'response.output_item.done': {
+    case 'response.output_item.added': {
       if (event.item.type === 'function_call') {
         yield {
           type: 'tool-use-start',
+          toolName: event.item.name,
+          toolUseId: event.item.call_id,
+        };
+      }
+      break;
+    }
+    case 'response.function_call_arguments.delta': {
+      yield {
+        type: 'tool-use-delta',
+        toolUseId: event.item_id,
+        argumentsDelta: event.delta,
+      };
+      break;
+    }
+    case 'response.output_item.done': {
+      if (event.item.type === 'function_call') {
+        yield {
+          type: 'tool-use-done',
           toolName: event.item.name,
           toolUseId: event.item.call_id,
           input: JSON.parse(event.item.arguments || '{}'),
@@ -173,7 +200,10 @@ class OpenAIProvider implements Provider {
     return { stream: this.runStream(params, resolveResponse, rejectResponse), response: responsePromise };
   }
 
-  private buildCreateParams(params: RequestParams): ResponseCreateParamsStreaming {
+  private buildCreateParams(
+    params: RequestParams,
+    conversationId: string,
+  ): ResponseCreateParamsStreaming {
     const allMessages = params.sessionId
       ? [params.message]
       : [...(params.history ?? []), params.message];
@@ -182,8 +212,8 @@ class OpenAIProvider implements Provider {
       model: this.model,
       input: openaiTransformer.toInput(allMessages) as ResponseCreateParamsStreaming['input'],
       stream: true,
+      conversation: { id: conversationId },
       ...(this.instructions ? { instructions: this.instructions } : {}),
-      ...(params.sessionId ? { previous_response_id: params.sessionId } : {}),
       ...params.providerOptions,
     };
   }
@@ -194,8 +224,14 @@ class OpenAIProvider implements Provider {
     rejectResponse: (e: unknown) => void,
   ): AsyncIterable<StreamPart> {
     try {
-      const rawStream = await this.client.responses.create(this.buildCreateParams(params));
+      const conversationId = params.sessionId
+        ?? (await this.client.conversations.create()).id;
+
+      const rawStream = await this.client.responses.create(
+        this.buildCreateParams(params, conversationId),
+      );
       const acc = new ResponseAccumulator();
+      acc.conversationId = conversationId;
 
       for await (const rawEvent of rawStream) {
         yield* mapEvent(rawEvent, acc);

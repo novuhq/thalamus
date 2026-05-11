@@ -66,6 +66,7 @@ function* mapEvent(
   acc: ResponseAccumulator,
 ): Generator<StreamPart> {
   switch (event.type) {
+    // --- text streaming ---
     case 'agent.message': {
       const e = event as BetaManagedAgentsAgentMessageEvent;
       for (const block of e.content) {
@@ -76,13 +77,17 @@ function* mapEvent(
       }
       break;
     }
+
+    // --- reasoning / thinking ---
     case 'agent.thinking': {
       yield { type: 'thinking', text: '' };
       break;
     }
+
+    // --- tool calls ---
     case 'agent.tool_use': {
       const e = event as BetaManagedAgentsAgentToolUseEvent;
-      yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
+      yield { type: 'tool-use-done', toolName: e.name, toolUseId: e.id, input: e.input };
       break;
     }
     case 'agent.tool_result': {
@@ -93,7 +98,7 @@ function* mapEvent(
     }
     case 'agent.mcp_tool_use': {
       const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
-      yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
+      yield { type: 'tool-use-done', toolName: e.name, toolUseId: e.id, input: e.input };
       break;
     }
     case 'agent.mcp_tool_result': {
@@ -113,6 +118,8 @@ function* mapEvent(
       acc.finishReason = 'requires-action';
       break;
     }
+
+    // --- lifecycle ---
     case 'session.status_running': {
       yield { type: 'status-change', status: 'running' };
       break;
@@ -131,10 +138,13 @@ function* mapEvent(
     case 'session.status_terminated': {
       throw new ThalamusError('Session terminated', { provider: ANTHROPIC, isRetryable: false });
     }
+
+    // --- error ---
     case 'session.error': {
       const e = event as BetaManagedAgentsSessionErrorEvent;
       throw mapError(e.error);
     }
+    // --- usage ---
     case 'span.model_request_end': {
       const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
       if (e.model_usage) {
@@ -146,6 +156,8 @@ function* mapEvent(
       }
       break;
     }
+
+    // --- escape hatch for everything else ---
     default: {
       yield { type: 'provider-event', provider: ANTHROPIC, event: event.type, data: event as unknown as Record<string, unknown> };
       break;
@@ -229,9 +241,6 @@ class AnthropicProvider implements Provider {
     return session.id;
   }
 
-  async endSession(sessionId: string): Promise<void> {
-    await this.client.beta.sessions.archive(sessionId);
-  }
 }
 
 export function createAnthropicProvider(config: AnthropicProviderConfig): Provider {

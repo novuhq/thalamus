@@ -15,7 +15,6 @@ function mockSse(events: object[]) {
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
-const mockArchive = vi.fn();
 
 vi.mock('@anthropic-ai/sdk', () => {
   const MockAnthropic = function () {
@@ -23,7 +22,6 @@ vi.mock('@anthropic-ai/sdk', () => {
       beta: {
         sessions: {
           create: mockCreate,
-          archive: mockArchive,
           events: { stream: mockSseStream, send: mockSend },
         },
       },
@@ -113,14 +111,6 @@ describe('send', () => {
     const rt = createAnthropicProvider(config);
     const response = await rt.send({ message: { role: 'user', content: 'ping' } as never });
     expect(response.content).toBe('Done.');
-  });
-});
-
-describe('endSession', () => {
-  it('calls sessions.archive with the sessionId', async () => {
-    mockArchive.mockResolvedValue({});
-    await createAnthropicProvider(config).endSession?.('sess_abc');
-    expect(mockArchive).toHaveBeenCalledWith('sess_abc');
   });
 });
 

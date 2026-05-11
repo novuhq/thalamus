@@ -43,7 +43,7 @@ export interface Response {
   content: string;
   /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */
   sessionId?: string;
-  finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
+  finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'refused' | 'other';
   usage?: Usage;
   actionsRequired?: ActionRequired[];
 }
@@ -52,8 +52,11 @@ export type AgentStatus = 'running' | 'queued' | 'retrying' | 'idle';
 
 export type StreamPart =
   | { type: 'text-delta'; text: string }
+  | { type: 'refusal'; text: string }
   | { type: 'thinking'; text: string }
-  | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
+  | { type: 'tool-use-start'; toolName: string; toolUseId: string }
+  | { type: 'tool-use-delta'; toolUseId: string; argumentsDelta: string }
+  | { type: 'tool-use-done'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
   | { type: 'tool-use-result'; toolUseId: string; output?: string }
   | { type: 'status-change'; status: AgentStatus }
   | { type: 'stream-start'; sessionId?: string }
@@ -76,8 +79,6 @@ export interface Provider {
   readonly runtimeId: string;
   send(params: RequestParams): Promise<Response>;
   stream(params: RequestParams): Promise<StreamResult>;
-  endSession?(sessionId: string): Promise<void>;
-  validate?(): Promise<boolean>;
 }
 
 export const ANTHROPIC = 'anthropic' as const;

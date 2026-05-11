@@ -4,7 +4,7 @@
 
 **Goal:** Build the `@novu/thalamus` npm package — a provider-agnostic wrapper for Claude Managed Agents, OpenAI Responses API, and AWS Bedrock Agents with a streaming-first interface.
 
-**Architecture:** Stateless turn-based library. Each provider wraps its native SDK behind a common `AgentRuntimeProvider` interface (`stream()` + `send()`). Types grow incrementally — only defined when a provider actually needs them. Providers are tree-shakable via subpath exports.
+**Architecture:** Stateless turn-based library. Each provider wraps its native SDK behind a common `Provider` interface (`stream()` + `send()`). Types grow incrementally — only defined when a provider actually needs them. Providers are tree-shakable via subpath exports.
 
 **Tech Stack:** TypeScript (ES2022), tsup (dual CJS+ESM), vitest, Biome, pnpm. CI/CD and Changesets are out of scope — handled separately after the package is complete.
 
@@ -218,7 +218,7 @@ git commit -m "chore: initialize @novu/thalamus package with toolchain"
 **Goal:** `thalamus.anthropic({ apiKey, agentId, environmentId }).stream({ messages })` works. This phase defines the minimal shared types needed — you'll see exactly why each one exists.
 
 **What you'll understand after this phase:**
-- The `AgentRuntimeProvider` interface and why `stream()` returns `{ stream, response }` instead of just a stream
+- The `Provider` interface and why `stream()` returns `{ stream, response }` instead of just a stream
 - How `collectStream()` makes streaming providers work as request/response via `send()`
 - How a transformer isolates the format-conversion logic so it's independently testable
 - The Anthropic session lifecycle: create → open SSE stream → send user event → iterate events → break on idle
@@ -244,64 +244,64 @@ These are the *only* shared abstractions Phase 2 needs. Notice what's NOT here y
 - [ ] **Step 1: Create src/types.ts**
 
 ```typescript
-export enum AgentRuntimeMessageRole {
+export enum MessageRole {
   USER = 'user',
   ASSISTANT = 'assistant',
   SYSTEM = 'system',
 }
 
 // Only content types Anthropic uses right now. `file` added in Phase 4 (Bedrock).
-export type AgentRuntimeContentPart =
+export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mediaType: string }
   | { type: 'image-url'; url: string };
 
-export interface AgentRuntimeMessage {
-  role: AgentRuntimeMessageRole;
-  content: string | AgentRuntimeContentPart[];
+export interface Message {
+  role: MessageRole;
+  content: string | ContentPart[];
 }
 
-export interface AgentRuntimeParams {
-  messages: AgentRuntimeMessage[];
+export interface RequestParams {
+  messages: Message[];
   sessionId?: string;
   providerOptions?: Record<string, unknown>;
   // `history` added in Phase 3 (OpenAI needs it for session seeding)
 }
 
-export interface AgentRuntimeUsage {
+export interface Usage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
 }
 
-export interface AgentRuntimeResponse {
+export interface Response {
   content: string;
   sessionId?: string;
   finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
-  usage?: AgentRuntimeUsage;
+  usage?: Usage;
   // `actionsRequired` added in Phase 4 (Bedrock returnControl)
 }
 
 // Stream parts Anthropic actually emits. More added in Phases 3–4.
-export type AgentRuntimeStreamPart =
+export type StreamPart =
   | { type: 'text-delta'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
   | { type: 'tool-use-result'; toolUseId: string; output?: string }
   | { type: 'stream-start'; sessionId?: string }
-  | { type: 'finish'; response: AgentRuntimeResponse }
+  | { type: 'finish'; response: Response }
   | { type: 'error'; error: Error };
 
-export interface AgentRuntimeStreamResult {
-  stream: AsyncIterable<AgentRuntimeStreamPart>;
-  response: Promise<AgentRuntimeResponse>;
+export interface StreamResult {
+  stream: AsyncIterable<StreamPart>;
+  response: Promise<Response>;
 }
 
-export interface AgentRuntimeProvider {
+export interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: AgentRuntimeParams): Promise<AgentRuntimeResponse>;
-  stream(params: AgentRuntimeParams): Promise<AgentRuntimeStreamResult>;
+  send(params: RequestParams): Promise<Response>;
+  stream(params: RequestParams): Promise<StreamResult>;
   endSession?(sessionId: string): Promise<void>;
   validate?(): Promise<boolean>;
 }
@@ -315,7 +315,7 @@ export const ANTHROPIC = 'anthropic' as const;
 Full error hierarchy (ProviderAuthError etc.) added in Phase 3 when OpenAI needs distinct error types.
 
 ```typescript
-export class AgentRuntimeError extends Error {
+export class ThalamusError extends Error {
   readonly provider: string;
   readonly isRetryable: boolean;
   override readonly cause?: unknown;
@@ -325,7 +325,7 @@ export class AgentRuntimeError extends Error {
     options: { provider: string; isRetryable: boolean; cause?: unknown },
   ) {
     super(message, { cause: options.cause });
-    this.name = 'AgentRuntimeError';
+    this.name = 'ThalamusError';
     this.provider = options.provider;
     this.isRetryable = options.isRetryable;
     this.cause = options.cause;
@@ -336,11 +336,11 @@ export class AgentRuntimeError extends Error {
 - [ ] **Step 3: Create src/stream-utils.ts** (`mapStream` added in Phase 5 when needed)
 
 ```typescript
-import type { AgentRuntimeResponse, AgentRuntimeStreamResult } from './types.js';
+import type { Response, StreamResult } from './types.js';
 
 export async function collectStream(
-  result: AgentRuntimeStreamResult,
-): Promise<AgentRuntimeResponse> {
+  result: StreamResult,
+): Promise<Response> {
   for await (const _part of result.stream) {
     // consume the stream so the generator runs to completion
   }
@@ -390,7 +390,7 @@ export type AnthropicSessionEvent =
 - Create: `__tests__/anthropic/anthropic.transformer.test.ts`
 - Create: `src/anthropic/anthropic.transformer.ts`
 
-The transformer's job: convert `AgentRuntimeMessage[]` → Anthropic content blocks. Tested independently of any HTTP call.
+The transformer's job: convert `Message[]` → Anthropic content blocks. Tested independently of any HTTP call.
 
 - [ ] **Step 1: Write transformer tests**
 
@@ -398,13 +398,13 @@ The transformer's job: convert `AgentRuntimeMessage[]` → Anthropic content blo
 // __tests__/anthropic/anthropic.transformer.test.ts
 import { describe, expect, it } from 'vitest';
 import { anthropicTransformer } from '../../src/anthropic/anthropic.transformer.js';
-import { AgentRuntimeMessageRole } from '../../src/types.js';
-import type { AgentRuntimeMessage } from '../../src/types.js';
+import { MessageRole } from '../../src/types.js';
+import type { Message } from '../../src/types.js';
 
 describe('anthropicTransformer.toProviderMessages', () => {
   it('converts a USER text message to a text block', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.USER, content: 'Hello!' },
+    const messages: Message[] = [
+      { role: MessageRole.USER, content: 'Hello!' },
     ];
     expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
       { type: 'text', text: 'Hello!' },
@@ -412,8 +412,8 @@ describe('anthropicTransformer.toProviderMessages', () => {
   });
 
   it('prefixes SYSTEM messages with [System]:', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.SYSTEM, content: 'You are a support agent.' },
+    const messages: Message[] = [
+      { role: MessageRole.SYSTEM, content: 'You are a support agent.' },
     ];
     expect(anthropicTransformer.toProviderMessages(messages)).toEqual([
       { type: 'text', text: '[System]: You are a support agent.' },
@@ -421,9 +421,9 @@ describe('anthropicTransformer.toProviderMessages', () => {
   });
 
   it('skips ASSISTANT messages (session owns its own history)', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.ASSISTANT, content: 'Previous response' },
-      { role: AgentRuntimeMessageRole.USER, content: 'Follow-up' },
+    const messages: Message[] = [
+      { role: MessageRole.ASSISTANT, content: 'Previous response' },
+      { role: MessageRole.USER, content: 'Follow-up' },
     ];
     const result = anthropicTransformer.toProviderMessages(messages);
     expect(result).toHaveLength(1);
@@ -431,9 +431,9 @@ describe('anthropicTransformer.toProviderMessages', () => {
   });
 
   it('converts base64 image content parts', () => {
-    const messages: AgentRuntimeMessage[] = [
+    const messages: Message[] = [
       {
-        role: AgentRuntimeMessageRole.USER,
+        role: MessageRole.USER,
         content: [{ type: 'image', data: 'abc123', mediaType: 'image/png' }],
       },
     ];
@@ -443,9 +443,9 @@ describe('anthropicTransformer.toProviderMessages', () => {
   });
 
   it('converts image-url content parts', () => {
-    const messages: AgentRuntimeMessage[] = [
+    const messages: Message[] = [
       {
-        role: AgentRuntimeMessageRole.USER,
+        role: MessageRole.USER,
         content: [{ type: 'image-url', url: 'https://example.com/img.png' }],
       },
     ];
@@ -455,9 +455,9 @@ describe('anthropicTransformer.toProviderMessages', () => {
   });
 
   it('handles mixed system + user messages', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.SYSTEM, content: 'context' },
-      { role: AgentRuntimeMessageRole.USER, content: 'question' },
+    const messages: Message[] = [
+      { role: MessageRole.SYSTEM, content: 'context' },
+      { role: MessageRole.USER, content: 'question' },
     ];
     expect(anthropicTransformer.toProviderMessages(messages)).toHaveLength(2);
   });
@@ -473,15 +473,15 @@ Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.transforme
 
 ```typescript
 import {
-  AgentRuntimeMessageRole,
-  type AgentRuntimeMessage,
-  type AgentRuntimeResponse,
+  MessageRole,
+  type Message,
+  type Response,
 } from '../types.js';
 import type { AnthropicContentBlock } from './anthropic.types.js';
 
 function contentToBlocks(
-  role: AgentRuntimeMessageRole,
-  content: AgentRuntimeMessage['content'],
+  role: MessageRole,
+  content: Message['content'],
 ): AnthropicContentBlock[] {
   const parts = typeof content === 'string' ? [{ type: 'text' as const, text: content }] : content;
   const blocks: AnthropicContentBlock[] = [];
@@ -491,7 +491,7 @@ function contentToBlocks(
       case 'text':
         blocks.push({
           type: 'text',
-          text: role === AgentRuntimeMessageRole.SYSTEM ? `[System]: ${part.text}` : part.text,
+          text: role === MessageRole.SYSTEM ? `[System]: ${part.text}` : part.text,
         });
         break;
       case 'image':
@@ -510,18 +510,18 @@ function contentToBlocks(
 }
 
 export const anthropicTransformer = {
-  toProviderMessages(messages: AgentRuntimeMessage[]): AnthropicContentBlock[] {
+  toProviderMessages(messages: Message[]): AnthropicContentBlock[] {
     const blocks: AnthropicContentBlock[] = [];
     for (const msg of messages) {
-      if (msg.role === AgentRuntimeMessageRole.ASSISTANT) continue;
+      if (msg.role === MessageRole.ASSISTANT) continue;
       blocks.push(...contentToBlocks(msg.role, msg.content));
     }
     return blocks;
   },
 
-  // Utility for standalone users — converts a response summary back to AgentRuntimeResponse.
-  toAgentRuntimeResponse(resp: unknown): AgentRuntimeResponse {
-    const r = resp as { content: string; sessionId?: string; finishReason?: AgentRuntimeResponse['finishReason']; usage?: AgentRuntimeResponse['usage'] };
+  // Utility for standalone users — converts a response summary back to Response.
+  toResponse(resp: unknown): Response {
+    const r = resp as { content: string; sessionId?: string; finishReason?: Response['finishReason']; usage?: Response['usage'] };
     return { content: r.content, sessionId: r.sessionId, finishReason: r.finishReason ?? 'stop', usage: r.usage };
   },
 };
@@ -550,8 +550,8 @@ The provider test mocks `@anthropic-ai/sdk`. Notice the mock mirrors the real AP
 // __tests__/anthropic/anthropic.provider.test.ts
 import Anthropic from '@anthropic-ai/sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnthropicAgentRuntime } from '../../src/anthropic/anthropic.provider.js';
-import { AgentRuntimeError } from '../../src/errors.js';
+import { createAnthropicProvider } from '../../src/anthropic/anthropic.provider.js';
+import { ThalamusError } from '../../src/errors.js';
 import { collectStream } from '../../src/stream-utils.js';
 
 // Helper: build a fake SSE event stream from a plain array
@@ -589,9 +589,9 @@ afterEach(() => vi.clearAllMocks());
 
 const config = { apiKey: 'sk-test', agentId: 'agent_abc', environmentId: 'env_xyz' };
 
-describe('createAnthropicAgentRuntime', () => {
+describe('createAnthropicProvider', () => {
   it('sets provider = anthropic and runtimeId = agentId', () => {
-    const rt = createAnthropicAgentRuntime(config);
+    const rt = createAnthropicProvider(config);
     expect(rt.provider).toBe('anthropic');
     expect(rt.runtimeId).toBe('agent_abc');
   });
@@ -608,7 +608,7 @@ describe('stream — new session', () => {
     );
     mockSend.mockResolvedValue({});
 
-    const rt = createAnthropicAgentRuntime(config);
+    const rt = createAnthropicProvider(config);
     const result = await rt.stream({
       messages: [{ role: 'user', content: 'Hi' } as never],
     });
@@ -639,7 +639,7 @@ describe('stream — resume session', () => {
     );
     mockSend.mockResolvedValue({});
 
-    const rt = createAnthropicAgentRuntime(config);
+    const rt = createAnthropicProvider(config);
     await collectStream(
       await rt.stream({
         messages: [{ role: 'user', content: 'next' } as never],
@@ -663,7 +663,7 @@ describe('send', () => {
     );
     mockSend.mockResolvedValue({});
 
-    const rt = createAnthropicAgentRuntime(config);
+    const rt = createAnthropicProvider(config);
     const response = await rt.send({ messages: [{ role: 'user', content: 'ping' } as never] });
     expect(response.content).toBe('Done.');
   });
@@ -672,7 +672,7 @@ describe('send', () => {
 describe('endSession', () => {
   it('calls sessions.archive with the sessionId', async () => {
     mockArchive.mockResolvedValue({});
-    await createAnthropicAgentRuntime(config).endSession?.('sess_abc');
+    await createAnthropicProvider(config).endSession?.('sess_abc');
     expect(mockArchive).toHaveBeenCalledWith('sess_abc');
   });
 });
@@ -687,7 +687,7 @@ describe('error mapping', () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicAgentRuntime(config).stream({
+    const result = await createAnthropicProvider(config).stream({
       messages: [{ role: 'user', content: 'x' } as never],
     });
     const parts = [];
@@ -695,7 +695,7 @@ describe('error mapping', () => {
 
     const errPart = parts.find((p) => p.type === 'error');
     expect(errPart).toBeDefined();
-    expect((errPart as any).error).toBeInstanceOf(AgentRuntimeError);
+    expect((errPart as any).error).toBeInstanceOf(ThalamusError);
   });
 });
 ```
@@ -709,21 +709,21 @@ Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.provider.j
 
 ```typescript
 import Anthropic from '@anthropic-ai/sdk';
-import { AgentRuntimeError } from '../errors.js';
+import { ThalamusError } from '../errors.js';
 import { collectStream } from '../stream-utils.js';
 import {
   ANTHROPIC,
-  type AgentRuntimeParams,
-  type AgentRuntimeProvider,
-  type AgentRuntimeResponse,
-  type AgentRuntimeStreamPart,
-  type AgentRuntimeStreamResult,
-  type AgentRuntimeUsage,
+  type RequestParams,
+  type Provider,
+  type Response,
+  type StreamPart,
+  type StreamResult,
+  type Usage,
 } from '../types.js';
 import { anthropicTransformer } from './anthropic.transformer.js';
 import type { AnthropicSessionEvent } from './anthropic.types.js';
 
-function mapStopReason(reason: string): AgentRuntimeResponse['finishReason'] {
+function mapStopReason(reason: string): Response['finishReason'] {
   switch (reason) {
     case 'task_complete': return 'stop';
     case 'max_tokens': return 'length';
@@ -733,14 +733,14 @@ function mapStopReason(reason: string): AgentRuntimeResponse['finishReason'] {
   }
 }
 
-function mapError(raw: unknown): AgentRuntimeError {
+function mapError(raw: unknown): ThalamusError {
   const obj = raw as { message?: string; type?: string } | null;
   const msg = obj?.message ?? String(raw);
   const isAuth = obj?.type === 'authentication_error';
-  return new AgentRuntimeError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
+  return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
 }
 
-class AnthropicAgentRuntime implements AgentRuntimeProvider {
+class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
 
@@ -755,14 +755,14 @@ class AnthropicAgentRuntime implements AgentRuntimeProvider {
     this.client = new Anthropic({ apiKey: config.apiKey });
   }
 
-  async send(params: AgentRuntimeParams): Promise<AgentRuntimeResponse> {
+  async send(params: RequestParams): Promise<Response> {
     return collectStream(await this.stream(params));
   }
 
-  async stream(params: AgentRuntimeParams): Promise<AgentRuntimeStreamResult> {
-    let resolveResponse!: (r: AgentRuntimeResponse) => void;
+  async stream(params: RequestParams): Promise<StreamResult> {
+    let resolveResponse!: (r: Response) => void;
     let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<AgentRuntimeResponse>((res, rej) => {
+    const responsePromise = new Promise<Response>((res, rej) => {
       resolveResponse = res;
       rejectResponse = rej;
     });
@@ -770,10 +770,10 @@ class AnthropicAgentRuntime implements AgentRuntimeProvider {
   }
 
   private async *runStream(
-    params: AgentRuntimeParams,
-    resolveResponse: (r: AgentRuntimeResponse) => void,
+    params: RequestParams,
+    resolveResponse: (r: Response) => void,
     rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<AgentRuntimeStreamPart> {
+  ): AsyncIterable<StreamPart> {
     try {
       let sessionId = params.sessionId;
       if (!sessionId) {
@@ -793,8 +793,8 @@ class AnthropicAgentRuntime implements AgentRuntimeProvider {
       });
 
       let accumulatedContent = '';
-      let finishReason: AgentRuntimeResponse['finishReason'] = 'stop';
-      let usage: AgentRuntimeUsage | undefined;
+      let finishReason: Response['finishReason'] = 'stop';
+      let usage: Usage | undefined;
 
       for await (const rawEvent of sseStream) {
         const event = rawEvent as AnthropicSessionEvent;
@@ -850,11 +850,11 @@ class AnthropicAgentRuntime implements AgentRuntimeProvider {
         if (event.type === 'session.status_idle') break;
       }
 
-      const response: AgentRuntimeResponse = { content: accumulatedContent, sessionId, finishReason, usage };
+      const response: Response = { content: accumulatedContent, sessionId, finishReason, usage };
       yield { type: 'finish', response };
       resolveResponse(response);
     } catch (err) {
-      const error = err instanceof AgentRuntimeError ? err : new AgentRuntimeError(String(err), { provider: ANTHROPIC, isRetryable: false });
+      const error = err instanceof ThalamusError ? err : new ThalamusError(String(err), { provider: ANTHROPIC, isRetryable: false });
       yield { type: 'error', error };
       rejectResponse(error);
     }
@@ -874,13 +874,13 @@ class AnthropicAgentRuntime implements AgentRuntimeProvider {
   }
 }
 
-export function createAnthropicAgentRuntime(config: {
+export function createAnthropicProvider(config: {
   apiKey: string;
   agentId: string;
   environmentId: string;
   model?: string;
-}): AgentRuntimeProvider {
-  return new AnthropicAgentRuntime(config);
+}): Provider {
+  return new AnthropicProvider(config);
 }
 ```
 
@@ -902,7 +902,7 @@ Test Files  1 passed (1)
 - [ ] **Step 1: Update src/anthropic/index.ts**
 
 ```typescript
-export { createAnthropicAgentRuntime } from './anthropic.provider.js';
+export { createAnthropicProvider } from './anthropic.provider.js';
 export { anthropicTransformer } from './anthropic.transformer.js';
 export type { AnthropicContentBlock } from './anthropic.types.js';
 ```
@@ -914,13 +914,13 @@ export * from './types.js';
 export * from './errors.js';
 export * from './stream-utils.js';
 
-import { createAnthropicAgentRuntime } from './anthropic/index.js';
+import { createAnthropicProvider } from './anthropic/index.js';
 
 export const thalamus = {
-  anthropic: createAnthropicAgentRuntime,
+  anthropic: createAnthropicProvider,
 } as const;
 
-export { createAnthropicAgentRuntime };
+export { createAnthropicProvider };
 ```
 
 - [ ] **Step 3: Run all tests — expect PASS**
@@ -973,18 +973,18 @@ git commit -m "feat: add Anthropic (Claude Managed Agents) provider"
 
 You're about to write the OpenAI provider and will immediately need these. Adding them now — not speculatively but because you can see the concrete need.
 
-- [ ] **Step 1: Add `history` to AgentRuntimeParams in src/types.ts**
+- [ ] **Step 1: Add `history` to RequestParams in src/types.ts**
 
 Add after the `messages` field:
 ```typescript
-history?: AgentRuntimeMessage[];
+history?: Message[];
 ```
 
-Full updated `AgentRuntimeParams`:
+Full updated `RequestParams`:
 ```typescript
-export interface AgentRuntimeParams {
-  messages: AgentRuntimeMessage[];
-  history?: AgentRuntimeMessage[];   // ← new: used by OpenAI and Bedrock for session seeding
+export interface RequestParams {
+  messages: Message[];
+  history?: Message[];   // ← new: used by OpenAI and Bedrock for session seeding
   sessionId?: string;
   providerOptions?: Record<string, unknown>;
 }
@@ -1002,14 +1002,14 @@ These map to the specific error codes OpenAI (and later Bedrock) return. The Nov
 ```typescript
 // Append to src/errors.ts
 
-export class ProviderAuthError extends AgentRuntimeError {
+export class ProviderAuthError extends ThalamusError {
   constructor(message: string, options: { provider: string; cause?: unknown }) {
     super(message, { ...options, isRetryable: false });
     this.name = 'ProviderAuthError';
   }
 }
 
-export class ProviderRateLimitError extends AgentRuntimeError {
+export class ProviderRateLimitError extends ThalamusError {
   readonly retryAfterMs?: number;
 
   constructor(message: string, options: { provider: string; retryAfterMs?: number; cause?: unknown }) {
@@ -1019,14 +1019,14 @@ export class ProviderRateLimitError extends AgentRuntimeError {
   }
 }
 
-export class ProviderUnavailableError extends AgentRuntimeError {
+export class ProviderUnavailableError extends ThalamusError {
   constructor(message: string, options: { provider: string; cause?: unknown }) {
     super(message, { ...options, isRetryable: true });
     this.name = 'ProviderUnavailableError';
   }
 }
 
-export class ProviderResponseError extends AgentRuntimeError {
+export class ProviderResponseError extends ThalamusError {
   constructor(message: string, options: { provider: string; cause?: unknown }) {
     super(message, { ...options, isRetryable: false });
     this.name = 'ProviderResponseError';
@@ -1078,13 +1078,13 @@ export type OpenAIStreamEvent =
 // __tests__/openai/openai.transformer.test.ts
 import { describe, expect, it } from 'vitest';
 import { openaiTransformer } from '../../src/openai/openai.transformer.js';
-import { AgentRuntimeMessageRole } from '../../src/types.js';
-import type { AgentRuntimeMessage } from '../../src/types.js';
+import { MessageRole } from '../../src/types.js';
+import type { Message } from '../../src/types.js';
 
 describe('openaiTransformer.toProviderMessages', () => {
   it('converts a USER text message', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.USER, content: 'Hello' },
+    const messages: Message[] = [
+      { role: MessageRole.USER, content: 'Hello' },
     ];
     expect(openaiTransformer.toProviderMessages(messages)).toEqual([
       { role: 'user', content: 'Hello' },
@@ -1092,8 +1092,8 @@ describe('openaiTransformer.toProviderMessages', () => {
   });
 
   it('preserves SYSTEM messages with role = system', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.SYSTEM, content: 'Be helpful' },
+    const messages: Message[] = [
+      { role: MessageRole.SYSTEM, content: 'Be helpful' },
     ];
     expect(openaiTransformer.toProviderMessages(messages)).toEqual([
       { role: 'system', content: 'Be helpful' },
@@ -1101,8 +1101,8 @@ describe('openaiTransformer.toProviderMessages', () => {
   });
 
   it('preserves ASSISTANT messages (OpenAI uses them for history)', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.ASSISTANT, content: 'Prior answer' },
+    const messages: Message[] = [
+      { role: MessageRole.ASSISTANT, content: 'Prior answer' },
     ];
     expect(openaiTransformer.toProviderMessages(messages)).toEqual([
       { role: 'assistant', content: 'Prior answer' },
@@ -1110,9 +1110,9 @@ describe('openaiTransformer.toProviderMessages', () => {
   });
 
   it('converts image-url to input_image', () => {
-    const messages: AgentRuntimeMessage[] = [
+    const messages: Message[] = [
       {
-        role: AgentRuntimeMessageRole.USER,
+        role: MessageRole.USER,
         content: [{ type: 'image-url', url: 'https://example.com/img.jpg' }],
       },
     ];
@@ -1122,9 +1122,9 @@ describe('openaiTransformer.toProviderMessages', () => {
   });
 
   it('converts base64 image to data URI', () => {
-    const messages: AgentRuntimeMessage[] = [
+    const messages: Message[] = [
       {
-        role: AgentRuntimeMessageRole.USER,
+        role: MessageRole.USER,
         content: [{ type: 'image', data: 'abc123', mediaType: 'image/jpeg' }],
       },
     ];
@@ -1144,18 +1144,18 @@ Expected: `FAIL — Cannot find module '../../src/openai/openai.transformer.js'`
 
 ```typescript
 import {
-  AgentRuntimeMessageRole,
-  type AgentRuntimeMessage,
-  type AgentRuntimeResponse,
+  MessageRole,
+  type Message,
+  type Response,
 } from '../types.js';
 import type { OpenAIInputMessage } from './openai.types.js';
 
 export const openaiTransformer = {
-  toProviderMessages(messages: AgentRuntimeMessage[]): OpenAIInputMessage[] {
+  toProviderMessages(messages: Message[]): OpenAIInputMessage[] {
     return messages.map((msg) => {
       const role =
-        msg.role === AgentRuntimeMessageRole.USER ? 'user'
-        : msg.role === AgentRuntimeMessageRole.SYSTEM ? 'system'
+        msg.role === MessageRole.USER ? 'user'
+        : msg.role === MessageRole.SYSTEM ? 'system'
         : 'assistant';
 
       if (typeof msg.content === 'string') return { role, content: msg.content };
@@ -1172,8 +1172,8 @@ export const openaiTransformer = {
     });
   },
 
-  toAgentRuntimeResponse(resp: unknown): AgentRuntimeResponse {
-    const r = resp as { content: string; sessionId?: string; finishReason?: AgentRuntimeResponse['finishReason']; usage?: AgentRuntimeResponse['usage'] };
+  toResponse(resp: unknown): Response {
+    const r = resp as { content: string; sessionId?: string; finishReason?: Response['finishReason']; usage?: Response['usage'] };
     return { content: r.content, sessionId: r.sessionId, finishReason: r.finishReason ?? 'stop', usage: r.usage };
   },
 };
@@ -1201,7 +1201,7 @@ Test Files  1 passed (1)
 import OpenAI from 'openai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthError } from '../../src/errors.js';
-import { createOpenAIAgentRuntime } from '../../src/openai/openai.provider.js';
+import { createOpenAIProvider } from '../../src/openai/openai.provider.js';
 import { collectStream } from '../../src/stream-utils.js';
 
 vi.mock('openai');
@@ -1222,15 +1222,15 @@ afterEach(() => vi.clearAllMocks());
 
 const config = { apiKey: 'sk-test', model: 'gpt-4o', instructions: 'Be helpful.' };
 
-describe('createOpenAIAgentRuntime', () => {
+describe('createOpenAIProvider', () => {
   it('sets provider = openai and runtimeId = inline when no promptId', () => {
-    const rt = createOpenAIAgentRuntime(config);
+    const rt = createOpenAIProvider(config);
     expect(rt.provider).toBe('openai');
     expect(rt.runtimeId).toBe('inline');
   });
 
   it('uses promptId as runtimeId when provided', () => {
-    expect(createOpenAIAgentRuntime({ ...config, promptId: 'pmpt_abc' }).runtimeId).toBe('pmpt_abc');
+    expect(createOpenAIProvider({ ...config, promptId: 'pmpt_abc' }).runtimeId).toBe('pmpt_abc');
   });
 });
 
@@ -1252,7 +1252,7 @@ describe('stream — new session', () => {
       ]),
     );
 
-    const result = await createOpenAIAgentRuntime(config).stream({
+    const result = await createOpenAIProvider(config).stream({
       messages: [{ role: 'user', content: 'Hi' } as never],
     });
 
@@ -1279,7 +1279,7 @@ describe('stream — resume session', () => {
     );
 
     await collectStream(
-      await createOpenAIAgentRuntime(config).stream({
+      await createOpenAIProvider(config).stream({
         messages: [{ role: 'user', content: 'next' } as never],
         sessionId: 'resp_prev',
       }),
@@ -1301,7 +1301,7 @@ describe('history seeding', () => {
     );
 
     await collectStream(
-      await createOpenAIAgentRuntime(config).stream({
+      await createOpenAIProvider(config).stream({
         messages: [{ role: 'user', content: 'current' } as never],
         history: [{ role: 'user', content: 'prior' } as never],
       }),
@@ -1318,7 +1318,7 @@ describe('error handling', () => {
       makeStream([{ type: 'error', message: 'Incorrect API key', code: 'invalid_api_key' }]),
     );
 
-    const result = await createOpenAIAgentRuntime(config).stream({
+    const result = await createOpenAIProvider(config).stream({
       messages: [{ role: 'user', content: 'x' } as never],
     });
     const parts = [];
@@ -1347,12 +1347,12 @@ import {
 import { collectStream } from '../stream-utils.js';
 import {
   OPENAI,
-  type AgentRuntimeParams,
-  type AgentRuntimeProvider,
-  type AgentRuntimeResponse,
-  type AgentRuntimeStreamPart,
-  type AgentRuntimeStreamResult,
-  type AgentRuntimeUsage,
+  type RequestParams,
+  type Provider,
+  type Response,
+  type StreamPart,
+  type StreamResult,
+  type Usage,
 } from '../types.js';
 import { openaiTransformer } from './openai.transformer.js';
 import type { OpenAIStreamEvent, OpenAIToolConfig } from './openai.types.js';
@@ -1372,7 +1372,7 @@ function mapError(error: unknown, provider: string): Error {
   return new ProviderResponseError(msg, { provider, cause: error });
 }
 
-class OpenAIAgentRuntime implements AgentRuntimeProvider {
+class OpenAIProvider implements Provider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
 
@@ -1389,14 +1389,14 @@ class OpenAIAgentRuntime implements AgentRuntimeProvider {
     this.client = new OpenAI({ apiKey: config.apiKey });
   }
 
-  async send(params: AgentRuntimeParams): Promise<AgentRuntimeResponse> {
+  async send(params: RequestParams): Promise<Response> {
     return collectStream(await this.stream(params));
   }
 
-  async stream(params: AgentRuntimeParams): Promise<AgentRuntimeStreamResult> {
-    let resolveResponse!: (r: AgentRuntimeResponse) => void;
+  async stream(params: RequestParams): Promise<StreamResult> {
+    let resolveResponse!: (r: Response) => void;
     let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<AgentRuntimeResponse>((res, rej) => {
+    const responsePromise = new Promise<Response>((res, rej) => {
       resolveResponse = res;
       rejectResponse = rej;
     });
@@ -1404,10 +1404,10 @@ class OpenAIAgentRuntime implements AgentRuntimeProvider {
   }
 
   private async *runStream(
-    params: AgentRuntimeParams,
-    resolveResponse: (r: AgentRuntimeResponse) => void,
+    params: RequestParams,
+    resolveResponse: (r: Response) => void,
     rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<AgentRuntimeStreamPart> {
+  ): AsyncIterable<StreamPart> {
     try {
       // When resuming, history is already baked into the previous response chain.
       // When starting fresh, prepend history so the model has conversation context.
@@ -1429,7 +1429,7 @@ class OpenAIAgentRuntime implements AgentRuntimeProvider {
 
       let accumulatedContent = '';
       let newSessionId: string | undefined;
-      let usage: AgentRuntimeUsage | undefined;
+      let usage: Usage | undefined;
 
       for await (const rawEvent of rawStream) {
         const event = rawEvent as OpenAIStreamEvent;
@@ -1463,7 +1463,7 @@ class OpenAIAgentRuntime implements AgentRuntimeProvider {
         }
       }
 
-      const response: AgentRuntimeResponse = { content: accumulatedContent, sessionId: newSessionId, finishReason: 'stop', usage };
+      const response: Response = { content: accumulatedContent, sessionId: newSessionId, finishReason: 'stop', usage };
       yield { type: 'finish', response };
       resolveResponse(response);
     } catch (err) {
@@ -1474,14 +1474,14 @@ class OpenAIAgentRuntime implements AgentRuntimeProvider {
   }
 }
 
-export function createOpenAIAgentRuntime(config: {
+export function createOpenAIProvider(config: {
   apiKey: string;
   promptId?: string;
   instructions?: string;
   tools?: OpenAIToolConfig[];
   model?: string;
-}): AgentRuntimeProvider {
-  return new OpenAIAgentRuntime(config);
+}): Provider {
+  return new OpenAIProvider(config);
 }
 ```
 
@@ -1503,7 +1503,7 @@ Test Files  1 passed (1)
 - [ ] **Step 1: Update src/openai/index.ts**
 
 ```typescript
-export { createOpenAIAgentRuntime } from './openai.provider.js';
+export { createOpenAIProvider } from './openai.provider.js';
 export { openaiTransformer } from './openai.transformer.js';
 export type { OpenAIInputMessage, OpenAIToolConfig } from './openai.types.js';
 ```
@@ -1515,15 +1515,15 @@ export * from './types.js';
 export * from './errors.js';
 export * from './stream-utils.js';
 
-import { createAnthropicAgentRuntime } from './anthropic/index.js';
-import { createOpenAIAgentRuntime } from './openai/index.js';
+import { createAnthropicProvider } from './anthropic/index.js';
+import { createOpenAIProvider } from './openai/index.js';
 
 export const thalamus = {
-  anthropic: createAnthropicAgentRuntime,
-  openai: createOpenAIAgentRuntime,
+  anthropic: createAnthropicProvider,
+  openai: createOpenAIProvider,
 } as const;
 
-export { createAnthropicAgentRuntime, createOpenAIAgentRuntime };
+export { createAnthropicProvider, createOpenAIProvider };
 ```
 
 - [ ] **Step 3: Run all tests — expect PASS**
@@ -1573,42 +1573,42 @@ The `file` content part: Bedrock only accepts text, so file data degrades to a t
 
 `provider-event`: Bedrock emits trace events that don't map to normalized types. The `provider-event` escape hatch forwards them.
 
-Add `file` to `AgentRuntimeContentPart`:
+Add `file` to `ContentPart`:
 ```typescript
-export type AgentRuntimeContentPart =
+export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mediaType: string }
   | { type: 'image-url'; url: string }
   | { type: 'file'; data: string; mediaType: string; name?: string };  // ← new
 ```
 
-Add `AgentRuntimeActionRequired` and `actionsRequired` to response:
+Add `ActionRequired` and `actionsRequired` to response:
 ```typescript
-export interface AgentRuntimeActionRequired {
+export interface ActionRequired {
   type: 'tool-confirmation';
   toolUseId: string;
   toolName: string;
   input?: Record<string, unknown>;
 }
 
-export interface AgentRuntimeResponse {
+export interface Response {
   content: string;
   sessionId?: string;
   finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
-  usage?: AgentRuntimeUsage;
-  actionsRequired?: AgentRuntimeActionRequired[];  // ← new
+  usage?: Usage;
+  actionsRequired?: ActionRequired[];  // ← new
 }
 ```
 
-Add `provider-event` to `AgentRuntimeStreamPart`:
+Add `provider-event` to `StreamPart`:
 ```typescript
-export type AgentRuntimeStreamPart =
+export type StreamPart =
   | { type: 'text-delta'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
   | { type: 'tool-use-result'; toolUseId: string; output?: string }
   | { type: 'stream-start'; sessionId?: string }
-  | { type: 'finish'; response: AgentRuntimeResponse }
+  | { type: 'finish'; response: Response }
   | { type: 'error'; error: Error }
   | { type: 'provider-event'; provider: string; event: string; data: Record<string, unknown> };  // ← new
 ```
@@ -1650,21 +1650,21 @@ export type BedrockCompletionEvent =
 // __tests__/bedrock/bedrock.transformer.test.ts
 import { describe, expect, it } from 'vitest';
 import { bedrockTransformer } from '../../src/bedrock/bedrock.transformer.js';
-import { AgentRuntimeMessageRole } from '../../src/types.js';
-import type { AgentRuntimeMessage } from '../../src/types.js';
+import { MessageRole } from '../../src/types.js';
+import type { Message } from '../../src/types.js';
 
 describe('bedrockTransformer.toProviderMessages', () => {
   it('returns a single-element array with USER message text', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.USER, content: 'Hello Bedrock' },
+    const messages: Message[] = [
+      { role: MessageRole.USER, content: 'Hello Bedrock' },
     ];
     expect(bedrockTransformer.toProviderMessages(messages)).toEqual(['Hello Bedrock']);
   });
 
   it('prepends SYSTEM messages as context', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.SYSTEM, content: 'You are a billing assistant.' },
-      { role: AgentRuntimeMessageRole.USER, content: 'What is my balance?' },
+    const messages: Message[] = [
+      { role: MessageRole.SYSTEM, content: 'You are a billing assistant.' },
+      { role: MessageRole.USER, content: 'What is my balance?' },
     ];
     const [inputText] = bedrockTransformer.toProviderMessages(messages);
     expect(inputText).toContain('[System]: You are a billing assistant.');
@@ -1672,17 +1672,17 @@ describe('bedrockTransformer.toProviderMessages', () => {
   });
 
   it('skips ASSISTANT messages', () => {
-    const messages: AgentRuntimeMessage[] = [
-      { role: AgentRuntimeMessageRole.ASSISTANT, content: 'Previous response' },
-      { role: AgentRuntimeMessageRole.USER, content: 'Next question' },
+    const messages: Message[] = [
+      { role: MessageRole.ASSISTANT, content: 'Previous response' },
+      { role: MessageRole.USER, content: 'Next question' },
     ];
     expect(bedrockTransformer.toProviderMessages(messages)).toEqual(['Next question']);
   });
 
   it('extracts only text parts from content arrays (images become empty, files become text)', () => {
-    const messages: AgentRuntimeMessage[] = [
+    const messages: Message[] = [
       {
-        role: AgentRuntimeMessageRole.USER,
+        role: MessageRole.USER,
         content: [
           { type: 'text', text: 'describe this: ' },
           { type: 'file', data: 'file contents', mediaType: 'text/plain', name: 'notes.txt' },
@@ -1705,12 +1705,12 @@ Expected: `FAIL — Cannot find module '../../src/bedrock/bedrock.transformer.js
 
 ```typescript
 import {
-  AgentRuntimeMessageRole,
-  type AgentRuntimeMessage,
-  type AgentRuntimeResponse,
+  MessageRole,
+  type Message,
+  type Response,
 } from '../types.js';
 
-function messageToText(msg: AgentRuntimeMessage): string {
+function messageToText(msg: Message): string {
   if (typeof msg.content === 'string') return msg.content;
 
   return msg.content.map((part) => {
@@ -1723,12 +1723,12 @@ function messageToText(msg: AgentRuntimeMessage): string {
 }
 
 export const bedrockTransformer = {
-  toProviderMessages(messages: AgentRuntimeMessage[]): string[] {
+  toProviderMessages(messages: Message[]): string[] {
     const parts: string[] = [];
     for (const msg of messages) {
-      if (msg.role === AgentRuntimeMessageRole.ASSISTANT) continue;
+      if (msg.role === MessageRole.ASSISTANT) continue;
       parts.push(
-        msg.role === AgentRuntimeMessageRole.SYSTEM
+        msg.role === MessageRole.SYSTEM
           ? `[System]: ${messageToText(msg)}`
           : messageToText(msg),
       );
@@ -1736,8 +1736,8 @@ export const bedrockTransformer = {
     return [parts.join('\n').trim()];
   },
 
-  toAgentRuntimeResponse(resp: unknown): AgentRuntimeResponse {
-    const r = resp as { content: string; sessionId?: string; finishReason?: AgentRuntimeResponse['finishReason'] };
+  toResponse(resp: unknown): Response {
+    const r = resp as { content: string; sessionId?: string; finishReason?: Response['finishReason'] };
     return { content: r.content, sessionId: r.sessionId, finishReason: r.finishReason ?? 'stop' };
   },
 };
@@ -1768,7 +1768,7 @@ import {
 } from '@aws-sdk/client-bedrock-agent-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthError } from '../../src/errors.js';
-import { createBedrockAgentRuntime } from '../../src/bedrock/bedrock.provider.js';
+import { createBedrockProvider } from '../../src/bedrock/bedrock.provider.js';
 import { collectStream } from '../../src/stream-utils.js';
 
 vi.mock('@aws-sdk/client-bedrock-agent-runtime');
@@ -1792,9 +1792,9 @@ afterEach(() => vi.clearAllMocks());
 
 const config = { region: 'us-east-1', agentId: 'ABCDEF123', agentAliasId: 'TSTALIASID' };
 
-describe('createBedrockAgentRuntime', () => {
+describe('createBedrockProvider', () => {
   it('sets provider = bedrock and runtimeId = agentId', () => {
-    const rt = createBedrockAgentRuntime(config);
+    const rt = createBedrockProvider(config);
     expect(rt.provider).toBe('bedrock');
     expect(rt.runtimeId).toBe('ABCDEF123');
   });
@@ -1809,7 +1809,7 @@ describe('stream — new session', () => {
       ]),
     );
 
-    const result = await createBedrockAgentRuntime(config).stream({
+    const result = await createBedrockProvider(config).stream({
       messages: [{ role: 'user', content: 'Hi' } as never],
     });
 
@@ -1832,7 +1832,7 @@ describe('stream — resume session', () => {
     );
 
     await collectStream(
-      await createBedrockAgentRuntime(config).stream({
+      await createBedrockProvider(config).stream({
         messages: [{ role: 'user', content: 'next' } as never],
         sessionId: 'my-uuid',
       }),
@@ -1863,7 +1863,7 @@ describe('returnControl → requires-action', () => {
       ]),
     );
 
-    const result = await createBedrockAgentRuntime(config).stream({
+    const result = await createBedrockProvider(config).stream({
       messages: [{ role: 'user', content: 'do it' } as never],
     });
     await collectStream(result);
@@ -1880,7 +1880,7 @@ describe('error handling', () => {
     const err = Object.assign(new Error('Access denied'), { name: 'AccessDeniedException' });
     mockSend.mockRejectedValue(err);
 
-    const result = await createBedrockAgentRuntime(config).stream({
+    const result = await createBedrockProvider(config).stream({
       messages: [{ role: 'user', content: 'x' } as never],
     });
     const parts = [];
@@ -1913,12 +1913,12 @@ import {
 import { collectStream } from '../stream-utils.js';
 import {
   BEDROCK,
-  type AgentRuntimeActionRequired,
-  type AgentRuntimeParams,
-  type AgentRuntimeProvider,
-  type AgentRuntimeResponse,
-  type AgentRuntimeStreamPart,
-  type AgentRuntimeStreamResult,
+  type ActionRequired,
+  type RequestParams,
+  type Provider,
+  type Response,
+  type StreamPart,
+  type StreamResult,
 } from '../types.js';
 import { bedrockTransformer } from './bedrock.transformer.js';
 import type { BedrockCompletionEvent } from './bedrock.types.js';
@@ -1938,7 +1938,7 @@ function mapError(error: unknown, provider: string): Error {
   return new ProviderResponseError(msg, { provider, cause: error });
 }
 
-class BedrockAgentRuntime implements AgentRuntimeProvider {
+class BedrockProvider implements Provider {
   readonly provider = BEDROCK;
   readonly runtimeId: string;
 
@@ -1960,14 +1960,14 @@ class BedrockAgentRuntime implements AgentRuntimeProvider {
     });
   }
 
-  async send(params: AgentRuntimeParams): Promise<AgentRuntimeResponse> {
+  async send(params: RequestParams): Promise<Response> {
     return collectStream(await this.stream(params));
   }
 
-  async stream(params: AgentRuntimeParams): Promise<AgentRuntimeStreamResult> {
-    let resolveResponse!: (r: AgentRuntimeResponse) => void;
+  async stream(params: RequestParams): Promise<StreamResult> {
+    let resolveResponse!: (r: Response) => void;
     let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<AgentRuntimeResponse>((res, rej) => {
+    const responsePromise = new Promise<Response>((res, rej) => {
       resolveResponse = res;
       rejectResponse = rej;
     });
@@ -1975,10 +1975,10 @@ class BedrockAgentRuntime implements AgentRuntimeProvider {
   }
 
   private async *runStream(
-    params: AgentRuntimeParams,
-    resolveResponse: (r: AgentRuntimeResponse) => void,
+    params: RequestParams,
+    resolveResponse: (r: Response) => void,
     rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<AgentRuntimeStreamPart> {
+  ): AsyncIterable<StreamPart> {
     try {
       const sessionId = params.sessionId ?? randomUUID();
 
@@ -2005,8 +2005,8 @@ class BedrockAgentRuntime implements AgentRuntimeProvider {
       const sdkResponse = await this.client.send(command);
       const decoder = new TextDecoder('utf-8');
       let accumulatedContent = '';
-      let finishReason: AgentRuntimeResponse['finishReason'] = 'stop';
-      const actionsRequired: AgentRuntimeActionRequired[] = [];
+      let finishReason: Response['finishReason'] = 'stop';
+      const actionsRequired: ActionRequired[] = [];
 
       for await (const rawEvent of sdkResponse.completion as AsyncIterable<BedrockCompletionEvent>) {
         if ('chunk' in rawEvent && rawEvent.chunk?.bytes) {
@@ -2032,7 +2032,7 @@ class BedrockAgentRuntime implements AgentRuntimeProvider {
         }
       }
 
-      const response: AgentRuntimeResponse = {
+      const response: Response = {
         content: accumulatedContent,
         sessionId,
         finishReason,
@@ -2048,15 +2048,15 @@ class BedrockAgentRuntime implements AgentRuntimeProvider {
   }
 }
 
-export function createBedrockAgentRuntime(config: {
+export function createBedrockProvider(config: {
   region: string;
   agentId: string;
   agentAliasId: string;
   credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
   enableTrace?: boolean;
   memoryId?: string;
-}): AgentRuntimeProvider {
-  return new BedrockAgentRuntime(config);
+}): Provider {
+  return new BedrockProvider(config);
 }
 ```
 
@@ -2078,7 +2078,7 @@ Test Files  1 passed (1)
 - [ ] **Step 1: Update src/bedrock/index.ts**
 
 ```typescript
-export { createBedrockAgentRuntime } from './bedrock.provider.js';
+export { createBedrockProvider } from './bedrock.provider.js';
 export { bedrockTransformer } from './bedrock.transformer.js';
 export type { BedrockCompletionEvent } from './bedrock.types.js';
 ```
@@ -2090,17 +2090,17 @@ export * from './types.js';
 export * from './errors.js';
 export * from './stream-utils.js';
 
-import { createAnthropicAgentRuntime } from './anthropic/index.js';
-import { createBedrockAgentRuntime } from './bedrock/index.js';
-import { createOpenAIAgentRuntime } from './openai/index.js';
+import { createAnthropicProvider } from './anthropic/index.js';
+import { createBedrockProvider } from './bedrock/index.js';
+import { createOpenAIProvider } from './openai/index.js';
 
 export const thalamus = {
-  anthropic: createAnthropicAgentRuntime,
-  openai: createOpenAIAgentRuntime,
-  bedrock: createBedrockAgentRuntime,
+  anthropic: createAnthropicProvider,
+  openai: createOpenAIProvider,
+  bedrock: createBedrockProvider,
 } as const;
 
-export { createAnthropicAgentRuntime, createBedrockAgentRuntime, createOpenAIAgentRuntime };
+export { createAnthropicProvider, createBedrockProvider, createOpenAIProvider };
 ```
 
 - [ ] **Step 3: Run all tests — expect PASS**
@@ -2128,7 +2128,7 @@ git commit -m "feat: add AWS Bedrock Agents provider"
 **What gets added here:**
 - `mapStream()` in stream-utils — now that all three providers exist, it's clear this is generally useful
 - `MessageTransformer<T>` interface — now that we have three transformers, extracting the interface makes sense (you can see the pattern)
-- Remaining `AgentRuntimeMessage` fields (`createdAt`)
+- Remaining `Message` fields (`createdAt`)
 - `file` handling in the Anthropic transformer (skipped in Phase 2 since it wasn't needed)
 - Smoke tests verifying all subpath exports
 
@@ -2141,11 +2141,11 @@ git commit -m "feat: add AWS Bedrock Agents provider"
 - [ ] **Step 1: Add mapStream() to src/stream-utils.ts**
 
 ```typescript
-import type { AgentRuntimeResponse, AgentRuntimeStreamPart, AgentRuntimeStreamResult } from './types.js';
+import type { Response, StreamPart, StreamResult } from './types.js';
 
 export async function collectStream(
-  result: AgentRuntimeStreamResult,
-): Promise<AgentRuntimeResponse> {
+  result: StreamResult,
+): Promise<Response> {
   for await (const _part of result.stream) {
     // consume the stream so the generator runs to completion
   }
@@ -2153,8 +2153,8 @@ export async function collectStream(
 }
 
 export async function* mapStream<T>(
-  source: AsyncIterable<AgentRuntimeStreamPart>,
-  fn: (part: AgentRuntimeStreamPart) => T | null,
+  source: AsyncIterable<StreamPart>,
+  fn: (part: StreamPart) => T | null,
 ): AsyncIterable<T> {
   for await (const part of source) {
     const mapped = fn(part);
@@ -2165,11 +2165,11 @@ export async function* mapStream<T>(
 
 - [ ] **Step 2: Add MessageTransformer interface and createdAt to src/types.ts**
 
-Add `createdAt` to `AgentRuntimeMessage`:
+Add `createdAt` to `Message`:
 ```typescript
-export interface AgentRuntimeMessage {
-  role: AgentRuntimeMessageRole;
-  content: string | AgentRuntimeContentPart[];
+export interface Message {
+  role: MessageRole;
+  content: string | ContentPart[];
   createdAt?: string;  // ← new
 }
 ```
@@ -2177,8 +2177,8 @@ export interface AgentRuntimeMessage {
 Add `MessageTransformer` interface (now that we have three transformers, the pattern is clear):
 ```typescript
 export interface MessageTransformer<TProviderMessage> {
-  toProviderMessages(messages: AgentRuntimeMessage[]): TProviderMessage[];
-  toAgentRuntimeResponse(providerResponse: unknown): AgentRuntimeResponse;
+  toProviderMessages(messages: Message[]): TProviderMessage[];
+  toResponse(providerResponse: unknown): Response;
 }
 ```
 
@@ -2248,11 +2248,11 @@ describe('root export', () => {
     expect(typeof thalamus.bedrock).toBe('function');
   });
 
-  it('exports AgentRuntimeMessageRole enum', async () => {
-    const { AgentRuntimeMessageRole } = await import('../src/index.js');
-    expect(AgentRuntimeMessageRole.USER).toBe('user');
-    expect(AgentRuntimeMessageRole.SYSTEM).toBe('system');
-    expect(AgentRuntimeMessageRole.ASSISTANT).toBe('assistant');
+  it('exports MessageRole enum', async () => {
+    const { MessageRole } = await import('../src/index.js');
+    expect(MessageRole.USER).toBe('user');
+    expect(MessageRole.SYSTEM).toBe('system');
+    expect(MessageRole.ASSISTANT).toBe('assistant');
   });
 
   it('exports provider constants', async () => {
@@ -2271,20 +2271,20 @@ describe('root export', () => {
 
 describe('subpath exports', () => {
   it('anthropic subpath exports factory and transformer', async () => {
-    const { createAnthropicAgentRuntime, anthropicTransformer } = await import('../src/anthropic/index.js');
-    expect(typeof createAnthropicAgentRuntime).toBe('function');
+    const { createAnthropicProvider, anthropicTransformer } = await import('../src/anthropic/index.js');
+    expect(typeof createAnthropicProvider).toBe('function');
     expect(typeof anthropicTransformer.toProviderMessages).toBe('function');
   });
 
   it('openai subpath exports factory and transformer', async () => {
-    const { createOpenAIAgentRuntime, openaiTransformer } = await import('../src/openai/index.js');
-    expect(typeof createOpenAIAgentRuntime).toBe('function');
+    const { createOpenAIProvider, openaiTransformer } = await import('../src/openai/index.js');
+    expect(typeof createOpenAIProvider).toBe('function');
     expect(typeof openaiTransformer.toProviderMessages).toBe('function');
   });
 
   it('bedrock subpath exports factory and transformer', async () => {
-    const { createBedrockAgentRuntime, bedrockTransformer } = await import('../src/bedrock/index.js');
-    expect(typeof createBedrockAgentRuntime).toBe('function');
+    const { createBedrockProvider, bedrockTransformer } = await import('../src/bedrock/index.js');
+    expect(typeof createBedrockProvider).toBe('function');
     expect(typeof bedrockTransformer.toProviderMessages).toBe('function');
   });
 });
@@ -2333,7 +2333,7 @@ This table shows how `src/types.ts` grew — each addition motivated by a concre
 
 | Addition | Phase | Why |
 |----------|-------|-----|
-| `AgentRuntimeMessageRole`, `AgentRuntimeMessage`, `AgentRuntimeParams` (messages + sessionId), `AgentRuntimeResponse` (content + finishReason), stream parts (text-delta, thinking, tool-use, stream-start, finish, error), `AgentRuntimeStreamResult`, `AgentRuntimeProvider`, `ANTHROPIC` | 2 | Minimum needed for Anthropic |
+| `MessageRole`, `Message`, `RequestParams` (messages + sessionId), `Response` (content + finishReason), stream parts (text-delta, thinking, tool-use, stream-start, finish, error), `StreamResult`, `Provider`, `ANTHROPIC` | 2 | Minimum needed for Anthropic |
 | `history` on params, `OPENAI`, error subclasses | 3 | OpenAI history seeding + richer error codes |
-| `file` content part, `actionsRequired` on response, `AgentRuntimeActionRequired`, `provider-event` stream part, `BEDROCK` | 4 | Bedrock file fallback, returnControl, trace events |
+| `file` content part, `actionsRequired` on response, `ActionRequired`, `provider-event` stream part, `BEDROCK` | 4 | Bedrock file fallback, returnControl, trace events |
 | `createdAt` on messages, `MessageTransformer<T>` interface, `mapStream()` | 5 | Polish — now that all three exist, patterns are clear |

@@ -1,0 +1,69 @@
+export enum MessageRole {
+  USER = 'user',
+  ASSISTANT = 'assistant',
+  SYSTEM = 'system',
+}
+
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mediaType: string }
+  | { type: 'image-url'; url: string };
+
+export interface Message {
+  role: MessageRole;
+  content: string | ContentPart[];
+}
+
+export interface RequestParams {
+  messages: Message[];
+  /** Opaque session identifier returned by a prior response. Absent means start a new session. */
+  sessionId?: string;
+  /** Pass-through options forwarded directly to the underlying provider SDK call. */
+  providerOptions?: Record<string, unknown>;
+}
+
+export interface Usage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface Response {
+  content: string;
+  /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */
+  sessionId?: string;
+  finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
+  usage?: Usage;
+}
+
+export type StreamPart =
+  | { type: 'text-delta'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
+  | { type: 'tool-use-result'; toolUseId: string; output?: string }
+  | { type: 'stream-start'; sessionId?: string }
+  | { type: 'finish'; response: Response }
+  | { type: 'error'; error: Error };
+
+/**
+ * Returned by `stream()`. Callers can iterate `stream` for incremental parts
+ * and await `response` for the final rolled-up result. Both resolve from the
+ * same underlying generator — consuming either one drives the other.
+ */
+export interface StreamResult {
+  stream: AsyncIterable<StreamPart>;
+  response: Promise<Response>;
+}
+
+export interface Provider {
+  readonly provider: string;
+  readonly runtimeId: string;
+  send(params: RequestParams): Promise<Response>;
+  stream(params: RequestParams): Promise<StreamResult>;
+  endSession?(sessionId: string): Promise<void>;
+  validate?(): Promise<boolean>;
+}
+
+export const ANTHROPIC = 'anthropic' as const;
+export const OPENAI = 'openai' as const;
+export const BEDROCK = 'bedrock' as const;

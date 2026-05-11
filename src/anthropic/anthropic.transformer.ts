@@ -3,7 +3,7 @@ import type {
   BetaManagedAgentsImageBlock,
   BetaManagedAgentsDocumentBlock,
 } from '@anthropic-ai/sdk/resources/beta/sessions';
-import type { Message } from '../types.js';
+import type { Message } from '../types';
 
 type ContentBlock = BetaManagedAgentsTextBlock | BetaManagedAgentsImageBlock | BetaManagedAgentsDocumentBlock;
 

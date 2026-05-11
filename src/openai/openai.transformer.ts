@@ -2,7 +2,7 @@ import {
   MessageRole,
   type Message,
   type ContentPart,
-} from '../types.js';
+} from '../types';
 
 type OpenAIInputContent =
   | { type: 'input_text'; text: string }

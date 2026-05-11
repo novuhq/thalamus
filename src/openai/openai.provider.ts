@@ -9,8 +9,8 @@ import {
   ProviderRateLimitError,
   ProviderResponseError,
   ProviderUnavailableError,
-} from '../errors.js';
-import { collectStream } from '../stream-utils.js';
+} from '../errors';
+import { collectStream } from '../stream-utils';
 import {
   OPENAI,
   type RequestParams,
@@ -19,8 +19,8 @@ import {
   type StreamPart,
   type StreamResult,
   type Usage,
-} from '../types.js';
-import { openaiTransformer } from './openai.transformer.js';
+} from '../types';
+import { openaiTransformer } from './openai.transformer';
 
 function mapError(error: unknown, provider: string): Error {
   const msg = error instanceof Error ? error.message : String(error);

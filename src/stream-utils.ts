@@ -1,4 +1,4 @@
-import type { Response, StreamResult } from './types.js';
+import type { Response, StreamResult } from './types';
 
 export async function collectStream(
   result: StreamResult,

@@ -1,9 +1,9 @@
-export * from './types.js';
-export * from './errors.js';
-export * from './stream-utils.js';
+export * from './types';
+export * from './errors';
+export * from './stream-utils';
 
-import { createAnthropicProvider } from './anthropic/index.js';
-import { createOpenAIProvider } from './openai/index.js';
+import { createAnthropicProvider } from './anthropic/index';
+import { createOpenAIProvider } from './openai/index';
 
 export const thalamus = {
   anthropic: createAnthropicProvider,

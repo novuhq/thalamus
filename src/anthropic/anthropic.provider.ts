@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ThalamusError } from '../errors.js';
-import { collectStream } from '../stream-utils.js';
+import { ThalamusError } from '../errors';
+import { collectStream } from '../stream-utils';
 import {
   ANTHROPIC,
   type ActionRequired,
@@ -10,7 +10,7 @@ import {
   type StreamPart,
   type StreamResult,
   type Usage,
-} from '../types.js';
+} from '../types';
 import type {
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsSessionStatusIdleEvent,
@@ -23,7 +23,7 @@ import type {
   BetaManagedAgentsSessionErrorEvent,
   BetaManagedAgentsSpanModelRequestEndEvent,
 } from '@anthropic-ai/sdk/resources/beta/sessions';
-import { toContentBlocks } from './anthropic.transformer.js';
+import { toContentBlocks } from './anthropic.transformer';
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent['stop_reason'];
 

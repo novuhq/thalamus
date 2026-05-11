@@ -3,6 +3,7 @@ import { ThalamusError } from '../errors.js';
 import { collectStream } from '../stream-utils.js';
 import {
   ANTHROPIC,
+  type ActionRequired,
   type RequestParams,
   type Provider,
   type Response,
@@ -14,8 +15,11 @@ import type {
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsSessionStatusIdleEvent,
   BetaManagedAgentsAgentMessageEvent,
+  BetaManagedAgentsAgentToolUseEvent,
+  BetaManagedAgentsAgentToolResultEvent,
   BetaManagedAgentsAgentMCPToolUseEvent,
   BetaManagedAgentsAgentMCPToolResultEvent,
+  BetaManagedAgentsAgentCustomToolUseEvent,
   BetaManagedAgentsSessionErrorEvent,
   BetaManagedAgentsSpanModelRequestEndEvent,
 } from '@anthropic-ai/sdk/resources/beta/sessions';
@@ -37,6 +41,116 @@ function mapError(raw: unknown): ThalamusError {
   const msg = obj?.message ?? String(raw);
   const isAuth = obj?.type === 'authentication_error';
   return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
+}
+
+class ResponseAccumulator {
+  content = '';
+  finishReason: Response['finishReason'] = 'stop';
+  usage: Usage | undefined;
+  actionsRequired: ActionRequired[] = [];
+  done = false;
+
+  toResponse(sessionId: string): Response {
+    return {
+      content: this.content,
+      sessionId,
+      finishReason: this.finishReason,
+      usage: this.usage,
+      actionsRequired: this.actionsRequired.length > 0 ? this.actionsRequired : undefined,
+    };
+  }
+}
+
+function* mapEvent(
+  event: BetaManagedAgentsStreamSessionEvents,
+  acc: ResponseAccumulator,
+): Generator<StreamPart> {
+  switch (event.type) {
+    case 'agent.message': {
+      const e = event as BetaManagedAgentsAgentMessageEvent;
+      for (const block of e.content) {
+        if (block.type === 'text') {
+          acc.content += block.text;
+          yield { type: 'text-delta', text: block.text };
+        }
+      }
+      break;
+    }
+    case 'agent.thinking': {
+      yield { type: 'thinking', text: '' };
+      break;
+    }
+    case 'agent.tool_use': {
+      const e = event as BetaManagedAgentsAgentToolUseEvent;
+      yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
+      break;
+    }
+    case 'agent.tool_result': {
+      const e = event as BetaManagedAgentsAgentToolResultEvent;
+      const output = e.content?.find((b) => b.type === 'text');
+      yield { type: 'tool-use-result', toolUseId: e.tool_use_id, output: output?.type === 'text' ? output.text : undefined };
+      break;
+    }
+    case 'agent.mcp_tool_use': {
+      const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
+      yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
+      break;
+    }
+    case 'agent.mcp_tool_result': {
+      const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
+      const output = e.content?.find((b) => b.type === 'text');
+      yield { type: 'tool-use-result', toolUseId: e.mcp_tool_use_id, output: output?.type === 'text' ? output.text : undefined };
+      break;
+    }
+    case 'agent.custom_tool_use': {
+      const e = event as BetaManagedAgentsAgentCustomToolUseEvent;
+      acc.actionsRequired.push({
+        type: 'tool-confirmation',
+        toolUseId: e.id,
+        toolName: e.name,
+        input: e.input as Record<string, unknown>,
+      });
+      acc.finishReason = 'requires-action';
+      break;
+    }
+    case 'session.status_running': {
+      yield { type: 'status-change', status: 'running' };
+      break;
+    }
+    case 'session.status_rescheduled': {
+      yield { type: 'status-change', status: 'retrying' };
+      break;
+    }
+    case 'session.status_idle': {
+      const e = event as BetaManagedAgentsSessionStatusIdleEvent;
+      yield { type: 'status-change', status: 'idle' };
+      acc.finishReason = mapStopReason(e.stop_reason);
+      acc.done = true;
+      break;
+    }
+    case 'session.status_terminated': {
+      throw new ThalamusError('Session terminated', { provider: ANTHROPIC, isRetryable: false });
+    }
+    case 'session.error': {
+      const e = event as BetaManagedAgentsSessionErrorEvent;
+      throw mapError(e.error);
+    }
+    case 'span.model_request_end': {
+      const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
+      if (e.model_usage) {
+        acc.usage = {
+          inputTokens: e.model_usage.input_tokens,
+          outputTokens: e.model_usage.output_tokens,
+          totalTokens: e.model_usage.input_tokens + e.model_usage.output_tokens,
+        };
+      }
+      break;
+    }
+    default: {
+      yield { type: 'provider-event', provider: ANTHROPIC, event: event.type, data: event as unknown as Record<string, unknown> };
+      break;
+    }
+  }
 }
 
 class AnthropicProvider implements Provider {
@@ -74,84 +188,23 @@ class AnthropicProvider implements Provider {
     rejectResponse: (e: unknown) => void,
   ): AsyncIterable<StreamPart> {
     try {
-      let sessionId: string;
-      if (params.sessionId) {
-        sessionId = params.sessionId;
-      } else {
-        const session = await this.client.beta.sessions.create({
-          agent: this.agentId,
-          environment_id: this.environmentId,
-        });
-        sessionId = session.id;
-      }
+      const sessionId = params.sessionId ?? (await this.createSession());
 
       yield { type: 'stream-start', sessionId };
 
       const sseStream = await this.client.beta.sessions.events.stream(sessionId);
-
       await this.client.beta.sessions.events.send(sessionId, {
         events: [{ type: 'user.message', content: toContentBlocks(params.message.content) }],
       });
 
-      let accumulatedContent = '';
-      let finishReason: Response['finishReason'] = 'stop';
-      let usage: Usage | undefined;
+      const acc = new ResponseAccumulator();
 
       for await (const rawEvent of sseStream) {
-        const event = rawEvent as BetaManagedAgentsStreamSessionEvents;
-
-        switch (event.type) {
-          case 'agent.message': {
-            const e = event as BetaManagedAgentsAgentMessageEvent;
-            for (const block of e.content) {
-              if (block.type === 'text') {
-                accumulatedContent += block.text;
-                yield { type: 'text-delta', text: block.text };
-              }
-            }
-            break;
-          }
-          case 'agent.thinking': {
-            yield { type: 'thinking', text: '' };
-            break;
-          }
-          case 'agent.mcp_tool_use': {
-            const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
-            yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
-            break;
-          }
-          case 'agent.mcp_tool_result': {
-            const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
-            const output = e.content?.find((b) => b.type === 'text');
-            yield { type: 'tool-use-result', toolUseId: e.mcp_tool_use_id, output: output?.type === 'text' ? output.text : undefined };
-            break;
-          }
-          case 'session.status_idle': {
-            const e = event as BetaManagedAgentsSessionStatusIdleEvent;
-            finishReason = mapStopReason(e.stop_reason);
-            break;
-          }
-          case 'session.error': {
-            const e = event as BetaManagedAgentsSessionErrorEvent;
-            throw mapError(e.error);
-          }
-          case 'span.model_request_end': {
-            const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
-            if (e.model_usage) {
-              usage = {
-                inputTokens: e.model_usage.input_tokens,
-                outputTokens: e.model_usage.output_tokens,
-                totalTokens: e.model_usage.input_tokens + e.model_usage.output_tokens,
-              };
-            }
-            break;
-          }
-        }
-
-        if (event.type === 'session.status_idle') break;
+        yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
+        if (acc.done) break;
       }
 
-      const response: Response = { content: accumulatedContent, sessionId, finishReason, usage };
+      const response = acc.toResponse(sessionId);
       yield { type: 'finish', response };
       resolveResponse(response);
     } catch (err) {
@@ -159,6 +212,15 @@ class AnthropicProvider implements Provider {
       yield { type: 'error', error };
       rejectResponse(error);
     }
+  }
+
+  private async createSession(): Promise<string> {
+    const session = await this.client.beta.sessions.create({
+      agent: this.agentId,
+      environment_id: this.environmentId,
+    });
+    
+    return session.id;
   }
 
   async endSession(sessionId: string): Promise<void> {

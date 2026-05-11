@@ -32,22 +32,34 @@ export interface Usage {
   totalTokens?: number;
 }
 
+export interface ActionRequired {
+  type: 'tool-confirmation';
+  toolUseId: string;
+  toolName: string;
+  input?: Record<string, unknown>;
+}
+
 export interface Response {
   content: string;
   /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */
   sessionId?: string;
   finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
   usage?: Usage;
+  actionsRequired?: ActionRequired[];
 }
+
+export type AgentStatus = 'running' | 'queued' | 'retrying' | 'idle';
 
 export type StreamPart =
   | { type: 'text-delta'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
   | { type: 'tool-use-result'; toolUseId: string; output?: string }
+  | { type: 'status-change'; status: AgentStatus }
   | { type: 'stream-start'; sessionId?: string }
   | { type: 'finish'; response: Response }
-  | { type: 'error'; error: Error };
+  | { type: 'error'; error: Error }
+  | { type: 'provider-event'; provider: string; event: string; data: Record<string, unknown> };
 
 /**
  * Returned by `stream()`. Callers can iterate `stream` for incremental parts

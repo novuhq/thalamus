@@ -26,11 +26,14 @@ src/
     index.ts
     anthropic.provider.ts
     anthropic.transformer.ts
-    anthropic.types.ts
   openai/                  # added in Phase 3
-    ...
+    index.ts
+    openai.provider.ts
+    openai.transformer.ts
   bedrock/                 # added in Phase 4
-    ...
+    index.ts
+    bedrock.provider.ts
+    bedrock.transformer.ts
 
 __tests__/
   anthropic/
@@ -40,6 +43,8 @@ __tests__/
   bedrock/                 # added in Phase 4
   smoke.test.ts            # added in Phase 5
 ```
+
+> **Note:** No `<provider>.types.ts` files. Provider-specific types are imported directly from vendor SDKs (peer dependencies). This eliminates type duplication and ensures compile-time safety when SDKs update.
 
 ---
 
@@ -348,41 +353,11 @@ export async function collectStream(
 }
 ```
 
-### Task 2: Create Anthropic-specific types
+### Task 2: ~~Create Anthropic-specific types~~ (REMOVED)
 
-**Files:**
-- Create: `src/anthropic/anthropic.types.ts`
+**Decision:** Provider-specific types are imported directly from the vendor SDK (`@anthropic-ai/sdk/resources/beta/sessions`) rather than redefined locally. Since the SDK is already a peer dependency, re-exporting or duplicating its types adds indirection without safety. Importing directly means TypeScript catches SDK breaking changes at compile time.
 
-These are the raw event shapes that come back from the Anthropic SSE stream. They live in the Anthropic folder because no other provider uses them.
-
-- [ ] **Step 1: Create anthropic.types.ts**
-
-```typescript
-export interface AnthropicTextBlock {
-  type: 'text';
-  text: string;
-}
-
-export interface AnthropicImageBlock {
-  type: 'image';
-  source:
-    | { type: 'base64'; media_type: string; data: string }
-    | { type: 'url'; url: string };
-}
-
-export type AnthropicContentBlock = AnthropicTextBlock | AnthropicImageBlock;
-
-// Events received from the Anthropic SSE stream
-export type AnthropicSessionEvent =
-  | { type: 'agent.message'; content: Array<{ type: 'text'; text: string }> }
-  | { type: 'agent.thinking'; thinking: string }
-  | { type: 'agent.mcp_tool_use'; id: string; name: string; input?: Record<string, unknown> }
-  | { type: 'agent.mcp_tool_result'; tool_use_id: string; content?: Array<{ type: 'text'; text: string }> }
-  | { type: 'session.status_idle'; stop_reason: string }
-  | { type: 'session.error'; error?: { message?: string; type?: string } }
-  | { type: 'span.model_request_end'; model_usage?: { input_tokens?: number; output_tokens?: number } }
-  | { type: string; [key: string]: unknown };
-```
+Each provider file imports the SDK types it needs inline. No `<provider>.types.ts` file is needed.
 
 ### Task 3: Write failing transformer tests, then implement
 
@@ -455,49 +430,21 @@ Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.transforme
 - [ ] **Step 3: Create src/anthropic/anthropic.transformer.ts**
 
 ```typescript
-import {
-  MessageRole,
-  type Message,
-  type Response,
-} from '../types.js';
-import type { AnthropicContentBlock } from './anthropic.types.js';
+import type {
+  BetaManagedAgentsTextBlock,
+  BetaManagedAgentsImageBlock,
+  BetaManagedAgentsDocumentBlock,
+} from '@anthropic-ai/sdk/resources/beta/sessions';
+import type { Message } from '../types.js';
 
-function contentToBlocks(
-  role: MessageRole,
-  content: Message['content'],
-): AnthropicContentBlock[] {
-  const parts = typeof content === 'string' ? [{ type: 'text' as const, text: content }] : content;
-  const blocks: AnthropicContentBlock[] = [];
+type ContentBlock = BetaManagedAgentsTextBlock | BetaManagedAgentsImageBlock | BetaManagedAgentsDocumentBlock;
 
-  for (const part of parts) {
-    switch (part.type) {
-      case 'text':
-        blocks.push({
-          type: 'text',
-          text: role === MessageRole.SYSTEM ? `[System]: ${part.text}` : part.text,
-        });
-        break;
-      case 'image':
-        blocks.push({
-          type: 'image',
-          source: { type: 'base64', media_type: part.mediaType, data: part.data },
-        });
-        break;
-      case 'image-url':
-        blocks.push({ type: 'image', source: { type: 'url', url: part.url } });
-        break;
-    }
-  }
-
-  return blocks;
-}
-
-export function toContentBlocks(content: Message['content']): AnthropicContentBlock[] {
+export function toContentBlocks(content: Message['content']): ContentBlock[] {
   if (typeof content === 'string') {
     return [{ type: 'text', text: content }];
   }
 
-  const blocks: AnthropicContentBlock[] = [];
+  const blocks: ContentBlock[] = [];
   for (const part of content) {
     switch (part.type) {
       case 'text':
@@ -701,6 +648,15 @@ Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.provider.j
 
 ```typescript
 import Anthropic from '@anthropic-ai/sdk';
+import type {
+  BetaManagedAgentsStreamSessionEvents,
+  BetaManagedAgentsSessionStatusIdleEvent,
+  BetaManagedAgentsAgentMessageEvent,
+  BetaManagedAgentsAgentMCPToolUseEvent,
+  BetaManagedAgentsAgentMCPToolResultEvent,
+  BetaManagedAgentsSessionErrorEvent,
+  BetaManagedAgentsSpanModelRequestEndEvent,
+} from '@anthropic-ai/sdk/resources/beta/sessions';
 import { ThalamusError } from '../errors.js';
 import { collectStream } from '../stream-utils.js';
 import {
@@ -712,15 +668,15 @@ import {
   type StreamResult,
   type Usage,
 } from '../types.js';
-import { anthropicTransformer } from './anthropic.transformer.js';
-import type { AnthropicSessionEvent } from './anthropic.types.js';
+import { toContentBlocks } from './anthropic.transformer.js';
 
-function mapStopReason(reason: string): Response['finishReason'] {
-  switch (reason) {
-    case 'task_complete': return 'stop';
-    case 'max_tokens': return 'length';
-    case 'tool_confirmation_required': return 'requires-action';
-    case 'error': return 'error';
+type StopReason = BetaManagedAgentsSessionStatusIdleEvent['stop_reason'];
+
+function mapStopReason(reason: StopReason): Response['finishReason'] {
+  switch (reason.type) {
+    case 'end_turn': return 'stop';
+    case 'requires_action': return 'requires-action';
+    case 'retries_exhausted': return 'error';
     default: return 'other';
   }
 }
@@ -767,21 +723,24 @@ class AnthropicProvider implements Provider {
     rejectResponse: (e: unknown) => void,
   ): AsyncIterable<StreamPart> {
     try {
-      let sessionId = params.sessionId;
-      if (!sessionId) {
+      let sessionId: string;
+      if (params.sessionId) {
+        sessionId = params.sessionId;
+      } else {
         const session = await this.client.beta.sessions.create({
           agent: this.agentId,
           environment_id: this.environmentId,
         });
         sessionId = session.id;
-        yield { type: 'stream-start', sessionId };
       }
 
-      // Open SSE stream BEFORE sending message — avoids race condition
-      const sseStream = await (this.client.beta.sessions.events as any).stream(sessionId);
+      yield { type: 'stream-start', sessionId };
 
-      await (this.client.beta.sessions.events as any).send(sessionId, {
-        events: [{ type: 'user.message', content: anthropicTransformer.toInput(params.messages) }],
+      // Open SSE stream BEFORE sending message — avoids race condition
+      const sseStream = await this.client.beta.sessions.events.stream(sessionId);
+
+      await this.client.beta.sessions.events.send(sessionId, {
+        events: [{ type: 'user.message', content: toContentBlocks(params.message.content) }],
       });
 
       let accumulatedContent = '';
@@ -789,11 +748,11 @@ class AnthropicProvider implements Provider {
       let usage: Usage | undefined;
 
       for await (const rawEvent of sseStream) {
-        const event = rawEvent as AnthropicSessionEvent;
+        const event = rawEvent as BetaManagedAgentsStreamSessionEvents;
 
         switch (event.type) {
           case 'agent.message': {
-            const e = event as { type: 'agent.message'; content: Array<{ type: 'text'; text: string }> };
+            const e = event as BetaManagedAgentsAgentMessageEvent;
             for (const block of e.content) {
               if (block.type === 'text') {
                 accumulatedContent += block.text;
@@ -803,36 +762,36 @@ class AnthropicProvider implements Provider {
             break;
           }
           case 'agent.thinking': {
-            const e = event as { type: 'agent.thinking'; thinking: string };
-            yield { type: 'thinking', text: e.thinking ?? '' };
+            yield { type: 'thinking', text: '' };
             break;
           }
           case 'agent.mcp_tool_use': {
-            const e = event as { type: 'agent.mcp_tool_use'; id: string; name: string; input?: Record<string, unknown> };
+            const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
             yield { type: 'tool-use-start', toolName: e.name, toolUseId: e.id, input: e.input };
             break;
           }
           case 'agent.mcp_tool_result': {
-            const e = event as { type: 'agent.mcp_tool_result'; tool_use_id: string; content?: Array<{ type: 'text'; text: string }> };
-            yield { type: 'tool-use-result', toolUseId: e.tool_use_id, output: e.content?.[0]?.text };
+            const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
+            const output = e.content?.find((b) => b.type === 'text');
+            yield { type: 'tool-use-result', toolUseId: e.mcp_tool_use_id, output: output?.type === 'text' ? output.text : undefined };
             break;
           }
           case 'session.status_idle': {
-            const e = event as { type: 'session.status_idle'; stop_reason: string };
+            const e = event as BetaManagedAgentsSessionStatusIdleEvent;
             finishReason = mapStopReason(e.stop_reason);
             break;
           }
           case 'session.error': {
-            const e = event as { type: 'session.error'; error?: { message?: string; type?: string } };
+            const e = event as BetaManagedAgentsSessionErrorEvent;
             throw mapError(e.error);
           }
           case 'span.model_request_end': {
-            const e = event as { type: 'span.model_request_end'; model_usage?: { input_tokens?: number; output_tokens?: number } };
+            const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
             if (e.model_usage) {
               usage = {
                 inputTokens: e.model_usage.input_tokens,
                 outputTokens: e.model_usage.output_tokens,
-                totalTokens: (e.model_usage.input_tokens ?? 0) + (e.model_usage.output_tokens ?? 0),
+                totalTokens: e.model_usage.input_tokens + e.model_usage.output_tokens,
               };
             }
             break;
@@ -895,8 +854,7 @@ Test Files  1 passed (1)
 
 ```typescript
 export { createAnthropicProvider } from './anthropic.provider.js';
-export { anthropicTransformer } from './anthropic.transformer.js';
-export type { AnthropicContentBlock } from './anthropic.types.js';
+export { toContentBlocks } from './anthropic.transformer.js';
 ```
 
 - [ ] **Step 2: Update src/index.ts**
@@ -1031,32 +989,9 @@ export class ProviderResponseError extends ThalamusError {
 Run: `pnpm test`
 Expected: All 12 tests still pass. (Adding `history?` is backwards-compatible; adding error subclasses doesn't change Anthropic.)
 
-### Task 2: Create OpenAI-specific types
+### Task 2: ~~Create OpenAI-specific types~~ (REMOVED)
 
-**Files:**
-- Create: `src/openai/openai.types.ts`
-
-- [ ] **Step 1: Create openai.types.ts**
-
-```typescript
-export interface OpenAIInputMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string | Array<{ type: 'input_text'; text: string } | { type: 'input_image'; image_url: { url: string } }>;
-}
-
-export interface OpenAIToolConfig {
-  type: 'web_search' | 'code_interpreter' | 'file_search' | 'mcp';
-  [key: string]: unknown;
-}
-
-// Streaming events from the Responses API
-export type OpenAIStreamEvent =
-  | { type: 'response.created'; response: { id: string } }
-  | { type: 'response.output_text.delta'; delta: string }
-  | { type: 'response.completed'; response: { id: string; output: Array<{ content?: Array<{ text?: string }> }>; usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number } } }
-  | { type: 'error'; message?: string; code?: string }
-  | { type: string; [key: string]: unknown };
-```
+**Decision:** Same as Anthropic — types are imported directly from the `openai` SDK. The transformer and provider import what they need inline from `openai/resources`.
 
 ### Task 3: Write failing transformer tests, then implement
 
@@ -1497,7 +1432,6 @@ Test Files  1 passed (1)
 ```typescript
 export { createOpenAIProvider } from './openai.provider.js';
 export { openaiTransformer } from './openai.transformer.js';
-export type { OpenAIInputMessage, OpenAIToolConfig } from './openai.types.js';
 ```
 
 - [ ] **Step 2: Update src/index.ts**
@@ -1615,20 +1549,9 @@ export const BEDROCK = 'bedrock' as const;
 Run: `pnpm test`
 Expected: 23 tests still pass. (All changes are additive.)
 
-### Task 2: Create Bedrock-specific types
+### Task 2: ~~Create Bedrock-specific types~~ (REMOVED)
 
-**Files:**
-- Create: `src/bedrock/bedrock.types.ts`
-
-- [ ] **Step 1: Create bedrock.types.ts**
-
-```typescript
-export type BedrockCompletionEvent =
-  | { chunk: { bytes: Uint8Array } }
-  | { returnControl: { invocationId: string; invocationInputs?: Array<{ functionInvocationInput?: { actionGroup: string; function: string; parameters?: Array<{ name: string; type: string; value: string }> } }> } }
-  | { trace: unknown }
-  | Record<string, unknown>;
-```
+**Decision:** Same as other providers — types are imported directly from `@aws-sdk/client-bedrock-agent-runtime`. The provider imports `InvokeAgentCommandOutput` and related types inline.
 
 ### Task 3: Write failing transformer tests, then implement
 
@@ -2072,7 +1995,6 @@ Test Files  1 passed (1)
 ```typescript
 export { createBedrockProvider } from './bedrock.provider.js';
 export { bedrockTransformer } from './bedrock.transformer.js';
-export type { BedrockCompletionEvent } from './bedrock.types.js';
 ```
 
 - [ ] **Step 2: Finalize src/index.ts with all three providers**

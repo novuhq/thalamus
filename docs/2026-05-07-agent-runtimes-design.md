@@ -319,18 +319,15 @@ thalamus/
 │   ├── anthropic/
 │   │   ├── index.ts                            # subpath entry: factory + transformer
 │   │   ├── anthropic.provider.ts
-│   │   ├── anthropic.transformer.ts
-│   │   └── anthropic.types.ts
+│   │   └── anthropic.transformer.ts
 │   ├── openai/
 │   │   ├── index.ts
 │   │   ├── openai.provider.ts
-│   │   ├── openai.transformer.ts
-│   │   └── openai.types.ts
+│   │   └── openai.transformer.ts
 │   └── bedrock/
 │       ├── index.ts
 │       ├── bedrock.provider.ts
-│       ├── bedrock.transformer.ts
-│       └── bedrock.types.ts
+│       └── bedrock.transformer.ts
 └── __tests__/
     ├── anthropic/
     ├── openai/
@@ -409,6 +406,7 @@ Unused providers are never bundled.
 
 - **Single package, subpath exports.** One repo, one `package.json`, but consumers tree-shake by importing only `@novu/thalamus/anthropic`. Avoids monorepo overhead for what is conceptually one library.
 - **Self-contained provider folders.** Adding a new provider = add a folder, implement the interface, add a subpath export entry, export from root index.
+- **No local type redefinitions.** Provider-specific types (event shapes, content blocks) are imported directly from vendor SDKs rather than redefined in `<provider>.types.ts` files. Since SDKs are peer dependencies, this ensures compile-time safety when SDKs update and eliminates duplication.
 - **Separate transformer files.** Message translation is the most complex part — isolating it makes testing straightforward.
 - **`stream-utils.ts`** provides helpers like `collectStream()` (consume stream into single response) to reduce consumer boilerplate.
 - **Provider SDKs as optional peer dependencies.** Each provider SDK is an optional peer dep — installing `@novu/thalamus` alone brings zero transitive dependencies. Only the provider SDKs you actually use need installing.

@@ -1,15 +1,21 @@
+import type {
+  BetaManagedAgentsTextBlock,
+  BetaManagedAgentsImageBlock,
+  BetaManagedAgentsDocumentBlock,
+} from '@anthropic-ai/sdk/resources/beta/sessions';
 import type { Message } from '../types.js';
-import type { AnthropicContentBlock } from './anthropic.types.js';
+
+type ContentBlock = BetaManagedAgentsTextBlock | BetaManagedAgentsImageBlock | BetaManagedAgentsDocumentBlock;
 
 /**
  * Converts a Message's content to Anthropic content blocks.
  */
-export function toContentBlocks(content: Message['content']): AnthropicContentBlock[] {
+export function toContentBlocks(content: Message['content']): ContentBlock[] {
   if (typeof content === 'string') {
     return [{ type: 'text', text: content }];
   }
 
-  const blocks: AnthropicContentBlock[] = [];
+  const blocks: ContentBlock[] = [];
   for (const part of content) {
     switch (part.type) {
       case 'text':

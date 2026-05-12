@@ -1,8 +1,8 @@
 import Module from 'node:module';
 import Anthropic from '@anthropic-ai/sdk';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropicProvider } from '../../src/anthropic/anthropic.provider.js';
-import { ThalamusError } from '../../src/errors.js';
+import { ThalamusError, SessionExpiredError } from '../../src/errors.js';
 import { collectStream } from '../../src/stream-utils.js';
 
 function mockSse(events: object[]) {
@@ -53,6 +53,7 @@ mockAnthropicAws.mockImplementation(function (this: any, config: Record<string, 
 });
 
 afterEach(() => vi.clearAllMocks());
+afterAll(() => { (Module as any)._load = originalLoad; });
 
 const config = { apiKey: 'sk-test', agentId: 'agent_abc', environmentId: 'env_xyz' };
 
@@ -200,5 +201,81 @@ describe('AWS auth variant', () => {
     });
     expect(rt.provider).toBe('anthropic');
     expect(mockAnthropicAws).toHaveBeenCalledWith({ awsRegion: 'us-east-1', awsWorkspaceId: 'wrkspc_abc' });
+  });
+});
+
+describe('session expiry detection', () => {
+  it('throws SessionExpiredError when SSE stream returns 404 on resume', async () => {
+    const notFoundError = Object.assign(new Error('Not Found'), { status: 404 });
+    mockSseStream.mockRejectedValue(notFoundError);
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: 'user', content: 'hello' } as never],
+      sessionId: 'sess_expired',
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const errPart = parts.find((p) => p.type === 'error');
+    expect(errPart).toBeDefined();
+    expect((errPart as any).error).toBeInstanceOf(SessionExpiredError);
+    expect((errPart as any).error.sessionId).toBe('sess_expired');
+    expect((errPart as any).error.isRetryable).toBe(true);
+  });
+
+  it('throws SessionExpiredError when SSE stream returns 410 on resume', async () => {
+    const goneError = Object.assign(new Error('Gone'), { status: 410 });
+    mockSseStream.mockRejectedValue(goneError);
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: 'user', content: 'hello' } as never],
+      sessionId: 'sess_gone',
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const errPart = parts.find((p) => p.type === 'error');
+    expect(errPart).toBeDefined();
+    expect((errPart as any).error).toBeInstanceOf(SessionExpiredError);
+    expect((errPart as any).error.sessionId).toBe('sess_gone');
+  });
+
+  it('does NOT throw SessionExpiredError for other errors', async () => {
+    const serverError = Object.assign(new Error('Internal Server Error'), { status: 500 });
+    mockSseStream.mockRejectedValue(serverError);
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: 'user', content: 'hello' } as never],
+      sessionId: 'sess_other',
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const errPart = parts.find((p) => p.type === 'error');
+    expect(errPart).toBeDefined();
+    expect((errPart as any).error).not.toBeInstanceOf(SessionExpiredError);
+  });
+
+  it('does NOT throw SessionExpiredError for 404 on new session (no sessionId)', async () => {
+    const notFoundError = Object.assign(new Error('Not Found'), { status: 404 });
+    mockCreate.mockRejectedValue(notFoundError);
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: 'user', content: 'hello' } as never],
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const errPart = parts.find((p) => p.type === 'error');
+    expect(errPart).toBeDefined();
+    expect((errPart as any).error).not.toBeInstanceOf(SessionExpiredError);
   });
 });

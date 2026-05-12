@@ -45,3 +45,13 @@ export class ProviderResponseError extends ThalamusError {
     this.name = 'ProviderResponseError';
   }
 }
+
+export class SessionExpiredError extends ThalamusError {
+  readonly sessionId: string;
+
+  constructor(message: string, options: { provider: string; sessionId: string; cause?: unknown }) {
+    super(message, { ...options, isRetryable: true });
+    this.name = 'SessionExpiredError';
+    this.sessionId = options.sessionId;
+  }
+}

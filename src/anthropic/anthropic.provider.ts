@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ThalamusError } from '../errors';
+import { ThalamusError, SessionExpiredError } from '../errors';
 import { collectStream } from '../stream-utils';
 
 declare const require: (id: string) => any;
@@ -188,7 +188,7 @@ class AnthropicProvider implements Provider {
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
 
-    if ('awsRegion' in config) {
+    if ('awsRegion' in config && config.awsRegion) {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
       this.client = new AnthropicAws({
@@ -243,7 +243,20 @@ class AnthropicProvider implements Provider {
       yield { type: 'finish', response };
       resolveResponse(response);
     } catch (err) {
-      const error = err instanceof ThalamusError ? err : new ThalamusError(String(err), { provider: ANTHROPIC, isRetryable: false });
+      const isSessionExpired = params.sessionId
+        && err instanceof Error
+        && 'status' in err
+        && ((err as any).status === 404 || (err as any).status === 410);
+
+      const error = isSessionExpired
+        ? new SessionExpiredError(
+            `Session ${params.sessionId} has expired or been archived`,
+            { provider: ANTHROPIC, sessionId: params.sessionId!, cause: err },
+          )
+        : err instanceof ThalamusError
+          ? err
+          : new ThalamusError(String(err), { provider: ANTHROPIC, isRetryable: false, cause: err });
+
       yield { type: 'error', error };
       rejectResponse(error);
     }

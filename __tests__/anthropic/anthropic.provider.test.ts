@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropicProvider } from '../../src/anthropic/anthropic.provider.js';
 import { ThalamusError, SessionExpiredError } from '../../src/errors.js';
 import { collectStream } from '../../src/stream-utils.js';
+import { MessageRole } from '../../src/types.js';
 
 function mockSse(events: object[]) {
   return {
@@ -71,7 +72,7 @@ describe('stream — new session', () => {
 
     const rt = createAnthropicProvider(config);
     const result = await rt.stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'Hi' }],
     });
 
     const parts = [];
@@ -103,7 +104,7 @@ describe('stream — resume session', () => {
     const rt = createAnthropicProvider(config);
     await collectStream(
       await rt.stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        messages: [{ role: MessageRole.USER, content: 'next' }],
         sessionId: 'sess_existing',
       }),
     );
@@ -125,7 +126,7 @@ describe('send', () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    const response = await rt.send({ messages: [{ role: 'user', content: 'ping' } as never] });
+    const response = await rt.send({ messages: [{ role: MessageRole.USER, content: 'ping' }] });
     expect(response.content).toBe('Done.');
   });
 });
@@ -141,7 +142,7 @@ describe('error mapping', () => {
     mockSend.mockResolvedValue({});
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'x' } as never],
+      messages: [{ role: MessageRole.USER, content: 'x' }],
     });
     result.response.catch(() => {});
 
@@ -175,7 +176,7 @@ describe('AWS auth variant', () => {
 
     const rt = createAnthropicProvider(awsConfig);
     const result = await rt.stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'Hi' }],
     });
 
     const parts = [];
@@ -200,7 +201,7 @@ describe('AWS auth variant', () => {
       ...awsConfig,
       awsWorkspaceId: 'wrkspc_abc',
     });
-    await rt.send({ messages: [{ role: 'user', content: 'hi' } as never] });
+    await rt.send({ messages: [{ role: MessageRole.USER, content: 'hi' }] });
 
     expect(mockAnthropicAws).toHaveBeenCalledWith({ awsRegion: 'us-east-1', workspaceId: 'wrkspc_abc' });
   });
@@ -212,7 +213,7 @@ describe('session expiry detection', () => {
     mockSseStream.mockRejectedValue(notFoundError);
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'hello' } as never],
+      messages: [{ role: MessageRole.USER, content: 'hello' }],
       sessionId: 'sess_expired',
     });
     result.response.catch(() => {});
@@ -232,7 +233,7 @@ describe('session expiry detection', () => {
     mockSseStream.mockRejectedValue(goneError);
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'hello' } as never],
+      messages: [{ role: MessageRole.USER, content: 'hello' }],
       sessionId: 'sess_gone',
     });
     result.response.catch(() => {});
@@ -251,7 +252,7 @@ describe('session expiry detection', () => {
     mockSseStream.mockRejectedValue(serverError);
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'hello' } as never],
+      messages: [{ role: MessageRole.USER, content: 'hello' }],
       sessionId: 'sess_other',
     });
     result.response.catch(() => {});
@@ -269,7 +270,7 @@ describe('session expiry detection', () => {
     mockCreate.mockRejectedValue(notFoundError);
 
     const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: 'user', content: 'hello' } as never],
+      messages: [{ role: MessageRole.USER, content: 'hello' }],
     });
     result.response.catch(() => {});
 

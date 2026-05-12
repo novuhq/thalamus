@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthError } from '../../src/errors.js';
 import { createOpenAIProvider } from '../../src/openai/openai.provider.js';
 import { collectStream } from '../../src/stream-utils.js';
+import { MessageRole } from '../../src/types.js';
+import type { Message } from '../../src/types.js';
 
 function makeStream(events: object[]) {
   return { [Symbol.asyncIterator]: async function* () { for (const e of events) yield e; } };
@@ -58,7 +60,7 @@ describe('stream — new session (conversation)', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'Hi' }],
     });
 
     const parts = [];
@@ -86,7 +88,7 @@ describe('stream — resume session (conversation)', () => {
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        messages: [{ role: MessageRole.USER, content: 'next' }],
         sessionId: 'conv_existing',
       }),
     );
@@ -111,8 +113,8 @@ describe('multiple messages', () => {
     await collectStream(
       await createOpenAIProvider(config).stream({
         messages: [
-          { role: 'system', content: 'You are helpful' } as never,
-          { role: 'user', content: 'current' } as never,
+          { role: MessageRole.SYSTEM, content: 'You are helpful' },
+          { role: MessageRole.USER, content: 'current' },
         ],
       }),
     );
@@ -147,7 +149,7 @@ describe('tool call streaming', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'weather?' } as never],
+      messages: [{ role: MessageRole.USER, content: 'weather?' }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -177,7 +179,7 @@ describe('refusal handling', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'do something bad' } as never],
+      messages: [{ role: MessageRole.USER, content: 'do something bad' }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -200,7 +202,7 @@ describe('error handling', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: 'user', content: 'x' } as never],
+      messages: [{ role: MessageRole.USER, content: 'x' }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -250,7 +252,7 @@ describe('Bedrock API Key auth — streaming', () => {
     );
 
     const result = await createOpenAIProvider(bedrockConfig).stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'Hi' }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
@@ -299,7 +301,7 @@ describe('Bedrock — no Conversations API (previous_response_id fallback)', () 
 
     await collectStream(
       await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: 'user', content: 'hello' } as never],
+        messages: [{ role: MessageRole.USER, content: 'hello' }],
       }),
     );
 
@@ -315,7 +317,7 @@ describe('Bedrock — no Conversations API (previous_response_id fallback)', () 
     );
 
     const result = await createOpenAIProvider(bedrockConfig).stream({
-      messages: [{ role: 'user', content: 'hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'hi' }],
     });
     const response = await collectStream(result);
     expect(response.sessionId).toBe('resp_br_f2');
@@ -331,7 +333,7 @@ describe('Bedrock — no Conversations API (previous_response_id fallback)', () 
 
     await collectStream(
       await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: 'user', content: 'next' } as never],
+        messages: [{ role: MessageRole.USER, content: 'next' }],
         sessionId: 'resp_br_prev',
       }),
     );
@@ -359,7 +361,7 @@ describe('Bedrock SigV4 auth — streaming', () => {
     );
 
     const result = await createOpenAIProvider(sigv4Config).stream({
-      messages: [{ role: 'user', content: 'Hi' } as never],
+      messages: [{ role: MessageRole.USER, content: 'Hi' }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);

@@ -12,6 +12,7 @@ import {
 } from "../errors";
 import { collectStream } from "../stream-utils";
 import {
+  type McpServerConfig,
   OPENAI,
   type Provider,
   type RequestParams,
@@ -76,7 +77,35 @@ type OpenAIBaseConfig = {
   model?: string;
   promptId?: string;
   instructions?: string;
+  mcpServers?: McpServerConfig[];
 };
+
+function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
+  if (!policy || typeof policy === "string") return policy;
+  return { never: { tool_names: policy.except } };
+}
+
+// OpenAI SDK (v6.37) doesn't export MCP tool types yet — using untyped records
+// matching the wire format from https://developers.openai.com/docs/guides/tools-connectors-mcp
+function toMcpTools(servers: McpServerConfig[]): Record<string, unknown>[] {
+  return servers.map((server) => {
+    const tool: Record<string, unknown> = {
+      type: "mcp",
+      server_label: server.name,
+      server_url: server.url,
+    };
+    if (server.authorization) {
+      tool.authorization = server.authorization;
+    }
+    if (server.allowedTools) {
+      tool.allowed_tools = server.allowedTools;
+    }
+    if (server.approvalPolicy) {
+      tool.require_approval = mapApprovalPolicy(server.approvalPolicy);
+    }
+    return tool;
+  });
+}
 
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
@@ -246,6 +275,7 @@ class OpenAIProvider implements Provider {
   private readonly model: string;
   private readonly instructions?: string;
   private readonly useConversations: boolean;
+  private readonly mcpServers: McpServerConfig[];
 
   constructor(config: OpenAIProviderConfig) {
     this.runtimeId = config.promptId ?? "inline";
@@ -253,6 +283,7 @@ class OpenAIProvider implements Provider {
     this.instructions = config.instructions;
     this.client = buildOpenAIClient(config);
     this.useConversations = !("awsRegion" in config && config.awsRegion);
+    this.mcpServers = config.mcpServers ?? [];
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -290,11 +321,15 @@ class OpenAIProvider implements Provider {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
 
+      const mcpTools =
+        this.mcpServers.length > 0 ? toMcpTools(this.mcpServers) : undefined;
+
       const rawStream = await this.client.responses.create({
         model: this.model,
         input: openaiTransformer.toInput(params.messages),
         stream: true,
         ...(this.instructions ? { instructions: this.instructions } : {}),
+        ...(mcpTools ? { tools: mcpTools } : {}),
         ...sessionParams,
         ...params.providerOptions,
       } as ResponseCreateParamsStreaming);

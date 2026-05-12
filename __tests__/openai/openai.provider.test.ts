@@ -288,6 +288,147 @@ describe("tool call source tagging", () => {
   });
 });
 
+describe("MCP server injection", () => {
+  it("injects mcpServers as type:mcp tools in the API request", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_mcp" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_mcp",
+            conversation: { id: "conv_mcp" },
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_mcp",
+            output_text: "done",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const provider = createOpenAIProvider({
+      ...config,
+      mcpServers: [
+        {
+          name: "github",
+          url: "https://mcp.github.com",
+          authorization: "Bearer ghp_xxx",
+        },
+        {
+          name: "linear",
+          url: "https://mcp.linear.app/mcp",
+          approvalPolicy: "never",
+        },
+      ],
+    });
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const mcpTools = callArgs.tools?.filter((t: any) => t.type === "mcp");
+    expect(mcpTools).toHaveLength(2);
+    expect(mcpTools[0]).toMatchObject({
+      type: "mcp",
+      server_label: "github",
+      server_url: "https://mcp.github.com",
+      authorization: "Bearer ghp_xxx",
+    });
+    expect(mcpTools[1]).toMatchObject({
+      type: "mcp",
+      server_label: "linear",
+      server_url: "https://mcp.linear.app/mcp",
+      require_approval: "never",
+    });
+  });
+
+  it("transforms approvalPolicy except to OpenAI require_approval shape", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_apol" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_apol",
+            conversation: { id: "conv_apol" },
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_apol",
+            output_text: "ok",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    await collectStream(
+      await createOpenAIProvider({
+        ...config,
+        mcpServers: [
+          {
+            name: "deepwiki",
+            url: "https://mcp.deepwiki.com/mcp",
+            approvalPolicy: { except: ["ask_question", "read_wiki_structure"] },
+          },
+        ],
+      }).stream({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const mcpTool = callArgs.tools?.find(
+      (t: any) => t.server_label === "deepwiki",
+    );
+    expect(mcpTool.require_approval).toEqual({
+      never: { tool_names: ["ask_question", "read_wiki_structure"] },
+    });
+  });
+
+  it("does not inject tools when mcpServers is not configured", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_no_mcp" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_no_mcp",
+            conversation: { id: "conv_no_mcp" },
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_no_mcp",
+            output_text: "ok",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    await collectStream(
+      await createOpenAIProvider(config).stream({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    expect(callArgs.tools).toBeUndefined();
+  });
+});
+
 describe("refusal handling", () => {
   it("emits refusal parts and sets finishReason to refused", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_ref" });

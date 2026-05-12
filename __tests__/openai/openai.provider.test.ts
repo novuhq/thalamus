@@ -1,19 +1,23 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthError } from '../../src/errors.js';
-import { createOpenAIProvider } from '../../src/openai/openai.provider.js';
-import { collectStream } from '../../src/stream-utils.js';
-import { MessageRole } from '../../src/types.js';
-import type { Message } from '../../src/types.js';
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ProviderAuthError } from "../../src/errors.js";
+import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
+import { collectStream } from "../../src/stream-utils.js";
+import { MessageRole } from "../../src/types.js";
 
 function makeStream(events: object[]) {
-  return { [Symbol.asyncIterator]: async function* () { for (const e of events) yield e; } };
+  return {
+    [Symbol.asyncIterator]: async function* () {
+      for (const e of events) yield e;
+    },
+  };
 }
 
 const mockResponsesCreate = vi.fn();
 const mockConversationsCreate = vi.fn();
 let lastOpenAIConfig: Record<string, unknown> | undefined;
 
-vi.mock('openai', () => {
+vi.mock("openai", () => {
+  // biome-ignore lint/complexity/useArrowFunction: must be callable with `new`
   const MockOpenAI = function (config: Record<string, unknown>) {
     lastOpenAIConfig = config;
     return {
@@ -26,33 +30,42 @@ vi.mock('openai', () => {
 
 afterEach(() => vi.clearAllMocks());
 
-const config = { apiKey: 'sk-test', model: 'gpt-4o', instructions: 'Be helpful.' };
+const config = {
+  apiKey: "sk-test",
+  model: "gpt-4o",
+  instructions: "Be helpful.",
+};
 
-describe('createOpenAIProvider', () => {
-  it('sets provider = openai and runtimeId = inline when no promptId', () => {
+describe("createOpenAIProvider", () => {
+  it("sets provider = openai and runtimeId = inline when no promptId", () => {
     const rt = createOpenAIProvider(config);
-    expect(rt.provider).toBe('openai');
-    expect(rt.runtimeId).toBe('inline');
+    expect(rt.provider).toBe("openai");
+    expect(rt.runtimeId).toBe("inline");
   });
 
-  it('uses promptId as runtimeId when provided', () => {
-    expect(createOpenAIProvider({ ...config, promptId: 'pmpt_abc' }).runtimeId).toBe('pmpt_abc');
+  it("uses promptId as runtimeId when provided", () => {
+    expect(
+      createOpenAIProvider({ ...config, promptId: "pmpt_abc" }).runtimeId,
+    ).toBe("pmpt_abc");
   });
 });
 
-describe('stream — new session (conversation)', () => {
-  it('creates a conversation, yields stream-start with conversationId, resolves response', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_new' });
+describe("stream — new session (conversation)", () => {
+  it("creates a conversation, yields stream-start with conversationId, resolves response", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_new" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_1', conversation: { id: 'conv_new' } } },
-        { type: 'response.output_text.delta', delta: 'Hello' },
-        { type: 'response.output_text.delta', delta: ' world' },
         {
-          type: 'response.completed',
+          type: "response.created",
+          response: { id: "resp_1", conversation: { id: "conv_new" } },
+        },
+        { type: "response.output_text.delta", delta: "Hello" },
+        { type: "response.output_text.delta", delta: " world" },
+        {
+          type: "response.completed",
           response: {
-            id: 'resp_1',
-            output_text: 'Hello world',
+            id: "resp_1",
+            output_text: "Hello world",
             usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
           },
         },
@@ -60,61 +73,75 @@ describe('stream — new session (conversation)', () => {
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'Hi' }],
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
     expect(mockConversationsCreate).toHaveBeenCalledOnce();
-    expect(parts.find((p) => p.type === 'stream-start')).toMatchObject({ sessionId: 'conv_new' });
-    expect(parts.filter((p) => p.type === 'text-delta')).toHaveLength(2);
+    expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
+      sessionId: "conv_new",
+    });
+    expect(parts.filter((p) => p.type === "text-delta")).toHaveLength(2);
 
     const response = await result.response;
-    expect(response.content).toBe('Hello world');
-    expect(response.sessionId).toBe('conv_new');
+    expect(response.content).toBe("Hello world");
+    expect(response.sessionId).toBe("conv_new");
     expect(response.usage?.inputTokens).toBe(5);
   });
 });
 
-describe('stream — resume session (conversation)', () => {
-  it('passes conversation id when sessionId is provided, skips conversations.create', async () => {
+describe("stream — resume session (conversation)", () => {
+  it("passes conversation id when sessionId is provided, skips conversations.create", async () => {
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_2', conversation: { id: 'conv_existing' } } },
-        { type: 'response.completed', response: { id: 'resp_2', output_text: 'ok', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_2", conversation: { id: "conv_existing" } },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_2", output_text: "ok", usage: {} },
+        },
       ]),
     );
 
     await collectStream(
       await createOpenAIProvider(config).stream({
-        messages: [{ role: MessageRole.USER, content: 'next' }],
-        sessionId: 'conv_existing',
+        messages: [{ role: MessageRole.USER, content: "next" }],
+        sessionId: "conv_existing",
       }),
     );
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ conversation: { id: 'conv_existing' } }),
+      expect.objectContaining({ conversation: { id: "conv_existing" } }),
     );
   });
 });
 
-describe('multiple messages', () => {
-  it('passes all messages as input', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_hist' });
+describe("multiple messages", () => {
+  it("passes all messages as input", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_hist" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_3', conversation: { id: 'conv_hist' } } },
-        { type: 'response.completed', response: { id: 'resp_3', output_text: '', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_3", conversation: { id: "conv_hist" } },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_3", output_text: "", usage: {} },
+        },
       ]),
     );
 
     await collectStream(
       await createOpenAIProvider(config).stream({
         messages: [
-          { role: MessageRole.SYSTEM, content: 'You are helpful' },
-          { role: MessageRole.USER, content: 'current' },
+          { role: MessageRole.SYSTEM, content: "You are helpful" },
+          { role: MessageRole.USER, content: "current" },
         ],
       }),
     );
@@ -124,395 +151,540 @@ describe('multiple messages', () => {
   });
 });
 
-describe('tool call streaming', () => {
-  it('emits tool-use-start, tool-use-delta, tool-use-done in sequence', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_tool' });
+describe("tool call streaming", () => {
+  it("emits tool-use-start, tool-use-delta, tool-use-done in sequence", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_tool" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_t', conversation: { id: 'conv_tool' } } },
         {
-          type: 'response.output_item.added',
-          item: { type: 'function_call', name: 'get_weather', call_id: 'call_1' },
+          type: "response.created",
+          response: { id: "resp_t", conversation: { id: "conv_tool" } },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            name: "get_weather",
+            call_id: "call_1",
+          },
           output_index: 0,
           sequence_number: 1,
         },
-        { type: 'response.function_call_arguments.delta', delta: '{"lo', item_id: 'call_1', output_index: 0, sequence_number: 2 },
-        { type: 'response.function_call_arguments.delta', delta: 'c":"NYC"}', item_id: 'call_1', output_index: 0, sequence_number: 3 },
         {
-          type: 'response.output_item.done',
-          item: { type: 'function_call', name: 'get_weather', call_id: 'call_1', arguments: '{"loc":"NYC"}' },
+          type: "response.function_call_arguments.delta",
+          delta: '{"lo',
+          item_id: "call_1",
+          output_index: 0,
+          sequence_number: 2,
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          delta: 'c":"NYC"}',
+          item_id: "call_1",
+          output_index: 0,
+          sequence_number: 3,
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            name: "get_weather",
+            call_id: "call_1",
+            arguments: '{"loc":"NYC"}',
+          },
           output_index: 0,
           sequence_number: 4,
         },
-        { type: 'response.completed', response: { id: 'resp_t', output_text: '', usage: {} } },
+        {
+          type: "response.completed",
+          response: { id: "resp_t", output_text: "", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'weather?' }],
+      messages: [{ role: MessageRole.USER, content: "weather?" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    const toolParts = parts.filter((p) =>
-      p.type === 'tool-use-start' || p.type === 'tool-use-delta' || p.type === 'tool-use-done',
+    const toolParts = parts.filter(
+      (p) =>
+        p.type === "tool-use-start" ||
+        p.type === "tool-use-delta" ||
+        p.type === "tool-use-done",
     );
     expect(toolParts).toEqual([
-      { type: 'tool-use-start', toolName: 'get_weather', toolUseId: 'call_1' },
-      { type: 'tool-use-delta', toolUseId: 'call_1', argumentsDelta: '{"lo' },
-      { type: 'tool-use-delta', toolUseId: 'call_1', argumentsDelta: 'c":"NYC"}' },
-      { type: 'tool-use-done', toolName: 'get_weather', toolUseId: 'call_1', input: { loc: 'NYC' } },
+      { type: "tool-use-start", toolName: "get_weather", toolUseId: "call_1" },
+      { type: "tool-use-delta", toolUseId: "call_1", argumentsDelta: '{"lo' },
+      {
+        type: "tool-use-delta",
+        toolUseId: "call_1",
+        argumentsDelta: 'c":"NYC"}',
+      },
+      {
+        type: "tool-use-done",
+        toolName: "get_weather",
+        toolUseId: "call_1",
+        input: { loc: "NYC" },
+      },
     ]);
   });
 });
 
-describe('refusal handling', () => {
-  it('emits refusal parts and sets finishReason to refused', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_ref' });
+describe("refusal handling", () => {
+  it("emits refusal parts and sets finishReason to refused", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_ref" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_r', conversation: { id: 'conv_ref' } } },
-        { type: 'response.refusal.delta', delta: 'I cannot', item_id: 'item_1', content_index: 0, output_index: 0, sequence_number: 1 },
-        { type: 'response.refusal.delta', delta: ' help with that.', item_id: 'item_1', content_index: 0, output_index: 0, sequence_number: 2 },
-        { type: 'response.completed', response: { id: 'resp_r', output_text: '', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_r", conversation: { id: "conv_ref" } },
+        },
+        {
+          type: "response.refusal.delta",
+          delta: "I cannot",
+          item_id: "item_1",
+          content_index: 0,
+          output_index: 0,
+          sequence_number: 1,
+        },
+        {
+          type: "response.refusal.delta",
+          delta: " help with that.",
+          item_id: "item_1",
+          content_index: 0,
+          output_index: 0,
+          sequence_number: 2,
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_r", output_text: "", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'do something bad' }],
+      messages: [{ role: MessageRole.USER, content: "do something bad" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    expect(parts.filter((p) => p.type === 'refusal')).toEqual([
-      { type: 'refusal', text: 'I cannot' },
-      { type: 'refusal', text: ' help with that.' },
+    expect(parts.filter((p) => p.type === "refusal")).toEqual([
+      { type: "refusal", text: "I cannot" },
+      { type: "refusal", text: " help with that." },
     ]);
 
     const response = await result.response;
-    expect(response.finishReason).toBe('refused');
+    expect(response.finishReason).toBe("refused");
   });
 });
 
-describe('error handling', () => {
-  it('maps invalid_api_key to ProviderAuthError', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_err' });
+describe("error handling", () => {
+  it("maps invalid_api_key to ProviderAuthError", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_err" });
     mockResponsesCreate.mockReturnValue(
-      makeStream([{ type: 'error', message: 'Incorrect API key', code: 'invalid_api_key' }]),
+      makeStream([
+        {
+          type: "error",
+          message: "Incorrect API key",
+          code: "invalid_api_key",
+        },
+      ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderAuthError);
+    expect(
+      (parts.find((p) => p.type === "error") as any)?.error,
+    ).toBeInstanceOf(ProviderAuthError);
     await expect(result.response).rejects.toBeInstanceOf(ProviderAuthError);
   });
 });
 
-describe('thinking / reasoning events', () => {
-  it('emits thinking part on response.reasoning_summary_text.delta', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_think' });
+describe("thinking / reasoning events", () => {
+  it("emits thinking part on response.reasoning_summary_text.delta", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_think" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_t', conversation: { id: 'conv_think' } } },
-        { type: 'response.reasoning_summary_text.delta', delta: 'Let me think...', item_id: 'item_1', output_index: 0, sequence_number: 1 },
-        { type: 'response.completed', response: { id: 'resp_t', output_text: '', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_t", conversation: { id: "conv_think" } },
+        },
+        {
+          type: "response.reasoning_summary_text.delta",
+          delta: "Let me think...",
+          item_id: "item_1",
+          output_index: 0,
+          sequence_number: 1,
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_t", output_text: "", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'think' }],
+      messages: [{ role: MessageRole.USER, content: "think" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    expect(parts.find((p) => p.type === 'thinking')).toMatchObject({
-      type: 'thinking',
-      text: 'Let me think...',
+    expect(parts.find((p) => p.type === "thinking")).toMatchObject({
+      type: "thinking",
+      text: "Let me think...",
     });
   });
 });
 
-describe('response lifecycle events', () => {
-  it('emits status-change running on response.in_progress', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_ip' });
+describe("response lifecycle events", () => {
+  it("emits status-change running on response.in_progress", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_ip" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_ip', conversation: { id: 'conv_ip' } } },
-        { type: 'response.in_progress', response: { id: 'resp_ip' } },
-        { type: 'response.completed', response: { id: 'resp_ip', output_text: 'ok', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_ip", conversation: { id: "conv_ip" } },
+        },
+        { type: "response.in_progress", response: { id: "resp_ip" } },
+        {
+          type: "response.completed",
+          response: { id: "resp_ip", output_text: "ok", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    expect(parts.find((p) => p.type === 'status-change')).toMatchObject({ status: 'running' });
+    expect(parts.find((p) => p.type === "status-change")).toMatchObject({
+      status: "running",
+    });
   });
 
-  it('sets finishReason to error on response.failed', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_fail' });
+  it("sets finishReason to error on response.failed", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_fail" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_f', conversation: { id: 'conv_fail' } } },
-        { type: 'response.failed', response: { id: 'resp_f', error: { message: 'Something broke' } } },
+        {
+          type: "response.created",
+          response: { id: "resp_f", conversation: { id: "conv_fail" } },
+        },
+        {
+          type: "response.failed",
+          response: { id: "resp_f", error: { message: "Something broke" } },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     result.response.catch(() => {});
 
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    const errPart = parts.find((p) => p.type === 'error');
+    const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
-    expect((errPart as any).error.message).toBe('Something broke');
+    expect((errPart as any).error.message).toBe("Something broke");
   });
 
-  it('sets finishReason to length on response.incomplete', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_inc' });
+  it("sets finishReason to length on response.incomplete", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_inc" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_i', conversation: { id: 'conv_inc' } } },
-        { type: 'response.output_text.delta', delta: 'partial...' },
-        { type: 'response.incomplete', response: { id: 'resp_i' } },
-        { type: 'response.completed', response: { id: 'resp_i', output_text: 'partial...', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_i", conversation: { id: "conv_inc" } },
+        },
+        { type: "response.output_text.delta", delta: "partial..." },
+        { type: "response.incomplete", response: { id: "resp_i" } },
+        {
+          type: "response.completed",
+          response: { id: "resp_i", output_text: "partial...", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     const response = await collectStream(result);
 
-    expect(response.finishReason).toBe('length');
+    expect(response.finishReason).toBe("length");
   });
 
-  it('emits provider-event for unknown event types', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_unk' });
+  it("emits provider-event for unknown event types", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_unk" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_u', conversation: { id: 'conv_unk' } } },
-        { type: 'response.some_future_event', data: { foo: 'bar' } },
-        { type: 'response.completed', response: { id: 'resp_u', output_text: '', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_u", conversation: { id: "conv_unk" } },
+        },
+        { type: "response.some_future_event", data: { foo: "bar" } },
+        {
+          type: "response.completed",
+          response: { id: "resp_u", output_text: "", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    const providerEvent = parts.find((p) => p.type === 'provider-event') as any;
+    const providerEvent = parts.find((p) => p.type === "provider-event") as any;
     expect(providerEvent).toBeDefined();
-    expect(providerEvent.provider).toBe('openai');
-    expect(providerEvent.event).toBe('response.some_future_event');
+    expect(providerEvent.provider).toBe("openai");
+    expect(providerEvent.event).toBe("response.some_future_event");
   });
 });
 
-describe('error handling — additional cases', () => {
-  it('maps rate_limit_exceeded to ProviderRateLimitError', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_rl' });
+describe("error handling — additional cases", () => {
+  it("maps rate_limit_exceeded to ProviderRateLimitError", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_rl" });
     mockResponsesCreate.mockReturnValue(
-      makeStream([{ type: 'error', message: 'Rate limit exceeded', code: 'rate_limit_exceeded' }]),
+      makeStream([
+        {
+          type: "error",
+          message: "Rate limit exceeded",
+          code: "rate_limit_exceeded",
+        },
+      ]),
     );
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     result.response.catch(() => {});
 
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    const { ProviderRateLimitError } = await import('../../src/errors.js');
-    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderRateLimitError);
+    const { ProviderRateLimitError } = await import("../../src/errors.js");
+    expect(
+      (parts.find((p) => p.type === "error") as any)?.error,
+    ).toBeInstanceOf(ProviderRateLimitError);
   });
 
-  it('maps thrown unavailable error to ProviderUnavailableError', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_503' });
+  it("maps thrown unavailable error to ProviderUnavailableError", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_503" });
     mockResponsesCreate.mockImplementation(() => {
-      throw new Error('Service unavailable');
+      throw new Error("Service unavailable");
     });
 
     const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: 'x' }],
+      messages: [{ role: MessageRole.USER, content: "x" }],
     });
     result.response.catch(() => {});
 
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
-    const { ProviderUnavailableError } = await import('../../src/errors.js');
-    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderUnavailableError);
+    const { ProviderUnavailableError } = await import("../../src/errors.js");
+    expect(
+      (parts.find((p) => p.type === "error") as any)?.error,
+    ).toBeInstanceOf(ProviderUnavailableError);
   });
 });
 
 // --- Bedrock API Key auth ---
 
 const bedrockConfig = {
-  awsRegion: 'us-east-1',
-  awsBedrockApiKey: 'bedrock-api-key-abc123',
-  model: 'openai.gpt-oss-120b',
-  instructions: 'Be helpful.',
+  awsRegion: "us-east-1",
+  awsBedrockApiKey: "bedrock-api-key-abc123",
+  model: "openai.gpt-oss-120b",
+  instructions: "Be helpful.",
 };
 
-describe('Bedrock API Key auth — client config', () => {
-  it('passes bedrock-mantle baseURL and awsBedrockApiKey to OpenAI client', () => {
+describe("Bedrock API Key auth — client config", () => {
+  it("passes bedrock-mantle baseURL and awsBedrockApiKey to OpenAI client", () => {
     createOpenAIProvider(bedrockConfig);
     expect(lastOpenAIConfig).toMatchObject({
-      baseURL: 'https://bedrock-mantle.us-east-1.api.aws/v1',
-      apiKey: 'bedrock-api-key-abc123',
+      baseURL: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      apiKey: "bedrock-api-key-abc123",
     });
   });
 
-  it('does NOT set baseURL for direct OpenAI config', () => {
+  it("does NOT set baseURL for direct OpenAI config", () => {
     createOpenAIProvider(config);
-    expect(lastOpenAIConfig?.apiKey).toBe('sk-test');
+    expect(lastOpenAIConfig?.apiKey).toBe("sk-test");
     expect(lastOpenAIConfig?.baseURL).toBeUndefined();
   });
 });
 
-describe('Bedrock API Key auth — streaming', () => {
-  it('streams successfully via bedrock-mantle endpoint', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_br' });
+describe("Bedrock API Key auth — streaming", () => {
+  it("streams successfully via bedrock-mantle endpoint", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_br" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_br', conversation: { id: 'conv_br' } } },
-        { type: 'response.output_text.delta', delta: 'Hello from Bedrock!' },
         {
-          type: 'response.completed',
-          response: { id: 'resp_br', output_text: 'Hello from Bedrock!', usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 } },
+          type: "response.created",
+          response: { id: "resp_br", conversation: { id: "conv_br" } },
+        },
+        { type: "response.output_text.delta", delta: "Hello from Bedrock!" },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_br",
+            output_text: "Hello from Bedrock!",
+            usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 },
+          },
         },
       ]),
     );
 
     const result = await createOpenAIProvider(bedrockConfig).stream({
-      messages: [{ role: MessageRole.USER, content: 'Hi' }],
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
     const response = await result.response;
-    expect(response.content).toBe('Hello from Bedrock!');
-    expect(response.sessionId).toBe('conv_br');
+    expect(response.content).toBe("Hello from Bedrock!");
+    expect(response.sessionId).toBe("conv_br");
   });
 
-  it('sets provider = openai and runtimeId = inline', () => {
+  it("sets provider = openai and runtimeId = inline", () => {
     const rt = createOpenAIProvider(bedrockConfig);
-    expect(rt.provider).toBe('openai');
-    expect(rt.runtimeId).toBe('inline');
+    expect(rt.provider).toBe("openai");
+    expect(rt.runtimeId).toBe("inline");
   });
 });
 
 // --- Bedrock SigV4 auth ---
 
 const sigv4Config = {
-  awsRegion: 'us-west-2',
+  awsRegion: "us-west-2",
   awsCredentials: {
-    accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-    secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
   },
-  model: 'openai.gpt-oss-120b',
+  model: "openai.gpt-oss-120b",
 };
 
-describe('Bedrock SigV4 auth — client config', () => {
-  it('passes bedrock-mantle baseURL and custom fetch to OpenAI client', () => {
+describe("Bedrock SigV4 auth — client config", () => {
+  it("passes bedrock-mantle baseURL and custom fetch to OpenAI client", () => {
     createOpenAIProvider(sigv4Config);
-    expect(lastOpenAIConfig?.baseURL).toBe('https://bedrock-mantle.us-west-2.api.aws/v1');
-    expect(typeof lastOpenAIConfig?.fetch).toBe('function');
-    expect(lastOpenAIConfig?.apiKey).toBe('bedrock-sigv4');
+    expect(lastOpenAIConfig?.baseURL).toBe(
+      "https://bedrock-mantle.us-west-2.api.aws/v1",
+    );
+    expect(typeof lastOpenAIConfig?.fetch).toBe("function");
+    expect(lastOpenAIConfig?.apiKey).toBe("bedrock-sigv4");
   });
 });
 
-describe('Bedrock — no Conversations API (previous_response_id fallback)', () => {
-  it('does NOT call conversations.create on Bedrock config', async () => {
+describe("Bedrock — no Conversations API (previous_response_id fallback)", () => {
+  it("does NOT call conversations.create on Bedrock config", async () => {
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_br_f1', conversation: null } },
-        { type: 'response.output_text.delta', delta: 'hi' },
-        { type: 'response.completed', response: { id: 'resp_br_f1', output_text: 'hi', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_br_f1", conversation: null },
+        },
+        { type: "response.output_text.delta", delta: "hi" },
+        {
+          type: "response.completed",
+          response: { id: "resp_br_f1", output_text: "hi", usage: {} },
+        },
       ]),
     );
 
     await collectStream(
       await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: MessageRole.USER, content: 'hello' }],
+        messages: [{ role: MessageRole.USER, content: "hello" }],
       }),
     );
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
   });
 
-  it('uses response ID as sessionId when no conversation is returned', async () => {
+  it("uses response ID as sessionId when no conversation is returned", async () => {
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_br_f2', conversation: null } },
-        { type: 'response.completed', response: { id: 'resp_br_f2', output_text: 'ok', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_br_f2", conversation: null },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_br_f2", output_text: "ok", usage: {} },
+        },
       ]),
     );
 
     const result = await createOpenAIProvider(bedrockConfig).stream({
-      messages: [{ role: MessageRole.USER, content: 'hi' }],
+      messages: [{ role: MessageRole.USER, content: "hi" }],
     });
     const response = await collectStream(result);
-    expect(response.sessionId).toBe('resp_br_f2');
+    expect(response.sessionId).toBe("resp_br_f2");
   });
 
-  it('passes previous_response_id on session resume', async () => {
+  it("passes previous_response_id on session resume", async () => {
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_br_f3', conversation: null } },
-        { type: 'response.completed', response: { id: 'resp_br_f3', output_text: 'ok', usage: {} } },
+        {
+          type: "response.created",
+          response: { id: "resp_br_f3", conversation: null },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_br_f3", output_text: "ok", usage: {} },
+        },
       ]),
     );
 
     await collectStream(
       await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: MessageRole.USER, content: 'next' }],
-        sessionId: 'resp_br_prev',
+        messages: [{ role: MessageRole.USER, content: "next" }],
+        sessionId: "resp_br_prev",
       }),
     );
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ previous_response_id: 'resp_br_prev' }),
+      expect.objectContaining({ previous_response_id: "resp_br_prev" }),
     );
     expect(mockResponsesCreate.mock.calls[0][0].conversation).toBeUndefined();
   });
 });
 
-describe('Bedrock SigV4 auth — streaming', () => {
-  it('streams successfully via SigV4-signed requests', async () => {
-    mockConversationsCreate.mockResolvedValue({ id: 'conv_sv4' });
+describe("Bedrock SigV4 auth — streaming", () => {
+  it("streams successfully via SigV4-signed requests", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_sv4" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
-        { type: 'response.created', response: { id: 'resp_sv4', conversation: { id: 'conv_sv4' } } },
-        { type: 'response.output_text.delta', delta: 'Signed!' },
         {
-          type: 'response.completed',
-          response: { id: 'resp_sv4', output_text: 'Signed!', usage: {} },
+          type: "response.created",
+          response: { id: "resp_sv4", conversation: { id: "conv_sv4" } },
+        },
+        { type: "response.output_text.delta", delta: "Signed!" },
+        {
+          type: "response.completed",
+          response: { id: "resp_sv4", output_text: "Signed!", usage: {} },
         },
       ]),
     );
 
     const result = await createOpenAIProvider(sigv4Config).stream({
-      messages: [{ role: MessageRole.USER, content: 'Hi' }],
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
 
     const response = await result.response;
-    expect(response.content).toBe('Signed!');
+    expect(response.content).toBe("Signed!");
   });
 });

@@ -1,14 +1,14 @@
 export enum MessageRole {
-  USER = 'user',
-  ASSISTANT = 'assistant',
-  SYSTEM = 'system',
+  USER = "user",
+  ASSISTANT = "assistant",
+  SYSTEM = "system",
 }
 
 export type ContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image'; data: string; mediaType: string }
-  | { type: 'image-url'; url: string }
-  | { type: 'file'; data: string; mediaType: string; name?: string };
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mediaType: string }
+  | { type: "image-url"; url: string }
+  | { type: "file"; data: string; mediaType: string; name?: string };
 
 export interface Message {
   role: MessageRole;
@@ -31,7 +31,7 @@ export interface Usage {
 }
 
 export interface ActionRequired {
-  type: 'tool-confirmation';
+  type: "tool-confirmation";
   toolUseId: string;
   toolName: string;
   input?: Record<string, unknown>;
@@ -41,26 +41,42 @@ export interface Response {
   content: string;
   /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */
   sessionId?: string;
-  finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'refused' | 'other';
+  finishReason:
+    | "stop"
+    | "length"
+    | "error"
+    | "requires-action"
+    | "refused"
+    | "other";
   usage?: Usage;
   actionsRequired?: ActionRequired[];
 }
 
-export type AgentStatus = 'running' | 'queued' | 'retrying' | 'idle';
+export type AgentStatus = "running" | "queued" | "retrying" | "idle";
 
 export type StreamPart =
-  | { type: 'text-delta'; text: string }
-  | { type: 'refusal'; text: string }
-  | { type: 'thinking'; text: string }
-  | { type: 'tool-use-start'; toolName: string; toolUseId: string }
-  | { type: 'tool-use-delta'; toolUseId: string; argumentsDelta: string }
-  | { type: 'tool-use-done'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
-  | { type: 'tool-use-result'; toolUseId: string; output?: string }
-  | { type: 'status-change'; status: AgentStatus }
-  | { type: 'stream-start'; sessionId?: string }
-  | { type: 'finish'; response: Response }
-  | { type: 'error'; error: Error }
-  | { type: 'provider-event'; provider: string; event: string; data: Record<string, unknown> };
+  | { type: "text-delta"; text: string }
+  | { type: "refusal"; text: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool-use-start"; toolName: string; toolUseId: string }
+  | { type: "tool-use-delta"; toolUseId: string; argumentsDelta: string }
+  | {
+      type: "tool-use-done";
+      toolName: string;
+      toolUseId: string;
+      input?: Record<string, unknown>;
+    }
+  | { type: "tool-use-result"; toolUseId: string; output?: string }
+  | { type: "status-change"; status: AgentStatus }
+  | { type: "stream-start"; sessionId?: string }
+  | { type: "finish"; response: Response }
+  | { type: "error"; error: Error }
+  | {
+      type: "provider-event";
+      provider: string;
+      event: string;
+      data: Record<string, unknown>;
+    };
 
 /**
  * Returned by `stream()`. Callers can iterate `stream` for incremental parts
@@ -79,5 +95,5 @@ export interface Provider {
   stream(params: RequestParams): Promise<StreamResult>;
 }
 
-export const ANTHROPIC = 'anthropic' as const;
-export const OPENAI = 'openai' as const;
+export const ANTHROPIC = "anthropic" as const;
+export const OPENAI = "openai" as const;

@@ -1,38 +1,47 @@
-import OpenAI from 'openai';
+import OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
-} from 'openai/resources/responses/responses';
+} from "openai/resources/responses/responses";
 import {
-  ThalamusError,
   ProviderAuthError,
   ProviderRateLimitError,
   ProviderResponseError,
   ProviderUnavailableError,
-} from '../errors';
-import { collectStream } from '../stream-utils';
+  ThalamusError,
+} from "../errors";
+import { collectStream } from "../stream-utils";
 import {
   OPENAI,
-  type RequestParams,
   type Provider,
+  type RequestParams,
   type Response,
   type StreamPart,
   type StreamResult,
   type Usage,
-} from '../types';
-import { openaiTransformer } from './openai.transformer';
-import { createSigV4Fetch } from './sigv4-fetch';
+} from "../types";
+import { openaiTransformer } from "./openai.transformer";
+import { createSigV4Fetch } from "./sigv4-fetch";
 
 function mapError(error: unknown, provider: string): Error {
   const msg = error instanceof Error ? error.message : String(error);
-  const code = (error as any)?.code ?? '';
-  if (code === 'invalid_api_key' || msg.toLowerCase().includes('unauthorized')) {
+  const code = (error as any)?.code ?? "";
+  if (
+    code === "invalid_api_key" ||
+    msg.toLowerCase().includes("unauthorized")
+  ) {
     return new ProviderAuthError(msg, { provider, cause: error });
   }
-  if (code === 'rate_limit_exceeded' || msg.toLowerCase().includes('rate limit')) {
+  if (
+    code === "rate_limit_exceeded" ||
+    msg.toLowerCase().includes("rate limit")
+  ) {
     return new ProviderRateLimitError(msg, { provider, cause: error });
   }
-  if (msg.toLowerCase().includes('unavailable') || msg.toLowerCase().includes('503')) {
+  if (
+    msg.toLowerCase().includes("unavailable") ||
+    msg.toLowerCase().includes("503")
+  ) {
     return new ProviderUnavailableError(msg, { provider, cause: error });
   }
   return new ProviderResponseError(msg, { provider, cause: error });
@@ -69,17 +78,14 @@ type OpenAIBaseConfig = {
   instructions?: string;
 };
 
-export type OpenAIProviderConfig = OpenAIBaseConfig & (
-  | OpenAIDirectConfig
-  | OpenAIBedrockApiKeyConfig
-  | OpenAIBedrockSigV4Config
-);
+export type OpenAIProviderConfig = OpenAIBaseConfig &
+  (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 
 class ResponseAccumulator {
-  content = '';
+  content = "";
   sessionId: string | undefined;
   conversationId: string | undefined;
-  finishReason: Response['finishReason'] = 'stop';
+  finishReason: Response["finishReason"] = "stop";
   usage: Usage | undefined;
 
   toResponse(): Response {
@@ -98,17 +104,20 @@ function* mapEvent(
 ): Generator<StreamPart> {
   switch (event.type) {
     // --- lifecycle ---
-    case 'response.created': {
+    case "response.created": {
       acc.sessionId = event.response.id;
       acc.conversationId = event.response.conversation?.id;
-      yield { type: 'stream-start', sessionId: acc.conversationId ?? acc.sessionId };
+      yield {
+        type: "stream-start",
+        sessionId: acc.conversationId ?? acc.sessionId,
+      };
       break;
     }
-    case 'response.in_progress': {
-      yield { type: 'status-change', status: 'running' };
+    case "response.in_progress": {
+      yield { type: "status-change", status: "running" };
       break;
     }
-    case 'response.completed': {
+    case "response.completed": {
       if (event.response.usage) {
         acc.usage = {
           inputTokens: event.response.usage.input_tokens,
@@ -121,78 +130,78 @@ function* mapEvent(
       }
       break;
     }
-    case 'response.failed': {
-      acc.finishReason = 'error';
+    case "response.failed": {
+      acc.finishReason = "error";
       throw new ThalamusError(
-        event.response.error?.message ?? 'Response failed',
+        event.response.error?.message ?? "Response failed",
         { provider: OPENAI, isRetryable: false },
       );
     }
-    case 'response.incomplete': {
-      acc.finishReason = 'length';
+    case "response.incomplete": {
+      acc.finishReason = "length";
       break;
     }
 
     // --- text streaming ---
-    case 'response.output_text.delta': {
+    case "response.output_text.delta": {
       acc.content += event.delta;
-      yield { type: 'text-delta', text: event.delta };
+      yield { type: "text-delta", text: event.delta };
       break;
     }
 
     // --- refusal ---
-    case 'response.refusal.delta': {
-      acc.finishReason = 'refused';
-      yield { type: 'refusal', text: event.delta };
+    case "response.refusal.delta": {
+      acc.finishReason = "refused";
+      yield { type: "refusal", text: event.delta };
       break;
     }
 
     // --- reasoning / thinking ---
-    case 'response.reasoning_summary_text.delta': {
-      yield { type: 'thinking', text: event.delta };
+    case "response.reasoning_summary_text.delta": {
+      yield { type: "thinking", text: event.delta };
       break;
     }
 
     // --- function / tool calls ---
-    case 'response.output_item.added': {
-      if (event.item.type === 'function_call') {
+    case "response.output_item.added": {
+      if (event.item.type === "function_call") {
         yield {
-          type: 'tool-use-start',
+          type: "tool-use-start",
           toolName: event.item.name,
           toolUseId: event.item.call_id,
         };
       }
       break;
     }
-    case 'response.function_call_arguments.delta': {
+    case "response.function_call_arguments.delta": {
       yield {
-        type: 'tool-use-delta',
+        type: "tool-use-delta",
         toolUseId: event.item_id,
         argumentsDelta: event.delta,
       };
       break;
     }
-    case 'response.output_item.done': {
-      if (event.item.type === 'function_call') {
+    case "response.output_item.done": {
+      if (event.item.type === "function_call") {
         yield {
-          type: 'tool-use-done',
+          type: "tool-use-done",
           toolName: event.item.name,
           toolUseId: event.item.call_id,
-          input: JSON.parse(event.item.arguments || '{}'),
+          input: JSON.parse(event.item.arguments || "{}"),
         };
       }
       break;
     }
 
     // --- error ---
-    case 'error': {
+    case "error": {
       throw mapError(event, OPENAI);
     }
 
     // --- escape hatch for everything else ---
     default: {
       yield {
-        type: 'provider-event',
+        type: "provider-event",
         provider: OPENAI,
         event: event.type,
         data: event as unknown as Record<string, unknown>,
@@ -203,25 +212,28 @@ function* mapEvent(
 }
 
 function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
-  if (!('awsRegion' in config) || !config.awsRegion) {
+  if (!("awsRegion" in config) || !config.awsRegion) {
     return new OpenAI({ apiKey: config.apiKey });
   }
 
   const baseURL = `https://bedrock-mantle.${config.awsRegion}.api.aws/v1`;
 
-  if ('awsBedrockApiKey' in config && config.awsBedrockApiKey) {
+  if ("awsBedrockApiKey" in config && config.awsBedrockApiKey) {
     return new OpenAI({ baseURL, apiKey: config.awsBedrockApiKey });
   }
 
-  if ('awsCredentials' in config && config.awsCredentials) {
+  if ("awsCredentials" in config && config.awsCredentials) {
     return new OpenAI({
       baseURL,
-      apiKey: 'bedrock-sigv4',
-      fetch: createSigV4Fetch({ region: config.awsRegion, credentials: config.awsCredentials }),
+      apiKey: "bedrock-sigv4",
+      fetch: createSigV4Fetch({
+        region: config.awsRegion,
+        credentials: config.awsCredentials,
+      }),
     });
   }
 
-  return new OpenAI({ baseURL, apiKey: 'bedrock' });
+  return new OpenAI({ baseURL, apiKey: "bedrock" });
 }
 
 class OpenAIProvider implements Provider {
@@ -234,11 +246,11 @@ class OpenAIProvider implements Provider {
   private readonly useConversations: boolean;
 
   constructor(config: OpenAIProviderConfig) {
-    this.runtimeId = config.promptId ?? 'inline';
-    this.model = config.model ?? 'gpt-4o';
+    this.runtimeId = config.promptId ?? "inline";
+    this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
     this.client = buildOpenAIClient(config);
-    this.useConversations = !('awsRegion' in config && config.awsRegion);
+    this.useConversations = !("awsRegion" in config && config.awsRegion);
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -252,10 +264,15 @@ class OpenAIProvider implements Provider {
       resolveResponse = res;
       rejectResponse = rej;
     });
-    return { stream: this.runStream(params, resolveResponse, rejectResponse), response: responsePromise };
+    return {
+      stream: this.runStream(params, resolveResponse, rejectResponse),
+      response: responsePromise,
+    };
   }
 
-  private async resolveSessionParams(sessionId?: string): Promise<Record<string, unknown>> {
+  private async resolveSessionParams(
+    sessionId?: string,
+  ): Promise<Record<string, unknown>> {
     if (this.useConversations) {
       const id = sessionId ?? (await this.client.conversations.create()).id;
       return { conversation: { id } };
@@ -286,13 +303,12 @@ class OpenAIProvider implements Provider {
       }
 
       const response = acc.toResponse();
-      yield { type: 'finish', response };
+      yield { type: "finish", response };
       resolveResponse(response);
     } catch (err) {
-      const mapped = err instanceof ThalamusError
-        ? err
-        : mapError(err, OPENAI) as Error;
-      yield { type: 'error', error: mapped };
+      const mapped =
+        err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
+      yield { type: "error", error: mapped };
       rejectResponse(mapped);
     }
   }

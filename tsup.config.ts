@@ -1,14 +1,14 @@
-import { defineConfig } from 'tsup';
+import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
-    index: 'src/index.ts',
-    'anthropic/index': 'src/anthropic/index.ts',
-    'openai/index': 'src/openai/index.ts',
+    index: "src/index.ts",
+    "anthropic/index": "src/anthropic/index.ts",
+    "openai/index": "src/openai/index.ts",
   },
-  format: ['cjs', 'esm'],
+  format: ["cjs", "esm"],
   dts: true,
   clean: true,
   sourcemap: true,
-  target: 'es2022',
+  target: "es2022",
 });

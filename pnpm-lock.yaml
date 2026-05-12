@@ -6,7 +6,7 @@ settings:
 
 devDependencies:
   '@anthropic-ai/aws-sdk':
-    specifier: latest
+    specifier: ^0.3.0
     version: 0.3.0
   '@anthropic-ai/sdk':
     specifier: latest

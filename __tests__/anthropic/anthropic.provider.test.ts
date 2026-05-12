@@ -1,6 +1,4 @@
-import Module from 'node:module';
-import Anthropic from '@anthropic-ai/sdk';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropicProvider } from '../../src/anthropic/anthropic.provider.js';
 import { ThalamusError, SessionExpiredError } from '../../src/errors.js';
 import { collectStream } from '../../src/stream-utils.js';
@@ -32,13 +30,9 @@ vi.mock('@anthropic-ai/sdk', () => {
   return { default: MockAnthropic };
 });
 
-const originalLoad = (Module as any)._load;
-(Module as any)._load = function (id: string, ...args: unknown[]) {
-  if (id === '@anthropic-ai/aws-sdk') {
-    return { AnthropicAws: mockAnthropicAws };
-  }
-  return originalLoad.call(this, id, ...args);
-};
+vi.mock('@anthropic-ai/aws-sdk', () => ({
+  AnthropicAws: mockAnthropicAws,
+}));
 
 mockAnthropicAws.mockImplementation(function (this: any, config: Record<string, unknown>) {
   return {
@@ -53,7 +47,6 @@ mockAnthropicAws.mockImplementation(function (this: any, config: Record<string, 
 });
 
 afterEach(() => vi.clearAllMocks());
-afterAll(() => { (Module as any)._load = originalLoad; });
 
 const config = { apiKey: 'sk-test', agentId: 'agent_abc', environmentId: 'env_xyz' };
 
@@ -194,13 +187,22 @@ describe('AWS auth variant', () => {
     expect(response.sessionId).toBe('sess_aws');
   });
 
-  it('passes awsWorkspaceId when provided', () => {
+  it('passes awsWorkspaceId when provided', async () => {
+    mockCreate.mockResolvedValue({ id: 'sess_ws' });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        { type: 'session.status_idle', id: 'evt_1', stop_reason: { type: 'end_turn' } },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
     const rt = createAnthropicProvider({
       ...awsConfig,
       awsWorkspaceId: 'wrkspc_abc',
     });
-    expect(rt.provider).toBe('anthropic');
-    expect(mockAnthropicAws).toHaveBeenCalledWith({ awsRegion: 'us-east-1', awsWorkspaceId: 'wrkspc_abc' });
+    await rt.send({ messages: [{ role: 'user', content: 'hi' } as never] });
+
+    expect(mockAnthropicAws).toHaveBeenCalledWith({ awsRegion: 'us-east-1', workspaceId: 'wrkspc_abc' });
   });
 });
 

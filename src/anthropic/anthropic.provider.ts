@@ -190,12 +190,12 @@ export type AnthropicProviderConfig = {
   | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
 );
 
-function createClient(config: AnthropicProviderConfig): Anthropic {
+async function createClient(config: AnthropicProviderConfig): Promise<Anthropic> {
   if ('awsRegion' in config && config.awsRegion) {
-    const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
+    const { AnthropicAws } = await import('@anthropic-ai/aws-sdk');
     return new AnthropicAws({
       awsRegion: config.awsRegion,
-      awsWorkspaceId: config.awsWorkspaceId,
+      workspaceId: config.awsWorkspaceId,
     }) as unknown as Anthropic;
   }
 
@@ -206,16 +206,21 @@ class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
 
-  private readonly client: Anthropic;
+  private client?: Anthropic;
+  private readonly config: AnthropicProviderConfig;
   private readonly agentId: string;
   private readonly environmentId: string;
 
   constructor(config: AnthropicProviderConfig) {
+    this.config = config;
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
+  }
 
-    this.client = createClient(config);
+  private async getClient(): Promise<Anthropic> {
+    this.client ??= await createClient(this.config);
+    return this.client;
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -238,12 +243,13 @@ class AnthropicProvider implements Provider {
     rejectResponse: (e: unknown) => void,
   ): AsyncIterable<StreamPart> {
     try {
-      const sessionId = params.sessionId ?? (await this.createSession());
+      const client = await this.getClient();
+      const sessionId = params.sessionId ?? (await this.createSession(client));
 
       yield { type: 'stream-start', sessionId };
 
-      const sseStream = await this.client.beta.sessions.events.stream(sessionId);
-      await this.client.beta.sessions.events.send(sessionId, {
+      const sseStream = await client.beta.sessions.events.stream(sessionId);
+      await client.beta.sessions.events.send(sessionId, {
         events: [{
           type: 'user.message' as const,
           content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
@@ -267,8 +273,8 @@ class AnthropicProvider implements Provider {
     }
   }
 
-  private async createSession(): Promise<string> {
-    const session = await this.client.beta.sessions.create({
+  private async createSession(client: Anthropic): Promise<string> {
+    const session = await client.beta.sessions.create({
       agent: this.agentId,
       environment_id: this.environmentId,
     });

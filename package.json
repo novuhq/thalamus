@@ -28,7 +28,8 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "peerDependencies": {
     "@anthropic-ai/aws-sdk": ">=0.86.0",
@@ -54,6 +55,9 @@
       "optional": true
     }
   },
+  "lint-staged": {
+    "*.{ts,js,json}": "biome check --write --no-errors-on-unmatched"
+  },
   "devDependencies": {
     "@anthropic-ai/aws-sdk": "^0.3.0",
     "@anthropic-ai/sdk": "latest",
@@ -62,6 +66,8 @@
     "@smithy/signature-v4": "^5.4.1",
     "@types/node": "^25.7.0",
     "dotenv": "^17.4.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.4",
     "openai": "latest",
     "tsup": "latest",
     "tsx": "^4.21.0",

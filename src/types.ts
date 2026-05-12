@@ -35,6 +35,22 @@ export type ToolSource =
   | { type: "custom" }
   | { type: "mcp"; serverName: string };
 
+export type McpApprovalPolicy = "always" | "never" | { except: string[] };
+
+export interface McpServerConfig {
+  name: string;
+  url: string;
+  authorization?: string;
+  allowedTools?: string[];
+  approvalPolicy?: McpApprovalPolicy;
+}
+
+export interface McpToolDef {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
 export interface ActionRequired {
   type: "tool-confirmation";
   toolUseId: string;
@@ -82,6 +98,11 @@ export type StreamPart =
       toolUseId: string;
       output?: string;
       source?: ToolSource;
+    }
+  | {
+      type: "mcp-tools-discovered";
+      serverName: string;
+      tools: McpToolDef[];
     }
   | { type: "status-change"; status: AgentStatus }
   | { type: "stream-start"; sessionId?: string }

@@ -61,3 +61,59 @@ export class SessionExpiredError extends ThalamusError {
     this.sessionId = options.sessionId;
   }
 }
+
+export class VaultError extends ThalamusError {
+  constructor(message: string, options: { provider: string; cause?: unknown }) {
+    super(message, { ...options, isRetryable: false });
+    this.name = "VaultError";
+  }
+}
+
+export class VaultNotFoundError extends VaultError {
+  readonly vaultId: string;
+
+  constructor(vaultId: string, options: { provider: string; cause?: unknown }) {
+    super(`Vault ${vaultId} not found`, options);
+    this.name = "VaultNotFoundError";
+    this.vaultId = vaultId;
+  }
+}
+
+export class CredentialExpiredError extends VaultError {
+  readonly serverName: string;
+  readonly vaultId: string;
+
+  constructor(
+    serverName: string,
+    vaultId: string,
+    options: { provider: string; cause?: unknown },
+  ) {
+    super(
+      `Credential for ${serverName} in vault ${vaultId} is expired with no refresh config`,
+      options,
+    );
+    this.name = "CredentialExpiredError";
+    this.serverName = serverName;
+    this.vaultId = vaultId;
+  }
+}
+
+export class McpServerError extends ThalamusError {
+  readonly serverName: string;
+  readonly statusCode?: number;
+
+  constructor(
+    serverName: string,
+    options: { provider: string; statusCode?: number; cause?: unknown },
+  ) {
+    const retryable =
+      options.statusCode !== undefined && options.statusCode >= 500;
+    super(
+      `MCP server ${serverName} error${options.statusCode ? ` (${options.statusCode})` : ""}`,
+      { ...options, isRetryable: retryable },
+    );
+    this.name = "McpServerError";
+    this.serverName = serverName;
+    this.statusCode = options.statusCode;
+  }
+}

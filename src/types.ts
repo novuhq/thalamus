@@ -30,6 +30,11 @@ export interface Usage {
   totalTokens?: number;
 }
 
+export type ToolSource =
+  | { type: "builtin" }
+  | { type: "custom" }
+  | { type: "mcp"; serverName: string };
+
 export interface ActionRequired {
   type: "tool-confirmation";
   toolUseId: string;
@@ -58,15 +63,26 @@ export type StreamPart =
   | { type: "text-delta"; text: string }
   | { type: "refusal"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool-use-start"; toolName: string; toolUseId: string }
+  | {
+      type: "tool-use-start";
+      toolName: string;
+      toolUseId: string;
+      source?: ToolSource;
+    }
   | { type: "tool-use-delta"; toolUseId: string; argumentsDelta: string }
   | {
       type: "tool-use-done";
       toolName: string;
       toolUseId: string;
       input?: Record<string, unknown>;
+      source?: ToolSource;
     }
-  | { type: "tool-use-result"; toolUseId: string; output?: string }
+  | {
+      type: "tool-use-result";
+      toolUseId: string;
+      output?: string;
+      source?: ToolSource;
+    }
   | { type: "status-change"; status: AgentStatus }
   | { type: "stream-start"; sessionId?: string }
   | { type: "finish"; response: Response }

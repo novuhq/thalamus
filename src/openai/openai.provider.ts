@@ -22,8 +22,8 @@ import {
   type StreamResult,
   type Usage,
 } from "../types";
+import { LocalVault } from "../vault/local-vault";
 import type { Vault, VaultOptions, VaultStore } from "../vault/vault.interface";
-import { VaultBacked } from "../vault/vault-backed";
 import { openaiTransformer } from "./openai.transformer";
 import { createSigV4Fetch } from "./sigv4-fetch";
 
@@ -421,7 +421,7 @@ class OpenAIProvider implements Provider {
       );
     }
     const record = await this.vaultStore.createVault(options);
-    return new VaultBacked(record.id, OPENAI, this.vaultStore);
+    return new LocalVault(record.id, OPENAI, this.vaultStore);
   }
 
   async getVault(vaultId: string): Promise<Vault> {
@@ -441,7 +441,7 @@ class OpenAIProvider implements Provider {
         isRetryable: false,
       });
     }
-    return new VaultBacked(record.id, OPENAI, this.vaultStore);
+    return new LocalVault(record.id, OPENAI, this.vaultStore);
   }
 }
 

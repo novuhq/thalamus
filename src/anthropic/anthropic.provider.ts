@@ -25,6 +25,7 @@ import {
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
+import { AnthropicVault } from "./anthropic.vault";
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
 
@@ -342,16 +343,19 @@ class AnthropicProvider implements Provider {
     return session.id;
   }
 
-  async createVault(_options: VaultOptions): Promise<Vault> {
-    throw new Error(
-      "Not implemented: Anthropic vault support coming in Phase 4.4",
-    );
+  async createVault(options: VaultOptions): Promise<Vault> {
+    const client = await this.getClient();
+    const result = await (client.beta as any).vaults.create({
+      display_name: options.name,
+      metadata: options.metadata,
+    });
+    return new AnthropicVault(result.id, client);
   }
 
-  async getVault(_vaultId: string): Promise<Vault> {
-    throw new Error(
-      "Not implemented: Anthropic vault support coming in Phase 4.4",
-    );
+  async getVault(vaultId: string): Promise<Vault> {
+    const client = await this.getClient();
+    await (client.beta as any).vaults.retrieve(vaultId);
+    return new AnthropicVault(vaultId, client);
   }
 }
 

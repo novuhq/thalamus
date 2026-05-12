@@ -5,7 +5,7 @@ import type {
   VaultStore,
 } from "./vault.interface";
 
-export class VaultBacked implements Vault {
+export class LocalVault implements Vault {
   readonly id: string;
   readonly provider: string;
   private readonly store: VaultStore;

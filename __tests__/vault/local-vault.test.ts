@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { LocalVault } from "../../src/vault/local-vault";
 import { createMemoryVaultStore } from "../../src/vault/memory-vault-store";
-import { VaultBacked } from "../../src/vault/vault-backed";
 
-describe("VaultBacked", () => {
+describe("LocalVault", () => {
   async function setup() {
     const store = createMemoryVaultStore();
     const record = await store.createVault({ name: "Test" });
-    const vault = new VaultBacked(record.id, "openai", store);
+    const vault = new LocalVault(record.id, "openai", store);
     return { store, vault, vaultId: record.id };
   }
 

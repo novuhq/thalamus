@@ -15,6 +15,8 @@ function mockSse(events: object[]) {
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
+const mockVaultCreate = vi.fn();
+const mockVaultRetrieve = vi.fn();
 const mockAnthropicAws = vi.hoisted(() => vi.fn());
 
 vi.mock("@anthropic-ai/sdk", () => {
@@ -25,6 +27,10 @@ vi.mock("@anthropic-ai/sdk", () => {
         sessions: {
           create: mockCreate,
           events: { stream: mockSseStream, send: mockSend },
+        },
+        vaults: {
+          create: mockVaultCreate,
+          retrieve: mockVaultRetrieve,
         },
       },
     };
@@ -45,6 +51,10 @@ mockAnthropicAws.mockImplementation(function (
       sessions: {
         create: mockCreate,
         events: { stream: mockSseStream, send: mockSend },
+      },
+      vaults: {
+        create: mockVaultCreate,
+        retrieve: mockVaultRetrieve,
       },
     },
     _awsConfig: config,
@@ -795,5 +805,40 @@ describe("session expiry detection", () => {
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
     expect((errPart as any).error).not.toBeInstanceOf(SessionExpiredError);
+  });
+});
+
+describe("vault support", () => {
+  it("createVault proxies to Anthropic vaults.create", async () => {
+    mockVaultCreate.mockResolvedValue({
+      id: "vlt_abc",
+      display_name: "Alice",
+    });
+
+    const provider = createAnthropicProvider(config);
+    const vault = await provider.createVault({
+      name: "Alice",
+      metadata: { subscriberId: "sub_123" },
+    });
+
+    expect(vault.id).toBe("vlt_abc");
+    expect(vault.provider).toBe("anthropic");
+    expect(mockVaultCreate).toHaveBeenCalledWith({
+      display_name: "Alice",
+      metadata: { subscriberId: "sub_123" },
+    });
+  });
+
+  it("getVault proxies to Anthropic vaults.retrieve", async () => {
+    mockVaultRetrieve.mockResolvedValue({
+      id: "vlt_abc",
+      display_name: "Alice",
+    });
+
+    const provider = createAnthropicProvider(config);
+    const vault = await provider.getVault("vlt_abc");
+
+    expect(vault.id).toBe("vlt_abc");
+    expect(mockVaultRetrieve).toHaveBeenCalledWith("vlt_abc");
   });
 });

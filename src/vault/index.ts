@@ -1,3 +1,4 @@
+export { LocalVault } from "./local-vault";
 export { createMemoryVaultStore } from "./memory-vault-store";
 export type {
   Credential,
@@ -9,4 +10,3 @@ export type {
   VaultRecord,
   VaultStore,
 } from "./vault.interface";
-export { VaultBacked } from "./vault-backed";

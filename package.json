@@ -19,6 +19,11 @@
       "import": "./dist/openai/index.mjs",
       "require": "./dist/openai/index.cjs",
       "types": "./dist/openai/index.d.ts"
+    },
+    "./vault": {
+      "import": "./dist/vault/index.mjs",
+      "require": "./dist/vault/index.cjs",
+      "types": "./dist/vault/index.d.ts"
     }
   },
   "scripts": {

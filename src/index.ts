@@ -1,6 +1,14 @@
 export * from "./errors";
 export * from "./stream-utils";
 export * from "./types";
+export type {
+  Credential,
+  CredentialInfo,
+  Vault,
+  VaultOptions,
+  VaultStore,
+} from "./vault/index";
+export { createMemoryVaultStore } from "./vault/index";
 
 import { createAnthropicProvider } from "./anthropic/index";
 import { createOpenAIProvider } from "./openai/index";

@@ -2,7 +2,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ThalamusError, SessionExpiredError } from '../errors';
 import { collectStream } from '../stream-utils';
 
-declare const require: (id: string) => any;
 import {
   ANTHROPIC,
   type ActionRequired,
@@ -189,7 +188,6 @@ class AnthropicProvider implements Provider {
     this.runtimeId = config.agentId;
 
     if ('awsRegion' in config && config.awsRegion) {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
       this.client = new AnthropicAws({
         awsRegion: config.awsRegion,

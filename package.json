@@ -30,8 +30,8 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@anthropic-ai/sdk": ">=0.86.0",
     "@anthropic-ai/aws-sdk": ">=0.86.0",
+    "@anthropic-ai/sdk": ">=0.86.0",
     "openai": ">=4.87.0"
   },
   "peerDependenciesMeta": {
@@ -46,9 +46,10 @@
     }
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "latest",
     "@anthropic-ai/aws-sdk": "latest",
+    "@anthropic-ai/sdk": "latest",
     "@biomejs/biome": "latest",
+    "@types/node": "^25.7.0",
     "dotenv": "^17.4.2",
     "openai": "latest",
     "tsup": "latest",

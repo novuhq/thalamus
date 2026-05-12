@@ -1,3 +1,5 @@
+import type { Vault, VaultOptions } from "./vault/vault.interface";
+
 export enum MessageRole {
   USER = "user",
   ASSISTANT = "assistant",
@@ -138,6 +140,8 @@ export interface Provider {
   readonly runtimeId: string;
   send(params: RequestParams): Promise<Response>;
   stream(params: RequestParams): Promise<StreamResult>;
+  createVault(options: VaultOptions): Promise<Vault>;
+  getVault(vaultId: string): Promise<Vault>;
 }
 
 export const ANTHROPIC = "anthropic" as const;

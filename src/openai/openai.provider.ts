@@ -22,6 +22,8 @@ import {
   type StreamResult,
   type Usage,
 } from "../types";
+import type { Vault, VaultOptions, VaultStore } from "../vault/vault.interface";
+import { VaultBacked } from "../vault/vault-backed";
 import { openaiTransformer } from "./openai.transformer";
 import { createSigV4Fetch } from "./sigv4-fetch";
 
@@ -79,6 +81,7 @@ type OpenAIBaseConfig = {
   promptId?: string;
   instructions?: string;
   mcpServers?: McpServerConfig[];
+  vaultStore?: VaultStore;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -331,6 +334,7 @@ class OpenAIProvider implements Provider {
   private readonly instructions?: string;
   private readonly useConversations: boolean;
   private readonly mcpServers: McpServerConfig[];
+  private readonly vaultStore?: VaultStore;
 
   constructor(config: OpenAIProviderConfig) {
     this.runtimeId = config.promptId ?? "inline";
@@ -339,6 +343,7 @@ class OpenAIProvider implements Provider {
     this.client = buildOpenAIClient(config);
     this.useConversations = !("awsRegion" in config && config.awsRegion);
     this.mcpServers = config.mcpServers ?? [];
+    this.vaultStore = config.vaultStore;
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -403,6 +408,40 @@ class OpenAIProvider implements Provider {
       yield { type: "error", error: mapped };
       rejectResponse(mapped);
     }
+  }
+
+  async createVault(options: VaultOptions): Promise<Vault> {
+    if (!this.vaultStore) {
+      throw new ThalamusError(
+        "vaultStore is required for OpenAI vault support",
+        {
+          provider: OPENAI,
+          isRetryable: false,
+        },
+      );
+    }
+    const record = await this.vaultStore.createVault(options);
+    return new VaultBacked(record.id, OPENAI, this.vaultStore);
+  }
+
+  async getVault(vaultId: string): Promise<Vault> {
+    if (!this.vaultStore) {
+      throw new ThalamusError(
+        "vaultStore is required for OpenAI vault support",
+        {
+          provider: OPENAI,
+          isRetryable: false,
+        },
+      );
+    }
+    const record = await this.vaultStore.getVault(vaultId);
+    if (!record) {
+      throw new ThalamusError(`Vault not found: ${vaultId}`, {
+        provider: OPENAI,
+        isRetryable: false,
+      });
+    }
+    return new VaultBacked(record.id, OPENAI, this.vaultStore);
   }
 }
 

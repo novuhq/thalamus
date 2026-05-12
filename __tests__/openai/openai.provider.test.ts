@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProviderAuthError } from "../../src/errors.js";
+import { ProviderAuthError, ThalamusError } from "../../src/errors.js";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
 import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
+import { createMemoryVaultStore } from "../../src/vault/memory-vault-store.js";
 
 function makeStream(events: object[]) {
   return {
@@ -1089,5 +1090,46 @@ describe("Bedrock SigV4 auth — streaming", () => {
 
     const response = await result.response;
     expect(response.content).toBe("Signed!");
+  });
+});
+
+describe("vault support", () => {
+  it("createVault creates a vault in the VaultStore", async () => {
+    const store = createMemoryVaultStore();
+    const provider = createOpenAIProvider({ ...config, vaultStore: store });
+
+    const vault = await provider.createVault({ name: "Alice" });
+    expect(vault.id).toBeDefined();
+    expect(vault.provider).toBe("openai");
+
+    const record = await store.getVault(vault.id);
+    expect(record).not.toBeNull();
+    expect(record!.name).toBe("Alice");
+  });
+
+  it("getVault retrieves an existing vault", async () => {
+    const store = createMemoryVaultStore();
+    const provider = createOpenAIProvider({ ...config, vaultStore: store });
+
+    const created = await provider.createVault({ name: "Bob" });
+    const retrieved = await provider.getVault(created.id);
+    expect(retrieved.id).toBe(created.id);
+  });
+
+  it("getVault throws for nonexistent vault", async () => {
+    const store = createMemoryVaultStore();
+    const provider = createOpenAIProvider({ ...config, vaultStore: store });
+
+    await expect(provider.getVault("vlt_nope")).rejects.toThrow(
+      "Vault not found",
+    );
+  });
+
+  it("createVault throws if no vaultStore configured", async () => {
+    const provider = createOpenAIProvider(config);
+
+    await expect(provider.createVault({ name: "Alice" })).rejects.toThrow(
+      "vaultStore is required",
+    );
   });
 });

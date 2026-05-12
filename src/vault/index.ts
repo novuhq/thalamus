@@ -9,3 +9,4 @@ export type {
   VaultRecord,
   VaultStore,
 } from "./vault.interface";
+export { VaultBacked } from "./vault-backed";

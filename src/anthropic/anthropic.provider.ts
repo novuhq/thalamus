@@ -23,6 +23,7 @@ import {
   type StreamResult,
   type Usage,
 } from "../types";
+import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
@@ -339,6 +340,18 @@ class AnthropicProvider implements Provider {
     });
 
     return session.id;
+  }
+
+  async createVault(_options: VaultOptions): Promise<Vault> {
+    throw new Error(
+      "Not implemented: Anthropic vault support coming in Phase 4.4",
+    );
+  }
+
+  async getVault(_vaultId: string): Promise<Vault> {
+    throw new Error(
+      "Not implemented: Anthropic vault support coming in Phase 4.4",
+    );
   }
 }
 

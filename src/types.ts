@@ -51,12 +51,20 @@ export interface McpToolDef {
   inputSchema?: Record<string, unknown>;
 }
 
-export interface ActionRequired {
-  type: "tool-confirmation";
-  toolUseId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-}
+export type ActionRequired =
+  | {
+      type: "tool-confirmation";
+      toolUseId: string;
+      toolName: string;
+      input?: Record<string, unknown>;
+    }
+  | {
+      type: "mcp-approval";
+      toolUseId: string;
+      toolName: string;
+      serverName: string;
+      input?: Record<string, unknown>;
+    };
 
 export interface Response {
   content: string;

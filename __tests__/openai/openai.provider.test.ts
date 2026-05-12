@@ -429,6 +429,166 @@ describe("MCP server injection", () => {
   });
 });
 
+describe("MCP stream events", () => {
+  it("emits mcp-tools-discovered on mcp_list_tools output item", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_disc" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_disc",
+            conversation: { id: "conv_disc" },
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "mcp_list_tools",
+            server_label: "github",
+            tools: [
+              {
+                name: "create_issue",
+                description: "Create a GitHub issue",
+                input_schema: { type: "object" },
+              },
+            ],
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_disc",
+            output_text: "",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "x" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const discovered = parts.find(
+      (p) => p.type === "mcp-tools-discovered",
+    ) as any;
+    expect(discovered).toBeDefined();
+    expect(discovered.serverName).toBe("github");
+    expect(discovered.tools).toEqual([
+      {
+        name: "create_issue",
+        description: "Create a GitHub issue",
+        inputSchema: { type: "object" },
+      },
+    ]);
+  });
+
+  it("emits tool-use-done + tool-use-result with source:mcp on mcp_call", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_mcpc" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_mcpc",
+            conversation: { id: "conv_mcpc" },
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "mcp_call",
+            id: "mcp_call_1",
+            server_label: "github",
+            name: "create_issue",
+            arguments: '{"title":"Bug"}',
+            output: "Created #456",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_mcpc",
+            output_text: "Done",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "x" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    expect(toolDone).toMatchObject({
+      toolName: "create_issue",
+      input: { title: "Bug" },
+      source: { type: "mcp", serverName: "github" },
+    });
+
+    const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
+    expect(toolResult).toMatchObject({
+      output: "Created #456",
+      source: { type: "mcp", serverName: "github" },
+    });
+  });
+
+  it("emits finish with requires-action on mcp_approval_request", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_appr" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_appr",
+            conversation: { id: "conv_appr" },
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "mcp_approval_request",
+            id: "appr_1",
+            server_label: "github",
+            name: "create_issue",
+            arguments: '{"title":"Bug"}',
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_appr",
+            output_text: "",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "x" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const finish = parts.find((p) => p.type === "finish") as any;
+    expect(finish.response.finishReason).toBe("requires-action");
+    expect(finish.response.actionsRequired).toEqual([
+      expect.objectContaining({
+        type: "mcp-approval",
+        toolName: "create_issue",
+        serverName: "github",
+      }),
+    ]);
+  });
+});
+
 describe("refusal handling", () => {
   it("emits refusal parts and sets finishReason to refused", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_ref" });

@@ -12,6 +12,7 @@ import {
 } from "../errors";
 import { collectStream } from "../stream-utils";
 import {
+  type ActionRequired,
   type McpServerConfig,
   OPENAI,
   type Provider,
@@ -116,6 +117,7 @@ class ResponseAccumulator {
   conversationId: string | undefined;
   finishReason: Response["finishReason"] = "stop";
   usage: Usage | undefined;
+  actionsRequired: ActionRequired[] = [];
 
   toResponse(): Response {
     return {
@@ -123,6 +125,8 @@ class ResponseAccumulator {
       sessionId: this.conversationId ?? this.sessionId,
       finishReason: this.finishReason,
       usage: this.usage,
+      actionsRequired:
+        this.actionsRequired.length > 0 ? this.actionsRequired : undefined,
     };
   }
 }
@@ -212,14 +216,48 @@ function* mapEvent(
       break;
     }
     case "response.output_item.done": {
-      if (event.item.type === "function_call") {
+      const item = event.item as any;
+      if (item.type === "function_call") {
         yield {
           type: "tool-use-done",
-          toolName: event.item.name,
-          toolUseId: event.item.call_id,
-          input: JSON.parse(event.item.arguments || "{}"),
+          toolName: item.name,
+          toolUseId: item.call_id,
+          input: JSON.parse(item.arguments || "{}"),
           source: { type: "builtin" },
         };
+      } else if (item.type === "mcp_list_tools") {
+        yield {
+          type: "mcp-tools-discovered",
+          serverName: item.server_label,
+          tools: (item.tools ?? []).map((t: any) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.input_schema,
+          })),
+        };
+      } else if (item.type === "mcp_call") {
+        yield {
+          type: "tool-use-done",
+          toolName: item.name,
+          toolUseId: item.id,
+          input: JSON.parse(item.arguments || "{}"),
+          source: { type: "mcp", serverName: item.server_label },
+        };
+        yield {
+          type: "tool-use-result",
+          toolUseId: item.id,
+          output: item.output,
+          source: { type: "mcp", serverName: item.server_label },
+        };
+      } else if (item.type === "mcp_approval_request") {
+        acc.finishReason = "requires-action";
+        acc.actionsRequired.push({
+          type: "mcp-approval",
+          toolUseId: item.id,
+          toolName: item.name,
+          serverName: item.server_label,
+          input: JSON.parse(item.arguments || "{}"),
+        });
       }
       break;
     }

@@ -212,6 +212,152 @@ describe('error handling', () => {
   });
 });
 
+describe('thinking / reasoning events', () => {
+  it('emits thinking part on response.reasoning_summary_text.delta', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_think' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_t', conversation: { id: 'conv_think' } } },
+        { type: 'response.reasoning_summary_text.delta', delta: 'Let me think...', item_id: 'item_1', output_index: 0, sequence_number: 1 },
+        { type: 'response.completed', response: { id: 'resp_t', output_text: '', usage: {} } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'think' }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    expect(parts.find((p) => p.type === 'thinking')).toMatchObject({
+      type: 'thinking',
+      text: 'Let me think...',
+    });
+  });
+});
+
+describe('response lifecycle events', () => {
+  it('emits status-change running on response.in_progress', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_ip' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_ip', conversation: { id: 'conv_ip' } } },
+        { type: 'response.in_progress', response: { id: 'resp_ip' } },
+        { type: 'response.completed', response: { id: 'resp_ip', output_text: 'ok', usage: {} } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    expect(parts.find((p) => p.type === 'status-change')).toMatchObject({ status: 'running' });
+  });
+
+  it('sets finishReason to error on response.failed', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_fail' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_f', conversation: { id: 'conv_fail' } } },
+        { type: 'response.failed', response: { id: 'resp_f', error: { message: 'Something broke' } } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const errPart = parts.find((p) => p.type === 'error');
+    expect(errPart).toBeDefined();
+    expect((errPart as any).error.message).toBe('Something broke');
+  });
+
+  it('sets finishReason to length on response.incomplete', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_inc' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_i', conversation: { id: 'conv_inc' } } },
+        { type: 'response.output_text.delta', delta: 'partial...' },
+        { type: 'response.incomplete', response: { id: 'resp_i' } },
+        { type: 'response.completed', response: { id: 'resp_i', output_text: 'partial...', usage: {} } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    const response = await collectStream(result);
+
+    expect(response.finishReason).toBe('length');
+  });
+
+  it('emits provider-event for unknown event types', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_unk' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_u', conversation: { id: 'conv_unk' } } },
+        { type: 'response.some_future_event', data: { foo: 'bar' } },
+        { type: 'response.completed', response: { id: 'resp_u', output_text: '', usage: {} } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const providerEvent = parts.find((p) => p.type === 'provider-event') as any;
+    expect(providerEvent).toBeDefined();
+    expect(providerEvent.provider).toBe('openai');
+    expect(providerEvent.event).toBe('response.some_future_event');
+  });
+});
+
+describe('error handling — additional cases', () => {
+  it('maps rate_limit_exceeded to ProviderRateLimitError', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_rl' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([{ type: 'error', message: 'Rate limit exceeded', code: 'rate_limit_exceeded' }]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const { ProviderRateLimitError } = await import('../../src/errors.js');
+    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderRateLimitError);
+  });
+
+  it('maps thrown unavailable error to ProviderUnavailableError', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_503' });
+    mockResponsesCreate.mockImplementation(() => {
+      throw new Error('Service unavailable');
+    });
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: 'x' }],
+    });
+    result.response.catch(() => {});
+
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const { ProviderUnavailableError } = await import('../../src/errors.js');
+    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderUnavailableError);
+  });
+});
+
 // --- Bedrock API Key auth ---
 
 const bedrockConfig = {

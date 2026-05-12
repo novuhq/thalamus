@@ -6,7 +6,8 @@ import {
 
 type OpenAIInputContent =
   | { type: 'input_text'; text: string }
-  | { type: 'input_image'; image_url: { url: string } };
+  | { type: 'input_image'; image_url: { url: string } }
+  | { type: 'input_file'; file_data: string; filename?: string };
 
 type OpenAIInputMessage = {
   role: 'user' | 'system' | 'assistant';
@@ -34,6 +35,13 @@ export const openaiTransformer = {
             break;
           case 'image':
             parts.push({ type: 'input_image', image_url: { url: `data:${part.mediaType};base64,${part.data}` } });
+            break;
+          case 'file':
+            parts.push({
+              type: 'input_file',
+              file_data: `data:${part.mediaType};base64,${part.data}`,
+              ...(part.name ? { filename: part.name } : {}),
+            });
             break;
         }
       }

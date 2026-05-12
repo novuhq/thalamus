@@ -54,4 +54,67 @@ describe('openaiTransformer.toInput', () => {
       { role: 'user', content: [{ type: 'input_image', image_url: { url: 'data:image/jpeg;base64,abc123' } }] },
     ]);
   });
+
+  it('converts a text content part to input_text', () => {
+    const messages: Message[] = [
+      {
+        role: MessageRole.USER,
+        content: [{ type: 'text', text: 'Hello there' }],
+      },
+    ];
+    expect(openaiTransformer.toInput(messages)).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'Hello there' }] },
+    ]);
+  });
+
+  it('converts a file content part to input_file with data URI', () => {
+    const messages: Message[] = [
+      {
+        role: MessageRole.USER,
+        content: [{ type: 'file', data: 'cGRmIGRhdGE=', mediaType: 'application/pdf', name: 'report.pdf' }],
+      },
+    ];
+    expect(openaiTransformer.toInput(messages)).toEqual([
+      {
+        role: 'user',
+        content: [{
+          type: 'input_file',
+          file_data: 'data:application/pdf;base64,cGRmIGRhdGE=',
+          filename: 'report.pdf',
+        }],
+      },
+    ]);
+  });
+
+  it('omits filename when file has no name', () => {
+    const messages: Message[] = [
+      {
+        role: MessageRole.USER,
+        content: [{ type: 'file', data: 'dGV4dA==', mediaType: 'text/plain' }],
+      },
+    ];
+    const result = openaiTransformer.toInput(messages);
+    expect(result[0].content).toEqual([
+      { type: 'input_file', file_data: 'data:text/plain;base64,dGV4dA==' },
+    ]);
+  });
+
+  it('converts mixed content parts in order', () => {
+    const messages: Message[] = [
+      {
+        role: MessageRole.USER,
+        content: [
+          { type: 'text', text: 'Check this image and file:' },
+          { type: 'image-url', url: 'https://example.com/img.png' },
+          { type: 'file', data: 'abc', mediaType: 'application/pdf', name: 'doc.pdf' },
+        ],
+      },
+    ];
+    const result = openaiTransformer.toInput(messages);
+    const parts = result[0].content as any[];
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toMatchObject({ type: 'input_text' });
+    expect(parts[1]).toMatchObject({ type: 'input_image' });
+    expect(parts[2]).toMatchObject({ type: 'input_file' });
+  });
 });

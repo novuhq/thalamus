@@ -22,7 +22,14 @@ export interface RequestParams {
   messages: Message[];
   /** Opaque session identifier returned by a prior response. Absent means start a new session. */
   sessionId?: string;
+  /** Vault IDs to bind to this request (credentials available to MCP servers). */
+  vaultIds?: string[];
   /** Pass-through options forwarded directly to the underlying provider SDK call. */
+  providerOptions?: Record<string, unknown>;
+}
+
+export interface SessionOptions {
+  vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
 }
 
@@ -142,6 +149,8 @@ export interface Provider {
   stream(params: RequestParams): Promise<StreamResult>;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
+  createSession(options?: SessionOptions): Promise<string>;
+  endSession(sessionId: string): Promise<void>;
 }
 
 export const ANTHROPIC = "anthropic" as const;

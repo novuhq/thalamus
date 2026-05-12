@@ -18,6 +18,7 @@ import {
   type Provider,
   type RequestParams,
   type Response,
+  type SessionOptions,
   type StreamPart,
   type StreamResult,
   type Usage,
@@ -442,6 +443,16 @@ class OpenAIProvider implements Provider {
       });
     }
     return new LocalVault(record.id, OPENAI, this.vaultStore);
+  }
+
+  async createSession(_options?: SessionOptions): Promise<string> {
+    // OpenAI Responses API is stateless — no server-side session to create.
+    // Return a client-generated ID for tracking purposes.
+    return crypto.randomUUID();
+  }
+
+  async endSession(_sessionId: string): Promise<void> {
+    // No-op for stateless provider.
   }
 }
 

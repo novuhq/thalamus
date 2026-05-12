@@ -19,6 +19,7 @@ import {
   type Provider,
   type RequestParams,
   type Response,
+  type SessionOptions,
   type StreamPart,
   type StreamResult,
   type Usage,
@@ -297,7 +298,7 @@ class AnthropicProvider implements Provider {
       const client = await this.getClient();
       const sessionId =
         params.sessionId ??
-        (await this.createSession(client, params.providerOptions));
+        (await this.initSession(client, params.providerOptions));
 
       yield { type: "stream-start", sessionId };
 
@@ -330,7 +331,7 @@ class AnthropicProvider implements Provider {
     }
   }
 
-  private async createSession(
+  private async initSession(
     client: Anthropic,
     providerOptions?: Record<string, unknown>,
   ): Promise<string> {
@@ -341,6 +342,24 @@ class AnthropicProvider implements Provider {
     });
 
     return session.id;
+  }
+
+  async createSession(options?: SessionOptions): Promise<string> {
+    const client = await this.getClient();
+    const params: Record<string, unknown> = {
+      agent: this.agentId,
+      environment_id: this.environmentId,
+      ...options?.providerOptions,
+    };
+    if (options?.vaultIds?.length) {
+      params.vault_ids = options.vaultIds;
+    }
+    const session = await client.beta.sessions.create(params as any);
+    return session.id;
+  }
+
+  async endSession(_sessionId: string): Promise<void> {
+    // Anthropic sessions are managed server-side; no explicit teardown needed.
   }
 
   async createVault(options: VaultOptions): Promise<Vault> {

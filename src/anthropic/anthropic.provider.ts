@@ -37,11 +37,27 @@ function mapStopReason(reason: StopReason): Response['finishReason'] {
   }
 }
 
-function mapError(raw: unknown): ThalamusError {
+function mapSessionError(raw: unknown): ThalamusError {
   const obj = raw as { message?: string; type?: string } | null;
   const msg = obj?.message ?? String(raw);
   const isAuth = obj?.type === 'authentication_error';
   return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
+}
+
+function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
+  if (sessionId && err instanceof Error && 'status' in err) {
+    const status = (err as any).status;
+    if (status === 404 || status === 410) {
+      return new SessionExpiredError(
+        `Session ${sessionId} has expired or been archived`,
+        { provider: ANTHROPIC, sessionId, cause: err },
+      );
+    }
+  }
+
+  if (err instanceof ThalamusError) return err;
+
+  return new ThalamusError(String(err), { provider: ANTHROPIC, isRetryable: false, cause: err });
 }
 
 class ResponseAccumulator {
@@ -143,7 +159,7 @@ function* mapEvent(
     // --- error ---
     case 'session.error': {
       const e = event as BetaManagedAgentsSessionErrorEvent;
-      throw mapError(e.error);
+      throw mapSessionError(e.error);
     }
     // --- usage ---
     case 'span.model_request_end': {
@@ -174,6 +190,18 @@ export type AnthropicProviderConfig = {
   | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
 );
 
+function createClient(config: AnthropicProviderConfig): Anthropic {
+  if ('awsRegion' in config && config.awsRegion) {
+    const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
+    return new AnthropicAws({
+      awsRegion: config.awsRegion,
+      awsWorkspaceId: config.awsWorkspaceId,
+    }) as unknown as Anthropic;
+  }
+
+  return new Anthropic({ apiKey: config.apiKey });
+}
+
 class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
@@ -187,15 +215,7 @@ class AnthropicProvider implements Provider {
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
 
-    if ('awsRegion' in config && config.awsRegion) {
-      const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
-      this.client = new AnthropicAws({
-        awsRegion: config.awsRegion,
-        ...(config.awsWorkspaceId ? { awsWorkspaceId: config.awsWorkspaceId } : {}),
-      }) as unknown as Anthropic;
-    } else {
-      this.client = new Anthropic({ apiKey: config.apiKey });
-    }
+    this.client = createClient(config);
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -241,20 +261,7 @@ class AnthropicProvider implements Provider {
       yield { type: 'finish', response };
       resolveResponse(response);
     } catch (err) {
-      const isSessionExpired = params.sessionId
-        && err instanceof Error
-        && 'status' in err
-        && ((err as any).status === 404 || (err as any).status === 410);
-
-      const error = isSessionExpired
-        ? new SessionExpiredError(
-            `Session ${params.sessionId} has expired or been archived`,
-            { provider: ANTHROPIC, sessionId: params.sessionId!, cause: err },
-          )
-        : err instanceof ThalamusError
-          ? err
-          : new ThalamusError(String(err), { provider: ANTHROPIC, isRetryable: false, cause: err });
-
+      const error = mapStreamError(err, params.sessionId);
       yield { type: 'error', error };
       rejectResponse(error);
     }

@@ -215,7 +215,12 @@ describe("tool call streaming", () => {
         p.type === "tool-use-done",
     );
     expect(toolParts).toEqual([
-      { type: "tool-use-start", toolName: "get_weather", toolUseId: "call_1" },
+      {
+        type: "tool-use-start",
+        toolName: "get_weather",
+        toolUseId: "call_1",
+        source: { type: "builtin" },
+      },
       { type: "tool-use-delta", toolUseId: "call_1", argumentsDelta: '{"lo' },
       {
         type: "tool-use-delta",
@@ -227,8 +232,59 @@ describe("tool call streaming", () => {
         toolName: "get_weather",
         toolUseId: "call_1",
         input: { loc: "NYC" },
+        source: { type: "builtin" },
       },
     ]);
+  });
+});
+
+describe("tool call source tagging", () => {
+  it("emits source: builtin on function_call events", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_src" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: { id: "resp_src", conversation: { id: "conv_src" } },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            name: "get_weather",
+            call_id: "fc_1",
+          },
+          output_index: 0,
+          sequence_number: 1,
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            name: "get_weather",
+            call_id: "fc_1",
+            arguments: "{}",
+          },
+          output_index: 0,
+          sequence_number: 2,
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_src", output_text: "done", usage: {} },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "weather" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
+    expect(toolStart.source).toEqual({ type: "builtin" });
+    const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    expect(toolDone.source).toEqual({ type: "builtin" });
   });
 });
 

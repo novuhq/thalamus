@@ -169,6 +169,7 @@ function* mapEvent(
           type: "tool-use-start",
           toolName: event.item.name,
           toolUseId: event.item.call_id,
+          source: { type: "builtin" },
         };
       }
       break;
@@ -188,6 +189,7 @@ function* mapEvent(
           toolName: event.item.name,
           toolUseId: event.item.call_id,
           input: JSON.parse(event.item.arguments || "{}"),
+          source: { type: "builtin" },
         };
       }
       break;

@@ -21,6 +21,7 @@ import {
   type Usage,
 } from '../types';
 import { openaiTransformer } from './openai.transformer';
+import { createSigV4Fetch } from './sigv4-fetch';
 
 function mapError(error: unknown, provider: string): Error {
   const msg = error instanceof Error ? error.message : String(error);
@@ -37,12 +38,42 @@ function mapError(error: unknown, provider: string): Error {
   return new ProviderResponseError(msg, { provider, cause: error });
 }
 
-export interface OpenAIProviderConfig {
+type OpenAIDirectConfig = {
   apiKey: string;
+  awsRegion?: never;
+  awsBedrockApiKey?: never;
+  awsCredentials?: never;
+};
+
+type OpenAIBedrockApiKeyConfig = {
+  awsRegion: string;
+  awsBedrockApiKey: string;
+  apiKey?: never;
+  awsCredentials?: never;
+};
+
+type OpenAIBedrockSigV4Config = {
+  awsRegion: string;
+  awsCredentials: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken?: string;
+  };
+  apiKey?: never;
+  awsBedrockApiKey?: never;
+};
+
+type OpenAIBaseConfig = {
   model?: string;
   promptId?: string;
   instructions?: string;
-}
+};
+
+export type OpenAIProviderConfig = OpenAIBaseConfig & (
+  | OpenAIDirectConfig
+  | OpenAIBedrockApiKeyConfig
+  | OpenAIBedrockSigV4Config
+);
 
 class ResponseAccumulator {
   content = '';
@@ -171,6 +202,28 @@ function* mapEvent(
   }
 }
 
+function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
+  if (!('awsRegion' in config) || !config.awsRegion) {
+    return new OpenAI({ apiKey: config.apiKey });
+  }
+
+  const baseURL = `https://bedrock-mantle.${config.awsRegion}.api.aws/v1`;
+
+  if ('awsBedrockApiKey' in config && config.awsBedrockApiKey) {
+    return new OpenAI({ baseURL, apiKey: config.awsBedrockApiKey });
+  }
+
+  if ('awsCredentials' in config && config.awsCredentials) {
+    return new OpenAI({
+      baseURL,
+      apiKey: 'bedrock-sigv4',
+      fetch: createSigV4Fetch({ region: config.awsRegion, credentials: config.awsCredentials }),
+    });
+  }
+
+  return new OpenAI({ baseURL, apiKey: 'bedrock' });
+}
+
 class OpenAIProvider implements Provider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
@@ -178,12 +231,14 @@ class OpenAIProvider implements Provider {
   private readonly client: OpenAI;
   private readonly model: string;
   private readonly instructions?: string;
+  private readonly useConversations: boolean;
 
   constructor(config: OpenAIProviderConfig) {
     this.runtimeId = config.promptId ?? 'inline';
     this.model = config.model ?? 'gpt-4o';
     this.instructions = config.instructions;
-    this.client = new OpenAI({ apiKey: config.apiKey });
+    this.client = buildOpenAIClient(config);
+    this.useConversations = !('awsRegion' in config && config.awsRegion);
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -200,18 +255,12 @@ class OpenAIProvider implements Provider {
     return { stream: this.runStream(params, resolveResponse, rejectResponse), response: responsePromise };
   }
 
-  private buildCreateParams(
-    params: RequestParams,
-    conversationId: string,
-  ): ResponseCreateParamsStreaming {
-    return {
-      model: this.model,
-      input: openaiTransformer.toInput(params.messages) as ResponseCreateParamsStreaming['input'],
-      stream: true,
-      conversation: { id: conversationId },
-      ...(this.instructions ? { instructions: this.instructions } : {}),
-      ...params.providerOptions,
-    };
+  private async resolveSessionParams(sessionId?: string): Promise<Record<string, unknown>> {
+    if (this.useConversations) {
+      const id = sessionId ?? (await this.client.conversations.create()).id;
+      return { conversation: { id } };
+    }
+    return sessionId ? { previous_response_id: sessionId } : {};
   }
 
   private async *runStream(
@@ -220,15 +269,18 @@ class OpenAIProvider implements Provider {
     rejectResponse: (e: unknown) => void,
   ): AsyncIterable<StreamPart> {
     try {
-      const conversationId = params.sessionId
-        ?? (await this.client.conversations.create()).id;
+      const sessionParams = await this.resolveSessionParams(params.sessionId);
 
-      const rawStream = await this.client.responses.create(
-        this.buildCreateParams(params, conversationId),
-      );
+      const rawStream = await this.client.responses.create({
+        model: this.model,
+        input: openaiTransformer.toInput(params.messages),
+        stream: true,
+        ...(this.instructions ? { instructions: this.instructions } : {}),
+        ...sessionParams,
+        ...params.providerOptions,
+      } as ResponseCreateParamsStreaming);
+
       const acc = new ResponseAccumulator();
-      acc.conversationId = conversationId;
-
       for await (const rawEvent of rawStream) {
         yield* mapEvent(rawEvent, acc);
       }

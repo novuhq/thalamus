@@ -9,9 +9,11 @@ function makeStream(events: object[]) {
 
 const mockResponsesCreate = vi.fn();
 const mockConversationsCreate = vi.fn();
+let lastOpenAIConfig: Record<string, unknown> | undefined;
 
 vi.mock('openai', () => {
-  const MockOpenAI = function () {
+  const MockOpenAI = function (config: Record<string, unknown>) {
+    lastOpenAIConfig = config;
     return {
       responses: { create: mockResponsesCreate },
       conversations: { create: mockConversationsCreate },
@@ -205,5 +207,164 @@ describe('error handling', () => {
 
     expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderAuthError);
     await expect(result.response).rejects.toBeInstanceOf(ProviderAuthError);
+  });
+});
+
+// --- Bedrock API Key auth ---
+
+const bedrockConfig = {
+  awsRegion: 'us-east-1',
+  awsBedrockApiKey: 'bedrock-api-key-abc123',
+  model: 'openai.gpt-oss-120b',
+  instructions: 'Be helpful.',
+};
+
+describe('Bedrock API Key auth — client config', () => {
+  it('passes bedrock-mantle baseURL and awsBedrockApiKey to OpenAI client', () => {
+    createOpenAIProvider(bedrockConfig);
+    expect(lastOpenAIConfig).toMatchObject({
+      baseURL: 'https://bedrock-mantle.us-east-1.api.aws/v1',
+      apiKey: 'bedrock-api-key-abc123',
+    });
+  });
+
+  it('does NOT set baseURL for direct OpenAI config', () => {
+    createOpenAIProvider(config);
+    expect(lastOpenAIConfig?.apiKey).toBe('sk-test');
+    expect(lastOpenAIConfig?.baseURL).toBeUndefined();
+  });
+});
+
+describe('Bedrock API Key auth — streaming', () => {
+  it('streams successfully via bedrock-mantle endpoint', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_br' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_br', conversation: { id: 'conv_br' } } },
+        { type: 'response.output_text.delta', delta: 'Hello from Bedrock!' },
+        {
+          type: 'response.completed',
+          response: { id: 'resp_br', output_text: 'Hello from Bedrock!', usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 } },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(bedrockConfig).stream({
+      messages: [{ role: 'user', content: 'Hi' } as never],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const response = await result.response;
+    expect(response.content).toBe('Hello from Bedrock!');
+    expect(response.sessionId).toBe('conv_br');
+  });
+
+  it('sets provider = openai and runtimeId = inline', () => {
+    const rt = createOpenAIProvider(bedrockConfig);
+    expect(rt.provider).toBe('openai');
+    expect(rt.runtimeId).toBe('inline');
+  });
+});
+
+// --- Bedrock SigV4 auth ---
+
+const sigv4Config = {
+  awsRegion: 'us-west-2',
+  awsCredentials: {
+    accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
+    secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+  },
+  model: 'openai.gpt-oss-120b',
+};
+
+describe('Bedrock SigV4 auth — client config', () => {
+  it('passes bedrock-mantle baseURL and custom fetch to OpenAI client', () => {
+    createOpenAIProvider(sigv4Config);
+    expect(lastOpenAIConfig?.baseURL).toBe('https://bedrock-mantle.us-west-2.api.aws/v1');
+    expect(typeof lastOpenAIConfig?.fetch).toBe('function');
+    expect(lastOpenAIConfig?.apiKey).toBe('bedrock-sigv4');
+  });
+});
+
+describe('Bedrock — no Conversations API (previous_response_id fallback)', () => {
+  it('does NOT call conversations.create on Bedrock config', async () => {
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_br_f1', conversation: null } },
+        { type: 'response.output_text.delta', delta: 'hi' },
+        { type: 'response.completed', response: { id: 'resp_br_f1', output_text: 'hi', usage: {} } },
+      ]),
+    );
+
+    await collectStream(
+      await createOpenAIProvider(bedrockConfig).stream({
+        messages: [{ role: 'user', content: 'hello' } as never],
+      }),
+    );
+
+    expect(mockConversationsCreate).not.toHaveBeenCalled();
+  });
+
+  it('uses response ID as sessionId when no conversation is returned', async () => {
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_br_f2', conversation: null } },
+        { type: 'response.completed', response: { id: 'resp_br_f2', output_text: 'ok', usage: {} } },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(bedrockConfig).stream({
+      messages: [{ role: 'user', content: 'hi' } as never],
+    });
+    const response = await collectStream(result);
+    expect(response.sessionId).toBe('resp_br_f2');
+  });
+
+  it('passes previous_response_id on session resume', async () => {
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_br_f3', conversation: null } },
+        { type: 'response.completed', response: { id: 'resp_br_f3', output_text: 'ok', usage: {} } },
+      ]),
+    );
+
+    await collectStream(
+      await createOpenAIProvider(bedrockConfig).stream({
+        messages: [{ role: 'user', content: 'next' } as never],
+        sessionId: 'resp_br_prev',
+      }),
+    );
+
+    expect(mockConversationsCreate).not.toHaveBeenCalled();
+    expect(mockResponsesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ previous_response_id: 'resp_br_prev' }),
+    );
+    expect(mockResponsesCreate.mock.calls[0][0].conversation).toBeUndefined();
+  });
+});
+
+describe('Bedrock SigV4 auth — streaming', () => {
+  it('streams successfully via SigV4-signed requests', async () => {
+    mockConversationsCreate.mockResolvedValue({ id: 'conv_sv4' });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        { type: 'response.created', response: { id: 'resp_sv4', conversation: { id: 'conv_sv4' } } },
+        { type: 'response.output_text.delta', delta: 'Signed!' },
+        {
+          type: 'response.completed',
+          response: { id: 'resp_sv4', output_text: 'Signed!', usage: {} },
+        },
+      ]),
+    );
+
+    const result = await createOpenAIProvider(sigv4Config).stream({
+      messages: [{ role: 'user', content: 'Hi' } as never],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const response = await result.response;
+    expect(response.content).toBe('Signed!');
   });
 });

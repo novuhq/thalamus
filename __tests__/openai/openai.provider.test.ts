@@ -486,7 +486,7 @@ describe("MCP stream events", () => {
     ]);
   });
 
-  it("emits tool-use-done + tool-use-result with source:mcp on mcp_call", async () => {
+  it("emits tool-use-start, tool-use-delta, tool-use-done, tool-use-result for mcp_call", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_mcpc" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
@@ -496,6 +496,31 @@ describe("MCP stream events", () => {
             id: "resp_mcpc",
             conversation: { id: "conv_mcpc" },
           },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "mcp_call",
+            id: "mcp_call_1",
+            server_label: "github",
+            name: "create_issue",
+          },
+          output_index: 0,
+          sequence_number: 1,
+        },
+        {
+          type: "response.mcp_call_arguments.delta",
+          delta: '{"title',
+          item_id: "mcp_call_1",
+          output_index: 0,
+          sequence_number: 2,
+        },
+        {
+          type: "response.mcp_call_arguments.delta",
+          delta: '":"Bug"}',
+          item_id: "mcp_call_1",
+          output_index: 0,
+          sequence_number: 3,
         },
         {
           type: "response.output_item.done",
@@ -524,6 +549,27 @@ describe("MCP stream events", () => {
     });
     const parts = [];
     for await (const p of result.stream) parts.push(p);
+
+    const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
+    expect(toolStart).toMatchObject({
+      toolName: "create_issue",
+      toolUseId: "mcp_call_1",
+      source: { type: "mcp", serverName: "github" },
+    });
+
+    const deltas = parts.filter((p) => p.type === "tool-use-delta");
+    expect(deltas).toEqual([
+      {
+        type: "tool-use-delta",
+        toolUseId: "mcp_call_1",
+        argumentsDelta: '{"title',
+      },
+      {
+        type: "tool-use-delta",
+        toolUseId: "mcp_call_1",
+        argumentsDelta: '":"Bug"}',
+      },
+    ]);
 
     const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
     expect(toolDone).toMatchObject({

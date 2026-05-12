@@ -293,7 +293,9 @@ class AnthropicProvider implements Provider {
   ): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
-      const sessionId = params.sessionId ?? (await this.createSession(client));
+      const sessionId =
+        params.sessionId ??
+        (await this.createSession(client, params.providerOptions));
 
       yield { type: "stream-start", sessionId };
 
@@ -326,10 +328,14 @@ class AnthropicProvider implements Provider {
     }
   }
 
-  private async createSession(client: Anthropic): Promise<string> {
+  private async createSession(
+    client: Anthropic,
+    providerOptions?: Record<string, unknown>,
+  ): Promise<string> {
     const session = await client.beta.sessions.create({
       agent: this.agentId,
       environment_id: this.environmentId,
+      ...providerOptions,
     });
 
     return session.id;

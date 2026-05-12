@@ -204,6 +204,14 @@ function* mapEvent(
           toolUseId: event.item.call_id,
           source: { type: "builtin" },
         };
+      } else if ((event.item as any).type === "mcp_call") {
+        const item = event.item as any;
+        yield {
+          type: "tool-use-start",
+          toolName: item.name,
+          toolUseId: item.id,
+          source: { type: "mcp", serverName: item.server_label },
+        };
       }
       break;
     }
@@ -212,6 +220,15 @@ function* mapEvent(
         type: "tool-use-delta",
         toolUseId: event.item_id,
         argumentsDelta: event.delta,
+      };
+      break;
+    }
+    case "response.mcp_call_arguments.delta" as any: {
+      const e = event as any;
+      yield {
+        type: "tool-use-delta",
+        toolUseId: e.item_id,
+        argumentsDelta: e.delta,
       };
       break;
     }

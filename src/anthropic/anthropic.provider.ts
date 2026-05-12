@@ -117,6 +117,7 @@ function* mapEvent(
         toolName: e.name,
         toolUseId: e.id,
         input: e.input,
+        source: { type: "builtin" },
       };
       break;
     }
@@ -127,6 +128,7 @@ function* mapEvent(
         type: "tool-use-result",
         toolUseId: e.tool_use_id,
         output: output?.type === "text" ? output.text : undefined,
+        source: { type: "builtin" },
       };
       break;
     }
@@ -137,6 +139,10 @@ function* mapEvent(
         toolName: e.name,
         toolUseId: e.id,
         input: e.input,
+        source: {
+          type: "mcp",
+          serverName: (e as any).server_name ?? "",
+        },
       };
       break;
     }
@@ -147,6 +153,10 @@ function* mapEvent(
         type: "tool-use-result",
         toolUseId: e.mcp_tool_use_id,
         output: output?.type === "text" ? output.text : undefined,
+        source: {
+          type: "mcp",
+          serverName: (e as any).server_name ?? "",
+        },
       };
       break;
     }

@@ -464,6 +464,124 @@ describe("stream — event mapping", () => {
     ]);
   });
 
+  it("emits source: builtin on agent.tool_use", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_src_bt" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.tool_use",
+          id: "tu_1",
+          name: "bash",
+          input: { command: "ls" },
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "run ls" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    expect(toolDone.source).toEqual({ type: "builtin" });
+  });
+
+  it("emits source: builtin on agent.tool_result", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_src_btr" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.tool_result",
+          id: "evt_1",
+          tool_use_id: "tu_1",
+          content: [{ type: "text", text: "file1.ts" }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "x" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
+    expect(toolResult.source).toEqual({ type: "builtin" });
+  });
+
+  it("emits source: mcp on agent.mcp_tool_use with serverName", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_src_mcp" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.mcp_tool_use",
+          id: "mcp_1",
+          name: "create_issue",
+          input: {},
+          server_name: "github",
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "create issue" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    expect(toolDone.source).toEqual({ type: "mcp", serverName: "github" });
+  });
+
+  it("emits source: mcp on agent.mcp_tool_result with serverName", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_src_mcpr" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.mcp_tool_result",
+          id: "evt_1",
+          mcp_tool_use_id: "mcp_1",
+          server_name: "github",
+          content: [{ type: "text", text: "Created #456" }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const result = await createAnthropicProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "x" }],
+    });
+    const parts = [];
+    for await (const p of result.stream) parts.push(p);
+
+    const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
+    expect(toolResult.source).toEqual({ type: "mcp", serverName: "github" });
+  });
+
   it("emits status-change running on session.status_running", async () => {
     mockCreate.mockResolvedValue({ id: "sess_run" });
     mockSseStream.mockResolvedValue(

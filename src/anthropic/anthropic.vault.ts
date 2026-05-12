@@ -17,37 +17,38 @@ export class AnthropicVault implements Vault {
     this.client = client;
   }
 
-  async add(name: string, credential: Credential): Promise<void> {
+  private toAuth(
+    name: string,
+    credential: Credential,
+  ): Record<string, unknown> {
     if (credential.type === "bearer") {
-      await (this.client.beta as any).vaults.credentials.create(this.id, {
-        display_name: name,
-        auth: {
-          type: "static_bearer",
-          mcp_server_url: name,
-          token: credential.token,
-        },
-      });
-    } else {
-      const auth: Record<string, unknown> = {
-        type: "mcp_oauth",
+      return {
+        type: "static_bearer",
         mcp_server_url: name,
-        access_token: credential.accessToken,
-        expires_at: credential.expiresAt,
+        token: credential.token,
       };
-      if (credential.refresh) {
-        auth.refresh = {
-          refresh_token: credential.refresh.refreshToken,
-          token_endpoint: credential.refresh.tokenEndpoint,
-          client_id: credential.refresh.clientId,
-          client_secret: credential.refresh.clientSecret,
-          scope: credential.refresh.scopes,
-        };
-      }
-      await (this.client.beta as any).vaults.credentials.create(this.id, {
-        display_name: name,
-        auth,
-      });
     }
+
+    return {
+      type: "mcp_oauth",
+      mcp_server_url: name,
+      access_token: credential.accessToken,
+      expires_at: credential.expiresAt,
+      ...(credential.refresh && {
+        refresh_token: credential.refresh.refreshToken,
+        token_endpoint: credential.refresh.tokenEndpoint,
+        client_id: credential.refresh.clientId,
+        client_secret: credential.refresh.clientSecret,
+        scope: credential.refresh.scopes,
+      }),
+    };
+  }
+
+  async add(name: string, credential: Credential): Promise<void> {
+    await (this.client.beta as any).vaults.credentials.create(this.id, {
+      display_name: name,
+      auth: this.toAuth(name, credential),
+    });
   }
 
   async update(name: string, credential: Credential): Promise<void> {
@@ -55,10 +56,18 @@ export class AnthropicVault implements Vault {
     await this.add(name, credential);
   }
 
-  async remove(_name: string): Promise<void> {
-    // Anthropic credentials are identified by ID, not name.
-    // Full implementation requires listing + matching by display_name.
-    throw new Error("Not yet implemented: credential removal by name");
+  async remove(name: string): Promise<void> {
+    const result = await (this.client.beta as any).vaults.credentials.list(
+      this.id,
+    );
+    const match = (result.data ?? []).find((c: any) => c.display_name === name);
+    if (!match) {
+      throw new Error(`Credential "${name}" not found in vault ${this.id}`);
+    }
+    await (this.client.beta as any).vaults.credentials.delete(
+      this.id,
+      match.id,
+    );
   }
 
   async list(): Promise<CredentialInfo[]> {

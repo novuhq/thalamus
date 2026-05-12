@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ThalamusError } from '../errors';
 import { collectStream } from '../stream-utils';
+
+declare const require: (id: string) => any;
 import {
   ANTHROPIC,
   type ActionRequired,
@@ -165,11 +167,13 @@ function* mapEvent(
   }
 }
 
-export interface AnthropicProviderConfig {
-  apiKey: string;
+export type AnthropicProviderConfig = {
   agentId: string;
   environmentId: string;
-}
+} & (
+  | { apiKey: string; awsRegion?: never; awsWorkspaceId?: never }
+  | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
+);
 
 class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
@@ -183,7 +187,17 @@ class AnthropicProvider implements Provider {
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
-    this.client = new Anthropic({ apiKey: config.apiKey });
+
+    if ('awsRegion' in config) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
+      this.client = new AnthropicAws({
+        awsRegion: config.awsRegion,
+        ...(config.awsWorkspaceId ? { awsWorkspaceId: config.awsWorkspaceId } : {}),
+      }) as unknown as Anthropic;
+    } else {
+      this.client = new Anthropic({ apiKey: config.apiKey });
+    }
   }
 
   async send(params: RequestParams): Promise<Response> {

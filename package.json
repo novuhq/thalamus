@@ -18,11 +18,6 @@
       "import": "./dist/openai/index.mjs",
       "require": "./dist/openai/index.cjs",
       "types": "./dist/openai/index.d.ts"
-    },
-    "./bedrock": {
-      "import": "./dist/bedrock/index.mjs",
-      "require": "./dist/bedrock/index.cjs",
-      "types": "./dist/bedrock/index.d.ts"
     }
   },
   "scripts": {
@@ -36,20 +31,28 @@
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.86.0",
-    "openai": ">=4.87.0",
-    "@aws-sdk/client-bedrock-agent-runtime": ">=3.699.0"
+    "@anthropic-ai/aws-sdk": ">=0.86.0",
+    "openai": ">=4.87.0"
   },
   "peerDependenciesMeta": {
-    "@anthropic-ai/sdk": { "optional": true },
-    "openai": { "optional": true },
-    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true }
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@anthropic-ai/aws-sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "latest",
-    "openai": "latest",
-    "@aws-sdk/client-bedrock-agent-runtime": "latest",
+    "@anthropic-ai/aws-sdk": "latest",
     "@biomejs/biome": "latest",
+    "dotenv": "^17.4.2",
+    "openai": "latest",
     "tsup": "latest",
+    "tsx": "^4.21.0",
     "typescript": "latest",
     "vitest": "latest"
   }

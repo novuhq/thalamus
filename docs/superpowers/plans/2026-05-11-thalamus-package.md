@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the `@novu/thalamus` npm package — a provider-agnostic wrapper for Claude Managed Agents, OpenAI Responses API, and AWS Bedrock Agents with a streaming-first interface.
+**Goal:** Build the `@novu/thalamus` npm package — a provider-agnostic wrapper for Claude Managed Agents and OpenAI Responses API, each with optional AWS authentication, with a streaming-first interface.
 
-**Architecture:** Stateless turn-based library. Each provider wraps its native SDK behind a common `Provider` interface (`stream()` + `send()`). Types grow incrementally — only defined when a provider actually needs them. Providers are tree-shakable via subpath exports.
+**Architecture:** Stateless turn-based library. Each provider wraps its native SDK behind a common `Provider` interface (`stream()` + `send()`). Types grow incrementally — only defined when a provider actually needs them. Providers are tree-shakable via subpath exports. AWS auth variants are built into each provider — not separate providers — because the API surface is identical, only authentication differs.
 
 **Tech Stack:** TypeScript (ES2022), tsup (dual CJS+ESM), vitest, Biome, pnpm. CI/CD and Changesets are out of scope — handled separately after the package is complete.
 
-**Approach:** One provider per phase. After Phase 2 you have a working `thalamus.anthropic()`. After Phase 3 you also have `thalamus.openai()`. After Phase 4 all three work. Types expand only as each new provider requires them — you see *why* each type exists.
+**Approach:** One provider per phase. After Phase 2 you have a working `thalamus.anthropic()` (with optional AWS auth via Claude Platform on AWS). After Phase 3 you also have `thalamus.openai()` (with optional AWS auth via Bedrock's OpenAI-compatible endpoint). Types expand only as each new provider requires them — you see *why* each type exists.
 
-**Out of scope:** Novu monorepo integration lives in a separate plan against the novu repo.
+**Out of scope:** Novu monorepo integration lives in a separate plan against the novu repo. AWS Bedrock Agents (AWS's own agent orchestration service using `InvokeAgentCommand`) is out of scope — it's a fundamentally different product category from managed AI agents and adds limited value as a wrapper.
 
 ---
 
@@ -21,7 +21,7 @@ src/
   index.ts                 # grows each phase
   types.ts                 # grows each phase — only what exists is defined
   errors.ts                # grows each phase
-  stream-utils.ts          # collectStream() in Phase 2, mapStream() in Phase 5
+  stream-utils.ts          # collectStream() in Phase 2, mapStream() in Phase 4
   anthropic/
     index.ts
     anthropic.provider.ts
@@ -30,18 +30,13 @@ src/
     index.ts
     openai.provider.ts
     openai.transformer.ts
-  bedrock/                 # added in Phase 4
-    index.ts
-    bedrock.provider.ts
-    bedrock.transformer.ts
 
 __tests__/
   anthropic/
     anthropic.transformer.test.ts
     anthropic.provider.test.ts
   openai/                  # added in Phase 3
-  bedrock/                 # added in Phase 4
-  smoke.test.ts            # added in Phase 5
+  smoke.test.ts            # added in Phase 4
 ```
 
 > **Note:** No `<provider>.types.ts` files. Provider-specific types are imported directly from vendor SDKs (peer dependencies). This eliminates type duplication and ensures compile-time safety when SDKs update.
@@ -55,13 +50,13 @@ __tests__/
 ### Task 1: Create all config files and install deps
 
 **Files:**
+
 - Create: `package.json`
 - Create: `tsconfig.json`
 - Create: `tsup.config.ts`
 - Create: `vitest.config.ts`
 - Create: `biome.json`
-
-- [ ] **Step 1: Create package.json**
+- **Step 1: Create package.json**
 
 ```json
 {
@@ -84,11 +79,6 @@ __tests__/
       "import": "./dist/openai/index.mjs",
       "require": "./dist/openai/index.cjs",
       "types": "./dist/openai/index.d.ts"
-    },
-    "./bedrock": {
-      "import": "./dist/bedrock/index.mjs",
-      "require": "./dist/bedrock/index.cjs",
-      "types": "./dist/bedrock/index.d.ts"
     }
   },
   "scripts": {
@@ -101,19 +91,19 @@ __tests__/
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@anthropic-ai/sdk": ">=0.30",
-    "openai": ">=4.70",
-    "@aws-sdk/client-bedrock-agent-runtime": ">=3.700"
+    "@anthropic-ai/sdk": ">=0.86",
+    "@anthropic-ai/aws-sdk": ">=0.86",
+    "openai": ">=4.87"
   },
   "peerDependenciesMeta": {
     "@anthropic-ai/sdk": { "optional": true },
-    "openai": { "optional": true },
-    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true }
+    "@anthropic-ai/aws-sdk": { "optional": true },
+    "openai": { "optional": true }
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "latest",
+    "@anthropic-ai/aws-sdk": "latest",
     "openai": "latest",
-    "@aws-sdk/client-bedrock-agent-runtime": "latest",
     "@biomejs/biome": "latest",
     "tsup": "latest",
     "typescript": "latest",
@@ -122,7 +112,7 @@ __tests__/
 }
 ```
 
-- [ ] **Step 2: Create tsconfig.json**
+- **Step 2: Create tsconfig.json**
 
 ```json
 {
@@ -145,7 +135,7 @@ __tests__/
 }
 ```
 
-- [ ] **Step 3: Create tsup.config.ts**
+- **Step 3: Create tsup.config.ts**
 
 ```typescript
 import { defineConfig } from 'tsup';
@@ -155,7 +145,6 @@ export default defineConfig({
     index: 'src/index.ts',
     'anthropic/index': 'src/anthropic/index.ts',
     'openai/index': 'src/openai/index.ts',
-    'bedrock/index': 'src/bedrock/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
@@ -165,7 +154,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Create vitest.config.ts**
+- **Step 4: Create vitest.config.ts**
 
 ```typescript
 import { defineConfig } from 'vitest/config';
@@ -175,7 +164,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 5: Create biome.json**
+- **Step 5: Create biome.json**
 
 ```json
 {
@@ -192,24 +181,25 @@ export default defineConfig({
 }
 ```
 
-- [ ] **Step 6: Install dependencies**
+- **Step 6: Install dependencies**
 
 Run: `pnpm install`
 Expected: `node_modules/` populated, lockfile created, no errors
 
-- [ ] **Step 7: Create stub entry points (tsup needs these to build)**
+- **Step 7: Create stub entry points (tsup needs these to build)**
 
-`src/index.ts`, `src/anthropic/index.ts`, `src/openai/index.ts`, `src/bedrock/index.ts` — all four:
+`src/index.ts`, `src/anthropic/index.ts`, `src/openai/index.ts` — all three:
+
 ```typescript
 export {};
 ```
 
-- [ ] **Step 8: Verify build works**
+- **Step 8: Verify build works**
 
 Run: `pnpm build`
-Expected: `dist/` created with `.mjs`, `.cjs`, `.d.ts` for all four entry points. No errors.
+Expected: `dist/` created with `.mjs`, `.cjs`, `.d.ts` for all three entry points. No errors.
 
-- [ ] **Step 9: Commit**
+- **Step 9: Commit**
 
 ```bash
 git add -A
@@ -220,33 +210,37 @@ git commit -m "chore: initialize @novu/thalamus package with toolchain"
 
 ## Phase 2: Anthropic Provider (complete, end-to-end)
 
-**Goal:** `thalamus.anthropic({ apiKey, agentId, environmentId }).stream({ messages })` works. This phase defines the minimal shared types needed — you'll see exactly why each one exists.
+**Goal:** `thalamus.anthropic({ apiKey, agentId, environmentId }).stream({ messages })` works — with optional AWS auth via Claude Platform on AWS. This phase defines the minimal shared types needed — you'll see exactly why each one exists.
 
 **What you'll understand after this phase:**
+
 - The `Provider` interface and why `stream()` returns `{ stream, response }` instead of just a stream
 - How `collectStream()` makes streaming providers work as request/response via `send()`
 - How a transformer isolates the format-conversion logic so it's independently testable
 - The Anthropic session lifecycle: create → open SSE stream → send user event → iterate events → break on idle
+- How AWS auth is a constructor-level concern — `AnthropicAws` extends `Anthropic`, so the rest of the provider is identical
 
 **How the Anthropic Managed Agents API works** (SDK beta header `managed-agents-2026-04-01` is set automatically):
+
 1. `client.beta.sessions.create({ agent: agentId, environment_id: environmentId })` → `{ id: 'sess_xxx' }`
 2. Open the SSE stream **before** sending the message (avoids a race condition): `client.beta.sessions.events.stream(sessionId)`
 3. Send the user turn: `client.beta.sessions.events.send(sessionId, { events: [{ type: 'user.message', content: [...] }] })`
 4. Iterate events until `session.status_idle` (turn complete) or `session.error`
 5. Archive when conversation is done: `client.beta.sessions.archive(sessionId)`
 
-**`sessionId`** maps to the Anthropic session ID. Absent = create new session. Present = resume existing session.
+`**sessionId`** maps to the Anthropic session ID. Absent = create new session. Present = resume existing session.
 
 ### Task 1: Define minimal shared types
 
 **Files:**
+
 - Create: `src/types.ts`
 - Create: `src/errors.ts`
 - Create: `src/stream-utils.ts`
 
-These are the *only* shared abstractions Phase 2 needs. Notice what's NOT here yet: no `history`, no `file` content parts, no `actionsRequired`, no `provider-event` — those come when a provider actually needs them.
+These are the *only* shared abstractions Phase 2 needs. Notice what's NOT here yet: no `history`, no `actionsRequired`, no `provider-event` — those come when a provider actually needs them.
 
-- [ ] **Step 1: Create src/types.ts**
+- **Step 1: Create src/types.ts**
 
 ```typescript
 export enum MessageRole {
@@ -255,11 +249,11 @@ export enum MessageRole {
   SYSTEM = 'system',
 }
 
-// Only content types Anthropic uses right now. `file` added in Phase 4 (Bedrock).
 export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mediaType: string }
-  | { type: 'image-url'; url: string };
+  | { type: 'image-url'; url: string }
+  | { type: 'file'; data: string; mediaType: string; name?: string };
 
 export interface Message {
   role: MessageRole;
@@ -284,10 +278,8 @@ export interface Response {
   sessionId?: string;
   finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
   usage?: Usage;
-  // `actionsRequired` added in Phase 4 (Bedrock returnControl)
 }
 
-// Stream parts Anthropic actually emits. More added in Phases 3–4.
 export type StreamPart =
   | { type: 'text-delta'; text: string }
   | { type: 'thinking'; text: string }
@@ -312,10 +304,10 @@ export interface Provider {
 }
 
 export const ANTHROPIC = 'anthropic' as const;
-// OPENAI and BEDROCK constants added in Phases 3 and 4
+// OPENAI constant added in Phase 3
 ```
 
-- [ ] **Step 2: Create src/errors.ts** (minimal — just the base class for now)
+- **Step 2: Create src/errors.ts** (minimal — just the base class for now)
 
 Full error hierarchy (ProviderAuthError etc.) added in Phase 3 when OpenAI needs distinct error types.
 
@@ -338,7 +330,7 @@ export class ThalamusError extends Error {
 }
 ```
 
-- [ ] **Step 3: Create src/stream-utils.ts** (`mapStream` added in Phase 5 when needed)
+- **Step 3: Create src/stream-utils.ts** (`mapStream` added in Phase 5 when needed)
 
 ```typescript
 import type { Response, StreamResult } from './types.js';
@@ -362,12 +354,13 @@ Each provider file imports the SDK types it needs inline. No `<provider>.types.t
 ### Task 3: Write failing transformer tests, then implement
 
 **Files:**
+
 - Create: `__tests__/anthropic/anthropic.transformer.test.ts`
 - Create: `src/anthropic/anthropic.transformer.ts`
 
 The transformer's job: convert `Message[]` → Anthropic content blocks. Tested independently of any HTTP call.
 
-- [ ] **Step 1: Write transformer tests**
+- **Step 1: Write transformer tests**
 
 ```typescript
 // __tests__/anthropic/anthropic.transformer.test.ts
@@ -422,12 +415,12 @@ describe('toContentBlocks', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- **Step 2: Run tests — expect FAIL**
 
 Run: `pnpm test __tests__/anthropic/`
 Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.transformer.js'`
 
-- [ ] **Step 3: Create src/anthropic/anthropic.transformer.ts**
+- **Step 3: Create src/anthropic/anthropic.transformer.ts**
 
 ```typescript
 import type {
@@ -466,10 +459,11 @@ export function toContentBlocks(content: Message['content']): ContentBlock[] {
 }
 ```
 
-- [ ] **Step 4: Run transformer tests — expect PASS**
+- **Step 4: Run transformer tests — expect PASS**
 
 Run: `pnpm test __tests__/anthropic/anthropic.transformer.test.ts`
 Expected:
+
 ```
 ✓ __tests__/anthropic/anthropic.transformer.test.ts (6 tests)
 Test Files  1 passed (1)
@@ -478,12 +472,13 @@ Test Files  1 passed (1)
 ### Task 4: Write failing provider tests, then implement
 
 **Files:**
+
 - Create: `__tests__/anthropic/anthropic.provider.test.ts`
 - Create: `src/anthropic/anthropic.provider.ts`
 
 The provider test mocks `@anthropic-ai/sdk`. Notice the mock mirrors the real API exactly — that's how you verify the provider calls the SDK correctly.
 
-- [ ] **Step 1: Write provider tests**
+- **Step 1: Write provider tests**
 
 ```typescript
 // __tests__/anthropic/anthropic.provider.test.ts
@@ -639,12 +634,12 @@ describe('error mapping', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- **Step 2: Run tests — expect FAIL**
 
 Run: `pnpm test __tests__/anthropic/anthropic.provider.test.ts`
 Expected: `FAIL — Cannot find module '../../src/anthropic/anthropic.provider.js'`
 
-- [ ] **Step 3: Create src/anthropic/anthropic.provider.ts**
+- **Step 3: Create src/anthropic/anthropic.provider.ts**
 
 ```typescript
 import Anthropic from '@anthropic-ai/sdk';
@@ -696,11 +691,30 @@ class AnthropicProvider implements Provider {
   private readonly agentId: string;
   private readonly environmentId: string;
 
-  constructor(config: { apiKey: string; agentId: string; environmentId: string; model?: string }) {
+  constructor(config: {
+    agentId: string;
+    environmentId: string;
+    model?: string;
+    // Direct Anthropic API auth
+    apiKey?: string;
+    // Claude Platform on AWS auth — uses @anthropic-ai/aws-sdk
+    awsRegion?: string;
+    awsWorkspaceId?: string;
+  }) {
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
-    this.client = new Anthropic({ apiKey: config.apiKey });
+
+    if (config.awsRegion) {
+      // AnthropicAws extends Anthropic — identical API surface, AWS SigV4 auth
+      const { AnthropicAws } = require('@anthropic-ai/aws-sdk');
+      this.client = new AnthropicAws({
+        awsRegion: config.awsRegion,
+        ...(config.awsWorkspaceId ? { awsWorkspaceId: config.awsWorkspaceId } : {}),
+      });
+    } else {
+      this.client = new Anthropic({ apiKey: config.apiKey! });
+    }
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -826,19 +840,22 @@ class AnthropicProvider implements Provider {
 }
 
 export function createAnthropicProvider(config: {
-  apiKey: string;
   agentId: string;
   environmentId: string;
   model?: string;
+  apiKey?: string;
+  awsRegion?: string;
+  awsWorkspaceId?: string;
 }): Provider {
   return new AnthropicProvider(config);
 }
 ```
 
-- [ ] **Step 4: Run provider tests — expect PASS**
+- **Step 4: Run provider tests — expect PASS**
 
 Run: `pnpm test __tests__/anthropic/anthropic.provider.test.ts`
 Expected:
+
 ```
 ✓ __tests__/anthropic/anthropic.provider.test.ts (6 tests)
 Test Files  1 passed (1)
@@ -847,17 +864,17 @@ Test Files  1 passed (1)
 ### Task 5: Wire up exports
 
 **Files:**
+
 - Modify: `src/anthropic/index.ts`
 - Modify: `src/index.ts`
-
-- [ ] **Step 1: Update src/anthropic/index.ts**
+- **Step 1: Update src/anthropic/index.ts**
 
 ```typescript
 export { createAnthropicProvider } from './anthropic.provider.js';
 export { toContentBlocks } from './anthropic.transformer.js';
 ```
 
-- [ ] **Step 2: Update src/index.ts**
+- **Step 2: Update src/index.ts**
 
 ```typescript
 export * from './types.js';
@@ -873,10 +890,11 @@ export const thalamus = {
 export { createAnthropicProvider };
 ```
 
-- [ ] **Step 3: Run all tests — expect PASS**
+- **Step 3: Run all tests — expect PASS**
 
 Run: `pnpm test`
 Expected:
+
 ```
 ✓ __tests__/anthropic/anthropic.transformer.test.ts (6 tests)
 ✓ __tests__/anthropic/anthropic.provider.test.ts (6 tests)
@@ -884,12 +902,12 @@ Test Files  2 passed (2)
 Tests  12 passed (12)
 ```
 
-- [ ] **Step 4: Verify build**
+- **Step 4: Verify build**
 
 Run: `pnpm build`
-Expected: No errors, `dist/` has `index.*`, `anthropic/index.*` with types. OpenAI and Bedrock entries build as empty stubs — that's fine.
+Expected: No errors, `dist/` has `index.`*, `anthropic/index.*` with types. OpenAI entry builds as empty stub — that's fine.
 
-- [ ] **Step 5: Commit**
+- **Step 5: Commit**
 
 ```bash
 git add -A
@@ -902,14 +920,17 @@ git commit -m "feat: add Anthropic (Claude Managed Agents) provider"
 
 ## Phase 3: OpenAI Provider
 
-**Goal:** `thalamus.openai({ apiKey, model }).stream({ messages })` works. You'll see what changes when a second provider joins: the types file expands, and the error hierarchy becomes worth splitting out.
+**Goal:** `thalamus.openai({ apiKey, model }).stream({ messages })` works — with optional AWS auth via Bedrock's OpenAI-compatible endpoint. You'll see what changes when a second provider joins: the types file expands, and the error hierarchy becomes worth splitting out.
 
 **What you'll understand after this phase:**
+
 - How a different session model (`previous_response_id` chaining vs Anthropic's explicit sessions) maps to the same `sessionId` interface
 - Why the `history` field was missing from Phase 2 — OpenAI needs it for seeding new conversations from prior context
 - Why the full error hierarchy (ProviderAuthError, ProviderRateLimitError, etc.) is worth having: OpenAI returns distinct error codes that map cleanly to these classes
+- How AWS auth variants are config-level concerns — the same provider class handles both direct API and AWS-hosted endpoints
 
 **How the OpenAI Responses API works:**
+
 - `openai.responses.create({ model, instructions, input, stream: true })` → AsyncIterable of typed events
 - For multi-turn: pass `previous_response_id: sessionId`. The `sessionId` in our interface = the `id` of the previous response, returned via the `response.created` event.
 - Key streaming events: `response.created` (gives us the new response ID), `response.output_text.delta` (text chunk), `response.completed` (final response + usage), `error`
@@ -918,19 +939,22 @@ git commit -m "feat: add Anthropic (Claude Managed Agents) provider"
 ### Task 1: Expand shared types and add error hierarchy
 
 **Files:**
+
 - Modify: `src/types.ts`
 - Modify: `src/errors.ts`
 
 You're about to write the OpenAI provider and will immediately need these. Adding them now — not speculatively but because you can see the concrete need.
 
-- [ ] **Step 1: Add `history` to RequestParams in src/types.ts**
+- **Step 1: Add `history` to RequestParams in src/types.ts**
 
 Add after the `messages` field:
+
 ```typescript
 history?: Message[];
 ```
 
 Verify `RequestParams` already has `history` (added during Phase 2):
+
 ```typescript
 export interface RequestParams {
   message: Message;
@@ -941,13 +965,14 @@ export interface RequestParams {
 ```
 
 Also add the `OPENAI` constant at the bottom of src/types.ts:
+
 ```typescript
 export const OPENAI = 'openai' as const;
 ```
 
-- [ ] **Step 2: Add error subclasses to src/errors.ts**
+- **Step 2: Add error subclasses to src/errors.ts**
 
-These map to the specific error codes OpenAI (and later Bedrock) return. The Novu worker uses `isRetryable` to decide whether to retry — these subclasses set it correctly.
+These map to the specific error codes providers return. The Novu worker uses `isRetryable` to decide whether to retry — these subclasses set it correctly.
 
 ```typescript
 // Append to src/errors.ts
@@ -984,7 +1009,7 @@ export class ProviderResponseError extends ThalamusError {
 }
 ```
 
-- [ ] **Step 3: Run existing Anthropic tests — still PASS**
+- **Step 3: Run existing Anthropic tests — still PASS**
 
 Run: `pnpm test`
 Expected: All 12 tests still pass. (Adding `history?` is backwards-compatible; adding error subclasses doesn't change Anthropic.)
@@ -996,10 +1021,10 @@ Expected: All 12 tests still pass. (Adding `history?` is backwards-compatible; a
 ### Task 3: Write failing transformer tests, then implement
 
 **Files:**
+
 - Create: `__tests__/openai/openai.transformer.test.ts`
 - Create: `src/openai/openai.transformer.ts`
-
-- [ ] **Step 1: Write transformer tests**
+- **Step 1: Write transformer tests**
 
 ```typescript
 // __tests__/openai/openai.transformer.test.ts
@@ -1062,12 +1087,12 @@ describe('openaiTransformer.toInput', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- **Step 2: Run tests — expect FAIL**
 
 Run: `pnpm test __tests__/openai/openai.transformer.test.ts`
 Expected: `FAIL — Cannot find module '../../src/openai/openai.transformer.js'`
 
-- [ ] **Step 3: Create src/openai/openai.transformer.ts**
+- **Step 3: Create src/openai/openai.transformer.ts**
 
 ```typescript
 import {
@@ -1106,10 +1131,11 @@ export const openaiTransformer = {
 };
 ```
 
-- [ ] **Step 4: Run transformer tests — expect PASS**
+- **Step 4: Run transformer tests — expect PASS**
 
 Run: `pnpm test __tests__/openai/openai.transformer.test.ts`
 Expected:
+
 ```
 ✓ __tests__/openai/openai.transformer.test.ts (5 tests)
 Test Files  1 passed (1)
@@ -1118,10 +1144,10 @@ Test Files  1 passed (1)
 ### Task 4: Write failing provider tests, then implement
 
 **Files:**
+
 - Create: `__tests__/openai/openai.provider.test.ts`
 - Create: `src/openai/openai.provider.ts`
-
-- [ ] **Step 1: Write provider tests**
+- **Step 1: Write provider tests**
 
 ```typescript
 // __tests__/openai/openai.provider.test.ts
@@ -1256,12 +1282,12 @@ describe('error handling', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
+- **Step 2: Run — expect FAIL**
 
 Run: `pnpm test __tests__/openai/openai.provider.test.ts`
 Expected: `FAIL — Cannot find module '../../src/openai/openai.provider.js'`
 
-- [ ] **Step 3: Create src/openai/openai.provider.ts**
+- **Step 3: Create src/openai/openai.provider.ts**
 
 ```typescript
 import OpenAI from 'openai';
@@ -1308,12 +1334,31 @@ class OpenAIProvider implements Provider {
   private readonly instructions?: string;
   private readonly tools?: OpenAIToolConfig[];
 
-  constructor(config: { apiKey: string; promptId?: string; instructions?: string; tools?: OpenAIToolConfig[]; model?: string }) {
+  constructor(config: {
+    promptId?: string;
+    instructions?: string;
+    tools?: OpenAIToolConfig[];
+    model?: string;
+    // Direct OpenAI API auth
+    apiKey?: string;
+    // OpenAI on AWS Bedrock auth — same OpenAI SDK with Bedrock endpoint + SigV4
+    awsRegion?: string;
+    awsBedrockModelId?: string; // e.g. 'us.openai.gpt-4o-2024-11-20'
+  }) {
     this.runtimeId = config.promptId ?? 'inline';
     this.model = config.model ?? 'gpt-4o';
     this.instructions = config.instructions;
     this.tools = config.tools;
-    this.client = new OpenAI({ apiKey: config.apiKey });
+
+    if (config.awsRegion) {
+      // Bedrock exposes an OpenAI-compatible endpoint — same SDK, different baseURL + AWS auth
+      this.client = new OpenAI({
+        baseURL: `https://bedrock-runtime.${config.awsRegion}.amazonaws.com/v1`,
+        apiKey: 'bedrock', // placeholder — actual auth is SigV4 via custom fetch
+      });
+    } else {
+      this.client = new OpenAI({ apiKey: config.apiKey! });
+    }
   }
 
   async send(params: RequestParams): Promise<Response> {
@@ -1402,20 +1447,23 @@ class OpenAIProvider implements Provider {
 }
 
 export function createOpenAIProvider(config: {
-  apiKey: string;
   promptId?: string;
   instructions?: string;
   tools?: OpenAIToolConfig[];
   model?: string;
+  apiKey?: string;
+  awsRegion?: string;
+  awsBedrockModelId?: string;
 }): Provider {
   return new OpenAIProvider(config);
 }
 ```
 
-- [ ] **Step 4: Run OpenAI provider tests — expect PASS**
+- **Step 4: Run OpenAI provider tests — expect PASS**
 
 Run: `pnpm test __tests__/openai/openai.provider.test.ts`
 Expected:
+
 ```
 ✓ __tests__/openai/openai.provider.test.ts (6 tests)
 Test Files  1 passed (1)
@@ -1424,17 +1472,17 @@ Test Files  1 passed (1)
 ### Task 5: Wire up exports
 
 **Files:**
+
 - Modify: `src/openai/index.ts`
 - Modify: `src/index.ts`
-
-- [ ] **Step 1: Update src/openai/index.ts**
+- **Step 1: Update src/openai/index.ts**
 
 ```typescript
 export { createOpenAIProvider } from './openai.provider.js';
 export { openaiTransformer } from './openai.transformer.js';
 ```
 
-- [ ] **Step 2: Update src/index.ts**
+- **Step 2: Update src/index.ts**
 
 ```typescript
 export * from './types.js';
@@ -1452,16 +1500,17 @@ export const thalamus = {
 export { createAnthropicProvider, createOpenAIProvider };
 ```
 
-- [ ] **Step 3: Run all tests — expect PASS**
+- **Step 3: Run all tests — expect PASS**
 
 Run: `pnpm test`
 Expected:
+
 ```
 Test Files  4 passed (4)
 Tests  23 passed (23)
 ```
 
-- [ ] **Step 4: Commit**
+- **Step 4: Commit**
 
 ```bash
 git add -A
@@ -1470,577 +1519,13 @@ git commit -m "feat: add OpenAI (Responses API) provider"
 
 ---
 
-## Phase 4: Bedrock Provider
-
-**Goal:** `thalamus.bedrock({ region, agentId, agentAliasId }).stream({ messages })` works. The shared types expand once more — you'll see what Bedrock specifically needs that neither Anthropic nor OpenAI required.
-
-**What you'll understand after this phase:**
-- Why `actionsRequired` wasn't in the types until now — it's Bedrock's `returnControl` (human-in-the-loop) that made this necessary
-- Why the `file` content part is added now — Bedrock accepts only text, so files degrade to text blocks
-- The difference between Bedrock's stateless model (caller generates UUID as session ID) vs Anthropic (server generates and owns session IDs) vs OpenAI (chains response IDs)
-
-**How AWS Bedrock InvokeAgent works:**
-- `new BedrockAgentRuntimeClient({ region, credentials? })` — credentials fall back to the default AWS credential chain if omitted
-- `new InvokeAgentCommand({ agentId, agentAliasId, sessionId, inputText, enableTrace? })`
-- `client.send(command)` → `{ completion: AsyncIterable }` where each item is: `{ chunk: { bytes: Uint8Array } }` (text), `{ returnControl: {...} }` (human-in-the-loop), or `{ trace: {...} }` (observability)
-- **`sessionId` is caller-managed.** When `params.sessionId` is absent, generate a UUID and return it in the response
-- `inputText` is a single string — Bedrock agents configure their own system prompt at creation time
-
-### Task 1: Expand shared types for Bedrock
-
-**Files:**
-- Modify: `src/types.ts`
-
-- [ ] **Step 1: Add `file` content part, `actionsRequired`, `provider-event` stream part**
-
-The `file` content part: Bedrock only accepts text, so file data degrades to a text block in the Bedrock transformer. But the content part type belongs in shared types so callers can send files regardless of provider.
-
-`actionsRequired`: Bedrock's `returnControl` tells the caller "the agent needs human approval to proceed." This maps to `finishReason: 'requires-action'` + a list of `actionsRequired`.
-
-`provider-event`: Bedrock emits trace events that don't map to normalized types. The `provider-event` escape hatch forwards them.
-
-Add `file` to `ContentPart`:
-```typescript
-export type ContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image'; data: string; mediaType: string }
-  | { type: 'image-url'; url: string }
-  | { type: 'file'; data: string; mediaType: string; name?: string };  // ← new
-```
-
-Add `ActionRequired` and `actionsRequired` to response:
-```typescript
-export interface ActionRequired {
-  type: 'tool-confirmation';
-  toolUseId: string;
-  toolName: string;
-  input?: Record<string, unknown>;
-}
-
-export interface Response {
-  content: string;
-  sessionId?: string;
-  finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'other';
-  usage?: Usage;
-  actionsRequired?: ActionRequired[];  // ← new
-}
-```
-
-Add `provider-event` to `StreamPart`:
-```typescript
-export type StreamPart =
-  | { type: 'text-delta'; text: string }
-  | { type: 'thinking'; text: string }
-  | { type: 'tool-use-start'; toolName: string; toolUseId: string; input?: Record<string, unknown> }
-  | { type: 'tool-use-result'; toolUseId: string; output?: string }
-  | { type: 'stream-start'; sessionId?: string }
-  | { type: 'finish'; response: Response }
-  | { type: 'error'; error: Error }
-  | { type: 'provider-event'; provider: string; event: string; data: Record<string, unknown> };  // ← new
-```
-
-Add `BEDROCK` constant:
-```typescript
-export const BEDROCK = 'bedrock' as const;
-```
-
-- [ ] **Step 2: Run all existing tests — still PASS**
-
-Run: `pnpm test`
-Expected: 23 tests still pass. (All changes are additive.)
-
-### Task 2: ~~Create Bedrock-specific types~~ (REMOVED)
-
-**Decision:** Same as other providers — types are imported directly from `@aws-sdk/client-bedrock-agent-runtime`. The provider imports `InvokeAgentCommandOutput` and related types inline.
-
-### Task 3: Write failing transformer tests, then implement
-
-**Files:**
-- Create: `__tests__/bedrock/bedrock.transformer.test.ts`
-- Create: `src/bedrock/bedrock.transformer.ts`
-
-- [ ] **Step 1: Write transformer tests**
-
-```typescript
-// __tests__/bedrock/bedrock.transformer.test.ts
-import { describe, expect, it } from 'vitest';
-import { bedrockTransformer } from '../../src/bedrock/bedrock.transformer.js';
-import { MessageRole } from '../../src/types.js';
-import type { Message } from '../../src/types.js';
-
-describe('bedrockTransformer.toInput', () => {
-  it('returns a single-element array with USER message text', () => {
-    const messages: Message[] = [
-      { role: MessageRole.USER, content: 'Hello Bedrock' },
-    ];
-    expect(bedrockTransformer.toInput(messages)).toEqual(['Hello Bedrock']);
-  });
-
-  it('prepends SYSTEM messages as context', () => {
-    const messages: Message[] = [
-      { role: MessageRole.SYSTEM, content: 'You are a billing assistant.' },
-      { role: MessageRole.USER, content: 'What is my balance?' },
-    ];
-    const [inputText] = bedrockTransformer.toInput(messages);
-    expect(inputText).toContain('[System]: You are a billing assistant.');
-    expect(inputText).toContain('What is my balance?');
-  });
-
-  it('skips ASSISTANT messages', () => {
-    const messages: Message[] = [
-      { role: MessageRole.ASSISTANT, content: 'Previous response' },
-      { role: MessageRole.USER, content: 'Next question' },
-    ];
-    expect(bedrockTransformer.toInput(messages)).toEqual(['Next question']);
-  });
-
-  it('extracts only text parts from content arrays (images become empty, files become text)', () => {
-    const messages: Message[] = [
-      {
-        role: MessageRole.USER,
-        content: [
-          { type: 'text', text: 'describe this: ' },
-          { type: 'file', data: 'file contents', mediaType: 'text/plain', name: 'notes.txt' },
-        ],
-      },
-    ];
-    const [inputText] = bedrockTransformer.toInput(messages);
-    expect(inputText).toContain('describe this:');
-    expect(inputText).toContain('[File notes.txt]');
-  });
-});
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `pnpm test __tests__/bedrock/bedrock.transformer.test.ts`
-Expected: `FAIL — Cannot find module '../../src/bedrock/bedrock.transformer.js'`
-
-- [ ] **Step 3: Create src/bedrock/bedrock.transformer.ts**
-
-```typescript
-import {
-  MessageRole,
-  type Message,
-  type Response,
-} from '../types.js';
-
-function messageToText(msg: Message): string {
-  if (typeof msg.content === 'string') return msg.content;
-
-  return msg.content.map((part) => {
-    switch (part.type) {
-      case 'text': return part.text;
-      case 'file': return `[File ${part.name ?? 'attachment'}]: ${part.data}`;
-      default: return ''; // images not supported as text; omit
-    }
-  }).filter(Boolean).join(' ');
-}
-
-export const bedrockTransformer = {
-  toInput(messages: Message[]): string[] {
-    const parts: string[] = [];
-    for (const msg of messages) {
-      if (msg.role === MessageRole.ASSISTANT) continue;
-      parts.push(
-        msg.role === MessageRole.SYSTEM
-          ? `[System]: ${messageToText(msg)}`
-          : messageToText(msg),
-      );
-    }
-    return [parts.join('\n').trim()];
-  },
-
-  toResponse(resp: unknown): Response {
-    const r = resp as { content: string; sessionId?: string; finishReason?: Response['finishReason'] };
-    return { content: r.content, sessionId: r.sessionId, finishReason: r.finishReason ?? 'stop' };
-  },
-};
-```
-
-- [ ] **Step 4: Run transformer tests — expect PASS**
-
-Run: `pnpm test __tests__/bedrock/bedrock.transformer.test.ts`
-Expected:
-```
-✓ __tests__/bedrock/bedrock.transformer.test.ts (4 tests)
-Test Files  1 passed (1)
-```
-
-### Task 4: Write failing provider tests, then implement
-
-**Files:**
-- Create: `__tests__/bedrock/bedrock.provider.test.ts`
-- Create: `src/bedrock/bedrock.provider.ts`
-
-- [ ] **Step 1: Write provider tests**
-
-```typescript
-// __tests__/bedrock/bedrock.provider.test.ts
-import {
-  BedrockAgentRuntimeClient,
-  InvokeAgentCommand,
-} from '@aws-sdk/client-bedrock-agent-runtime';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProviderAuthError } from '../../src/errors.js';
-import { createBedrockProvider } from '../../src/bedrock/bedrock.provider.js';
-import { collectStream } from '../../src/stream-utils.js';
-
-vi.mock('@aws-sdk/client-bedrock-agent-runtime');
-
-const mockSend = vi.fn();
-
-function makeCompletion(events: object[]) {
-  return { completion: (async function* () { for (const e of events) yield e; })() };
-}
-
-beforeEach(() => {
-  vi.mocked(BedrockAgentRuntimeClient).mockImplementation(
-    () => ({ send: mockSend }) as unknown as BedrockAgentRuntimeClient,
-  );
-  vi.mocked(InvokeAgentCommand).mockImplementation(
-    (params) => ({ input: params }) as unknown as InvokeAgentCommand,
-  );
-});
-
-afterEach(() => vi.clearAllMocks());
-
-const config = { region: 'us-east-1', agentId: 'ABCDEF123', agentAliasId: 'TSTALIASID' };
-
-describe('createBedrockProvider', () => {
-  it('sets provider = bedrock and runtimeId = agentId', () => {
-    const rt = createBedrockProvider(config);
-    expect(rt.provider).toBe('bedrock');
-    expect(rt.runtimeId).toBe('ABCDEF123');
-  });
-});
-
-describe('stream — new session', () => {
-  it('generates a sessionId, streams chunks, resolves response', async () => {
-    mockSend.mockResolvedValue(
-      makeCompletion([
-        { chunk: { bytes: new TextEncoder().encode('Hello ') } },
-        { chunk: { bytes: new TextEncoder().encode('world') } },
-      ]),
-    );
-
-    const result = await createBedrockProvider(config).stream({
-      message: { role: 'user', content: 'Hi' } as never,
-    });
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
-
-    expect(parts.find((p) => p.type === 'stream-start')).toBeDefined();
-    expect(parts.filter((p) => p.type === 'text-delta')).toHaveLength(2);
-
-    const response = await result.response;
-    expect(response.content).toBe('Hello world');
-    expect(response.sessionId).toBeDefined();
-  });
-});
-
-describe('stream — resume session', () => {
-  it('passes the provided sessionId to InvokeAgentCommand', async () => {
-    mockSend.mockResolvedValue(
-      makeCompletion([{ chunk: { bytes: new TextEncoder().encode('OK') } }]),
-    );
-
-    await collectStream(
-      await createBedrockProvider(config).stream({
-        message: { role: 'user', content: 'next' } as never,
-        sessionId: 'my-uuid',
-      }),
-    );
-
-    expect(vi.mocked(InvokeAgentCommand).mock.calls[0][0].sessionId).toBe('my-uuid');
-  });
-});
-
-describe('returnControl → requires-action', () => {
-  it('sets finishReason = requires-action and populates actionsRequired', async () => {
-    mockSend.mockResolvedValue(
-      makeCompletion([
-        {
-          returnControl: {
-            invocationId: 'inv_abc',
-            invocationInputs: [
-              {
-                functionInvocationInput: {
-                  actionGroup: 'MyGroup',
-                  function: 'myFn',
-                  parameters: [{ name: 'key', type: 'string', value: 'val' }],
-                },
-              },
-            ],
-          },
-        },
-      ]),
-    );
-
-    const result = await createBedrockProvider(config).stream({
-      message: { role: 'user', content: 'do it' } as never,
-    });
-    await collectStream(result);
-    const response = await result.response;
-
-    expect(response.finishReason).toBe('requires-action');
-    expect(response.actionsRequired).toHaveLength(1);
-    expect(response.actionsRequired?.[0].type).toBe('tool-confirmation');
-  });
-});
-
-describe('error handling', () => {
-  it('maps AccessDeniedException to ProviderAuthError', async () => {
-    const err = Object.assign(new Error('Access denied'), { name: 'AccessDeniedException' });
-    mockSend.mockRejectedValue(err);
-
-    const result = await createBedrockProvider(config).stream({
-      message: { role: 'user', content: 'x' } as never,
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
-
-    expect((parts.find((p) => p.type === 'error') as any)?.error).toBeInstanceOf(ProviderAuthError);
-  });
-});
-```
-
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `pnpm test __tests__/bedrock/bedrock.provider.test.ts`
-Expected: `FAIL — Cannot find module '../../src/bedrock/bedrock.provider.js'`
-
-- [ ] **Step 3: Create src/bedrock/bedrock.provider.ts**
-
-```typescript
-import {
-  BedrockAgentRuntimeClient,
-  InvokeAgentCommand,
-} from '@aws-sdk/client-bedrock-agent-runtime';
-import { randomUUID } from 'node:crypto';
-import {
-  ProviderAuthError,
-  ProviderRateLimitError,
-  ProviderResponseError,
-  ProviderUnavailableError,
-} from '../errors.js';
-import { collectStream } from '../stream-utils.js';
-import {
-  BEDROCK,
-  type ActionRequired,
-  type RequestParams,
-  type Provider,
-  type Response,
-  type StreamPart,
-  type StreamResult,
-} from '../types.js';
-import { bedrockTransformer } from './bedrock.transformer.js';
-import type { BedrockCompletionEvent } from './bedrock.types.js';
-
-function mapError(error: unknown, provider: string): Error {
-  const name = (error as { name?: string })?.name ?? '';
-  const msg = error instanceof Error ? error.message : String(error);
-  if (name === 'AccessDeniedException' || name === 'UnauthorizedException') {
-    return new ProviderAuthError(msg, { provider, cause: error });
-  }
-  if (name === 'ThrottlingException' || name === 'ServiceQuotaExceededException') {
-    return new ProviderRateLimitError(msg, { provider, cause: error });
-  }
-  if (name === 'InternalServerException' || name === 'ServiceUnavailableException') {
-    return new ProviderUnavailableError(msg, { provider, cause: error });
-  }
-  return new ProviderResponseError(msg, { provider, cause: error });
-}
-
-class BedrockProvider implements Provider {
-  readonly provider = BEDROCK;
-  readonly runtimeId: string;
-
-  private readonly client: BedrockAgentRuntimeClient;
-  private readonly agentId: string;
-  private readonly agentAliasId: string;
-  private readonly enableTrace: boolean;
-  private readonly memoryId?: string;
-
-  constructor(config: { region: string; agentId: string; agentAliasId: string; credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }; enableTrace?: boolean; memoryId?: string }) {
-    this.agentId = config.agentId;
-    this.agentAliasId = config.agentAliasId;
-    this.runtimeId = config.agentId;
-    this.enableTrace = config.enableTrace ?? true;
-    this.memoryId = config.memoryId;
-    this.client = new BedrockAgentRuntimeClient({
-      region: config.region,
-      ...(config.credentials ? { credentials: config.credentials } : {}),
-    });
-  }
-
-  async send(params: RequestParams): Promise<Response> {
-    return collectStream(await this.stream(params));
-  }
-
-  async stream(params: RequestParams): Promise<StreamResult> {
-    let resolveResponse!: (r: Response) => void;
-    let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<Response>((res, rej) => {
-      resolveResponse = res;
-      rejectResponse = rej;
-    });
-    return { stream: this.runStream(params, resolveResponse, rejectResponse), response: responsePromise };
-  }
-
-  private async *runStream(
-    params: RequestParams,
-    resolveResponse: (r: Response) => void,
-    rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<StreamPart> {
-    try {
-      const sessionId = params.sessionId ?? randomUUID();
-
-      // When resuming, Bedrock session already has history.
-      // When starting fresh, prepend history to give the agent context.
-      const allMessages = params.sessionId
-        ? params.messages
-        : [...(params.history ?? []), ...params.messages];
-
-      const [inputText] = bedrockTransformer.toInput(allMessages);
-
-      yield { type: 'stream-start', sessionId };
-
-      const command = new InvokeAgentCommand({
-        agentId: this.agentId,
-        agentAliasId: this.agentAliasId,
-        sessionId,
-        inputText,
-        enableTrace: this.enableTrace,
-        ...(this.memoryId ? { memoryId: this.memoryId } : {}),
-        ...(params.providerOptions ?? {}),
-      });
-
-      const sdkResponse = await this.client.send(command);
-      const decoder = new TextDecoder('utf-8');
-      let accumulatedContent = '';
-      let finishReason: Response['finishReason'] = 'stop';
-      const actionsRequired: ActionRequired[] = [];
-
-      for await (const rawEvent of sdkResponse.completion as AsyncIterable<BedrockCompletionEvent>) {
-        if ('chunk' in rawEvent && rawEvent.chunk?.bytes) {
-          const text = decoder.decode(rawEvent.chunk.bytes);
-          accumulatedContent += text;
-          yield { type: 'text-delta', text };
-        } else if ('returnControl' in rawEvent && rawEvent.returnControl) {
-          finishReason = 'requires-action';
-          const rc = rawEvent.returnControl;
-          for (const inv of rc.invocationInputs ?? []) {
-            if (inv.functionInvocationInput) {
-              const fi = inv.functionInvocationInput;
-              actionsRequired.push({
-                type: 'tool-confirmation',
-                toolUseId: rc.invocationId,
-                toolName: `${fi.actionGroup}.${fi.function}`,
-                input: Object.fromEntries((fi.parameters ?? []).map((p) => [p.name, p.value])),
-              });
-            }
-          }
-        } else if ('trace' in rawEvent) {
-          yield { type: 'provider-event', provider: BEDROCK, event: 'trace', data: rawEvent.trace as Record<string, unknown> };
-        }
-      }
-
-      const response: Response = {
-        content: accumulatedContent,
-        sessionId,
-        finishReason,
-        actionsRequired: actionsRequired.length > 0 ? actionsRequired : undefined,
-      };
-      yield { type: 'finish', response };
-      resolveResponse(response);
-    } catch (err) {
-      const mapped = mapError(err, BEDROCK) as Error;
-      yield { type: 'error', error: mapped };
-      rejectResponse(mapped);
-    }
-  }
-}
-
-export function createBedrockProvider(config: {
-  region: string;
-  agentId: string;
-  agentAliasId: string;
-  credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
-  enableTrace?: boolean;
-  memoryId?: string;
-}): Provider {
-  return new BedrockProvider(config);
-}
-```
-
-- [ ] **Step 4: Run Bedrock provider tests — expect PASS**
-
-Run: `pnpm test __tests__/bedrock/bedrock.provider.test.ts`
-Expected:
-```
-✓ __tests__/bedrock/bedrock.provider.test.ts (5 tests)
-Test Files  1 passed (1)
-```
-
-### Task 5: Wire up exports
-
-**Files:**
-- Modify: `src/bedrock/index.ts`
-- Modify: `src/index.ts`
-
-- [ ] **Step 1: Update src/bedrock/index.ts**
-
-```typescript
-export { createBedrockProvider } from './bedrock.provider.js';
-export { bedrockTransformer } from './bedrock.transformer.js';
-```
-
-- [ ] **Step 2: Finalize src/index.ts with all three providers**
-
-```typescript
-export * from './types.js';
-export * from './errors.js';
-export * from './stream-utils.js';
-
-import { createAnthropicProvider } from './anthropic/index.js';
-import { createBedrockProvider } from './bedrock/index.js';
-import { createOpenAIProvider } from './openai/index.js';
-
-export const thalamus = {
-  anthropic: createAnthropicProvider,
-  openai: createOpenAIProvider,
-  bedrock: createBedrockProvider,
-} as const;
-
-export { createAnthropicProvider, createBedrockProvider, createOpenAIProvider };
-```
-
-- [ ] **Step 3: Run all tests — expect PASS**
-
-Run: `pnpm test`
-Expected:
-```
-Test Files  6 passed (6)
-Tests  38 passed (38)
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add -A
-git commit -m "feat: add AWS Bedrock Agents provider"
-```
-
----
-
-## Phase 5: Polish & Build Verification
+## Phase 4: Polish & Build Verification
 
 **Goal:** Fill remaining spec gaps, add `mapStream()`, verify the build output, and add smoke tests.
 
 **What gets added here:**
-- `mapStream()` in stream-utils — now that all three providers exist, it's clear this is generally useful
+
+- `mapStream()` in stream-utils — now that both providers exist, it's clear this is generally useful
 - Remaining `Message` fields (`createdAt`)
 - Smoke tests verifying all subpath exports
 
@@ -2049,10 +1534,10 @@ git commit -m "feat: add AWS Bedrock Agents provider"
 ### Task 1: Add mapStream and createdAt
 
 **Files:**
+
 - Modify: `src/stream-utils.ts`
 - Modify: `src/types.ts`
-
-- [ ] **Step 1: Add mapStream() to src/stream-utils.ts**
+- **Step 1: Add mapStream() to src/stream-utils.ts**
 
 ```typescript
 import type { Response, StreamPart, StreamResult } from './types.js';
@@ -2077,9 +1562,10 @@ export async function* mapStream<T>(
 }
 ```
 
-- [ ] **Step 2: Add createdAt to src/types.ts**
+- **Step 2: Add createdAt to src/types.ts**
 
 Add `createdAt` to `Message`:
+
 ```typescript
 export interface Message {
   role: MessageRole;
@@ -2088,7 +1574,7 @@ export interface Message {
 }
 ```
 
-- [ ] **Step 3: Run all tests — expect PASS**
+- **Step 3: Run all tests — expect PASS**
 
 Run: `pnpm test`
 Expected: All tests still pass.
@@ -2096,20 +1582,19 @@ Expected: All tests still pass.
 ### Task 2: Smoke tests and build verification
 
 **Files:**
-- Create: `__tests__/smoke.test.ts`
 
-- [ ] **Step 1: Create smoke tests**
+- Create: `__tests__/smoke.test.ts`
+- **Step 1: Create smoke tests**
 
 ```typescript
 // __tests__/smoke.test.ts
 import { describe, expect, it } from 'vitest';
 
 describe('root export', () => {
-  it('exports thalamus with all three factory functions', async () => {
+  it('exports thalamus with both factory functions', async () => {
     const { thalamus } = await import('../src/index.js');
     expect(typeof thalamus.anthropic).toBe('function');
     expect(typeof thalamus.openai).toBe('function');
-    expect(typeof thalamus.bedrock).toBe('function');
   });
 
   it('exports MessageRole enum', async () => {
@@ -2120,10 +1605,9 @@ describe('root export', () => {
   });
 
   it('exports provider constants', async () => {
-    const { ANTHROPIC, OPENAI, BEDROCK } = await import('../src/index.js');
+    const { ANTHROPIC, OPENAI } = await import('../src/index.js');
     expect(ANTHROPIC).toBe('anthropic');
     expect(OPENAI).toBe('openai');
-    expect(BEDROCK).toBe('bedrock');
   });
 
   it('exports error classes with correct isRetryable', async () => {
@@ -2145,44 +1629,40 @@ describe('subpath exports', () => {
     expect(typeof createOpenAIProvider).toBe('function');
     expect(typeof openaiTransformer.toInput).toBe('function');
   });
-
-  it('bedrock subpath exports factory and transformer', async () => {
-    const { createBedrockProvider, bedrockTransformer } = await import('../src/bedrock/index.js');
-    expect(typeof createBedrockProvider).toBe('function');
-    expect(typeof bedrockTransformer.toInput).toBe('function');
-  });
 });
 ```
 
-- [ ] **Step 2: Run smoke tests**
+- **Step 2: Run smoke tests**
 
 Run: `pnpm test __tests__/smoke.test.ts`
 Expected:
+
 ```
-✓ __tests__/smoke.test.ts (7 tests)
+✓ __tests__/smoke.test.ts (5 tests)
 Test Files  1 passed (1)
 ```
 
-- [ ] **Step 3: Run typecheck**
+- **Step 3: Run typecheck**
 
 Run: `pnpm typecheck`
 Expected: No errors
 
-- [ ] **Step 4: Run full build**
+- **Step 4: Run full build**
 
 Run: `pnpm build`
-Expected: `dist/` with all 12 files (3 formats × 4 entry points). No errors.
+Expected: `dist/` with all 9 files (3 formats × 3 entry points). No errors.
 
-- [ ] **Step 5: Run full test suite**
+- **Step 5: Run full test suite**
 
 Run: `pnpm test`
 Expected:
+
 ```
-Test Files  7 passed (7)
-Tests  45 passed (45)
+Test Files  5 passed (5)
+Tests  28 passed (28)
 ```
 
-- [ ] **Step 6: Final commit**
+- **Step 6: Final commit**
 
 ```bash
 git add -A
@@ -2195,9 +1675,11 @@ git commit -m "feat: add mapStream, createdAt, and build verification"
 
 This table shows how `src/types.ts` grew — each addition motivated by a concrete provider need, not speculation.
 
-| Addition | Phase | Why |
-|----------|-------|-----|
-| `MessageRole`, `Message`, `RequestParams` (messages + sessionId), `Response` (content + finishReason), stream parts (text-delta, thinking, tool-use, stream-start, finish, error), `StreamResult`, `Provider`, `ANTHROPIC` | 2 | Minimum needed for Anthropic |
-| `history` on params, `OPENAI`, error subclasses | 3 | OpenAI history seeding + richer error codes |
-| `file` content part, `actionsRequired` on response, `ActionRequired`, `provider-event` stream part, `BEDROCK` | 4 | Bedrock file fallback, returnControl, trace events |
-| `createdAt` on messages, `mapStream()` | 5 | Polish — now that all three exist, patterns are clear |
+
+| Addition                                                                                                                                                                                                                                                          | Phase | Why                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---------------------------------------------------- |
+| `MessageRole`, `ContentPart` (text, image, image-url, file), `Message`, `RequestParams` (messages + sessionId), `Response` (content + finishReason), stream parts (text-delta, thinking, tool-use, stream-start, finish, error), `StreamResult`, `Provider`, `ANTHROPIC` | 2     | Minimum needed for Anthropic                         |
+| `history` on params, `OPENAI`, error subclasses                                                                                                                                                                                                                   | 3     | OpenAI history seeding + richer error codes          |
+| `createdAt` on messages, `mapStream()`                                                                                                                                                                                                                             | 4     | Polish — now that both providers exist, patterns are clear |
+
+

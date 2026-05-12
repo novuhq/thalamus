@@ -27,7 +27,7 @@ Users increasingly build agents on managed platforms — Claude Managed Agents, 
 Build `@novu/thalamus` — a standalone open-source package (separate repository: `novuhq/thalamus`) that:
 
 1. Provides a provider-agnostic interface for "message in → streamed response out"
-2. Ships with Claude Managed Agents and OpenAI (Responses API) as initial providers
+2. Ships with Claude Managed Agents and OpenAI (Responses API) as initial providers, each with optional AWS authentication
 3. Plugs into the existing Agent Conversations architecture as an alternative to the bridge runtime
 4. Published on npm as `@novu/thalamus`
 
@@ -39,25 +39,27 @@ Build `@novu/thalamus` — a standalone open-source package (separate repository
 - [@codewithdan/agent-sdk-core](https://www.npmjs.com/package/@codewithdan/agent-sdk-core) — event normalization pattern inspiration
 - [OpenAI Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) — agentic loop with built-in tools, remote MCP, and server-managed conversations
 - [OpenAI Conversations API](https://developers.openai.com/api/docs/guides/conversation-state) — server-managed multi-turn state (replaces Threads)
-- [Amazon Bedrock Agents — InvokeAgent API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html) — caller-managed sessions, return-control for human-in-the-loop, knowledge base citations, IAM-based auth
-- [Amazon Bedrock Agents — How it works](https://docs.aws.amazon.com/bedrock/latest/userguide/agents-how.html) — pre-processing, orchestration, post-processing pipeline with trace events
+- [Claude Platform on AWS](https://platform.claude.com/docs/en/build-with-claude/claude-platform-on-aws) — full native Anthropic API via AWS auth (SigV4), same API surface as direct Anthropic API
+- [Amazon Bedrock OpenAI-compatible API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-openai.html) — OpenAI Responses API via Bedrock endpoint with AWS auth
 
 ---
 
 ## 2. Design Decisions
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Package location | Standalone repo `novuhq/thalamus`, published as `@novu/thalamus` | Clean public API, zero Novu internal leakage. Own release cadence, CI, and issue tracking. Novu monorepo consumes it as an npm dependency. |
-| Core scope | Conversation turn only | Lifecycle management (create/configure/delete agents on provider platforms) varies wildly across providers. Belongs in Novu API layer. |
-| Streaming | Streaming-first, consumable as request/response | Most providers support streaming. Interface always returns a stream + a `response` promise for simple consumption. |
-| Tool use | Opaque — managed platforms own their tools | Managed agent platforms configure tools at agent creation time or via stored config, not per-request. Unlike raw LLM SDKs, this package doesn't need tool definitions. Stream events report what tools the agent used. |
-| Multimodal | `content` supports text or content parts array | Subscribers send images, screenshots, files via chat channels. Both Claude sessions and OpenAI conversations accept multimodal content natively. |
-| Session ID | First-class field on params and response | Most important state for multi-turn managed agents. Explicit rather than buried in `providerOptions`. Inspired by agent-sdk-core's `resumeSessionId`. Note: some providers (Bedrock) require caller-generated session IDs — the provider implementation handles this internally, generating a UUID when `sessionId` is absent and returning it in the response. |
-| History management | Caller passes current turn + optional history; package is stateless | Novu already owns conversation history via ConversationActivity. Separating `messages` (current turn) from `history` (prior context) mirrors the internal data flow and matches managed agent APIs that only expect the new message per turn. |
-| Initial providers | Anthropic (Claude Managed Agents) + OpenAI (Responses API) + AWS Bedrock Agents | Three architecturally different managed agent platforms. Claude: session-based SSE. OpenAI: conversations+responses. Bedrock: caller-managed sessions with return-control. Covers both API-key and IAM-based auth, validating the abstraction across independent and cloud-native providers. |
-| Integration point | Managed runtime calls `HandleAgentReply` use case directly | No unnecessary HTTP round-trip. Reply use case already handles persistence, delivery, signals. |
-| Naming | `thalamus` (package) / `AgentRuntime*` (internal types) | Named after the brain's relay center — routes inputs to the right processing region. Internal types keep descriptive `AgentRuntime*` prefix for code clarity. |
+
+| Decision           | Choice                                                                          | Rationale                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package location   | Standalone repo `novuhq/thalamus`, published as `@novu/thalamus`                | Clean public API, zero Novu internal leakage. Own release cadence, CI, and issue tracking. Novu monorepo consumes it as an npm dependency.                                                                                                                                                                                                                      |
+| Core scope         | Conversation turn only                                                          | Lifecycle management (create/configure/delete agents on provider platforms) varies wildly across providers. Belongs in Novu API layer.                                                                                                                                                                                                                          |
+| Streaming          | Streaming-first, consumable as request/response                                 | Most providers support streaming. Interface always returns a stream + a `response` promise for simple consumption.                                                                                                                                                                                                                                              |
+| Tool use           | Opaque — managed platforms own their tools                                      | Managed agent platforms configure tools at agent creation time or via stored config, not per-request. Unlike raw LLM SDKs, this package doesn't need tool definitions. Stream events report what tools the agent used.                                                                                                                                          |
+| Multimodal         | `content` supports text or content parts array                                  | Subscribers send images, screenshots, files via chat channels. Both Claude sessions and OpenAI conversations accept multimodal content natively.                                                                                                                                                                                                                |
+| Session ID         | First-class field on params and response                                        | Most important state for multi-turn managed agents. Explicit rather than buried in `providerOptions`. Inspired by agent-sdk-core's `resumeSessionId`.                                                                                                                                                                                                          |
+| History management | Caller passes current turn + optional history; package is stateless             | Novu already owns conversation history via ConversationActivity. Separating `messages` (current turn) from `history` (prior context) mirrors the internal data flow and matches managed agent APIs that only expect the new message per turn.                                                                                                                   |
+| Initial providers  | Anthropic (Claude Managed Agents) + OpenAI (Responses API), each with optional AWS auth | Two managed agent platforms with distinct session models. Claude: session-based SSE. OpenAI: conversations+responses. Each supports direct API-key auth and AWS auth (Claude Platform on AWS via `@anthropic-ai/aws-sdk`, OpenAI via Bedrock's OpenAI-compatible endpoint). AWS auth is a constructor-level config, not a separate provider.                    |
+| Integration point  | Managed runtime calls `HandleAgentReply` use case directly                      | No unnecessary HTTP round-trip. Reply use case already handles persistence, delivery, signals.                                                                                                                                                                                                                                                                  |
+| Naming             | `thalamus` (package) / `AgentRuntime*` (internal types)                         | Named after the brain's relay center — routes inputs to the right processing region. Internal types keep descriptive `AgentRuntime*` prefix for code clarity.                                                                                                                                                                                                   |
+
 
 ---
 
@@ -79,14 +81,13 @@ interface AgentRuntimeProvider {
 // String constants for built-in providers (extensible — community providers use any string)
 const ANTHROPIC = 'anthropic' as const;
 const OPENAI = 'openai' as const;
-const BEDROCK = 'bedrock' as const;
 ```
 
 `provider` is a `string` rather than an enum so that community providers can set any value without modifying the package source. Built-in providers export string constants for type safety.
 
 `send` returns the full response. `stream` returns an async iterable for progressive consumption. Both accept the same input. Providers that only support streaming can implement `send` by collecting the stream internally — `stream-utils.ts` provides a `collectStream()` helper for this.
 
-`endSession` is optional — providers with server-side sessions (Claude archives sessions, Bedrock ends sessions, OpenAI deletes conversations) implement it to clean up when a conversation is resolved. Called by the worker on conversation resolve.
+`endSession` is optional — providers with server-side sessions (Claude archives sessions, OpenAI deletes conversations) implement it to clean up when a conversation is resolved. Called by the worker on conversation resolve.
 
 `validate` is optional — a lightweight health check that verifies the provider's credentials and agent/prompt still exist. Used by the dashboard "test connection" step (Phase 4). Providers that support it return `true`/`false` rather than throwing.
 
@@ -118,9 +119,9 @@ type ContentPart =
   | { type: 'file'; data: string; mediaType: string; name?: string };
 ```
 
-> **Design change (decided during implementation):** `message` is singular, not `messages[]`. Every managed agent turn is exactly one user message — the subscriber typed one thing. The original spec had `messages[]` to allow smuggling per-turn system context alongside the user message, but implementation revealed this creates ambiguity: Anthropic managed agents have no per-turn system message mechanism (system prompt is on the agent config), Bedrock agents accept only a single `inputText`, and the `[System]:` prefix hack is unreliable. Per-turn context belongs in `providerOptions` (e.g. OpenAI `instructions`) or platform-level config (agent system prompt, session resources), not in the message array. Singular `message` makes the DX impossible to misuse.
+> **Design change (decided during implementation):** `message` is singular, not `messages[]`. Every managed agent turn is exactly one user message — the subscriber typed one thing. The original spec had `messages[]` to allow smuggling per-turn system context alongside the user message, but implementation revealed this creates ambiguity: Anthropic managed agents have no per-turn system message mechanism (system prompt is on the agent config), and the `[System]:` prefix hack is unreliable. Per-turn context belongs in `providerOptions` (e.g. OpenAI `instructions`) or platform-level config (agent system prompt, session resources), not in the message array. Singular `message` makes the DX impossible to misuse.
 
-`message` is the user's message for this turn. Always `role: user`. The provider converts it to the platform's native format (Anthropic content blocks, OpenAI input messages, Bedrock inputText).
+`message` is the user's message for this turn. Always `role: user`. The provider converts it to the platform's native format (Anthropic content blocks, OpenAI input messages).
 
 `sessionId` is a first-class field for resuming provider sessions. On the first turn it's omitted — the provider creates a new session. On subsequent turns, the caller passes the session ID returned from the previous turn. This is the primary mechanism for multi-turn continuity.
 
@@ -198,7 +199,7 @@ type AgentRuntimeStreamPart =
 
 Stream part types are a discriminated union on the `type` field — extensible by adding new branches without breaking existing consumers. The `provider-event` escape hatch forwards provider-specific events that don't map to normalized types.
 
-When `finishReason` is `'requires-action'`, the stream completes and the consumer should inspect `response.actionsRequired` to determine what's needed (e.g. tool confirmations — providers like Bedrock can request multiple actions in a single turn). Then re-invoke `stream()` with `response.sessionId` and the action results in `providerOptions`.
+When `finishReason` is `'requires-action'`, the stream completes and the consumer should inspect `response.actionsRequired` to determine what's needed (e.g. tool confirmations — Claude Managed Agents can request human approval for MCP tool use). Then re-invoke `stream()` with `response.sessionId` and the action results in `providerOptions`.
 
 ### Content Transformer
 
@@ -224,42 +225,35 @@ The package exports a `thalamus` namespace object that groups all factory functi
 export const thalamus = {
   anthropic: createAnthropicAgentRuntime,
   openai: createOpenAIAgentRuntime,
-  bedrock: createBedrockAgentRuntime,
 } as const;
 
 // Individual factory functions also exported for direct import
 ```
 
 ```typescript
-// Anthropic (Claude Managed Agents)
+// Anthropic (Claude Managed Agents — direct API or Claude Platform on AWS)
 function createAnthropicAgentRuntime(config: {
-  apiKey: string;
   agentId: string;
   environmentId: string;
   model?: string;
+  // Direct Anthropic API auth
+  apiKey?: string;
+  // Claude Platform on AWS auth — uses @anthropic-ai/aws-sdk (AnthropicAws extends Anthropic)
+  awsRegion?: string;
+  awsWorkspaceId?: string;
 }): AgentRuntimeProvider;
 
-// OpenAI (Responses API + Conversations API)
+// OpenAI (Responses API — direct API or AWS Bedrock OpenAI-compatible endpoint)
 function createOpenAIAgentRuntime(config: {
-  apiKey: string;
   promptId?: string;           // stored prompt config (created in OpenAI dashboard)
   instructions?: string;       // alternative: inline instructions (used when no promptId)
   tools?: OpenAIToolConfig[];  // built-in tools (web_search, file_search, code_interpreter) + remote MCP servers
   model?: string;
-}): AgentRuntimeProvider;
-
-// AWS Bedrock Agents
-function createBedrockAgentRuntime(config: {
-  region: string;
-  agentId: string;
-  agentAliasId: string;
-  credentials?: {              // optional — falls back to default AWS credential chain
-    accessKeyId: string;
-    secretAccessKey: string;
-    sessionToken?: string;
-  };
-  enableTrace?: boolean;       // defaults to true in non-production environments
-  memoryId?: string;           // long-term memory across sessions (optional)
+  // Direct OpenAI API auth
+  apiKey?: string;
+  // OpenAI on AWS Bedrock auth — same OpenAI SDK with Bedrock endpoint + SigV4
+  awsRegion?: string;
+  awsBedrockModelId?: string;  // e.g. 'us.openai.gpt-4o-2024-11-20'
 }): AgentRuntimeProvider;
 ```
 
@@ -320,18 +314,13 @@ thalamus/
 │   │   ├── index.ts                            # subpath entry: factory + transformer
 │   │   ├── anthropic.provider.ts
 │   │   └── anthropic.transformer.ts
-│   ├── openai/
-│   │   ├── index.ts
-│   │   ├── openai.provider.ts
-│   │   └── openai.transformer.ts
-│   └── bedrock/
+│   └── openai/
 │       ├── index.ts
-│       ├── bedrock.provider.ts
-│       └── bedrock.transformer.ts
+│       ├── openai.provider.ts
+│       └── openai.transformer.ts
 └── __tests__/
     ├── anthropic/
     ├── openai/
-    ├── bedrock/
     └── stream-utils.test.ts
 ```
 
@@ -356,22 +345,17 @@ thalamus/
       "import": "./dist/openai/index.mjs",
       "require": "./dist/openai/index.cjs",
       "types": "./dist/openai/index.d.ts"
-    },
-    "./bedrock": {
-      "import": "./dist/bedrock/index.mjs",
-      "require": "./dist/bedrock/index.cjs",
-      "types": "./dist/bedrock/index.d.ts"
     }
   },
   "peerDependencies": {
-    "@anthropic-ai/sdk": ">=0.30",
-    "openai": ">=4.70",
-    "@aws-sdk/client-bedrock-agent-runtime": ">=3.700"
+    "@anthropic-ai/sdk": ">=0.86",
+    "@anthropic-ai/aws-sdk": ">=0.86",
+    "openai": ">=4.87"
   },
   "peerDependenciesMeta": {
     "@anthropic-ai/sdk": { "optional": true },
-    "openai": { "optional": true },
-    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true }
+    "@anthropic-ai/aws-sdk": { "optional": true },
+    "openai": { "optional": true }
   }
 }
 ```
@@ -379,7 +363,14 @@ thalamus/
 Consumers install only what they need:
 
 ```bash
+# Direct Anthropic API
 pnpm add @novu/thalamus @anthropic-ai/sdk
+
+# Claude Platform on AWS
+pnpm add @novu/thalamus @anthropic-ai/sdk @anthropic-ai/aws-sdk
+
+# Direct OpenAI API
+pnpm add @novu/thalamus openai
 ```
 
 ```typescript
@@ -391,16 +382,18 @@ Unused providers are never bundled.
 
 ### Tech Stack
 
-| Concern | Tool | Rationale |
-|---------|------|-----------|
-| Build | **tsup** (esbuild-based) | Dual CJS + ESM output, `.d.ts` generation, multiple entry points via `entry` array. Fast, minimal config. |
-| Test | **vitest** | Native ESM, Jest-compatible API, fast watch mode. |
-| Lint + Format | **Biome** | Single tool for lint and format. Fast, good defaults, no ESLint plugin sprawl. |
-| Package manager | **pnpm** | Strict, fast, consistent with Novu monorepo. |
-| Versioning | **Changesets** | Changelog generation, npm publish automation, GitHub release creation. |
-| Module format | **Dual CJS + ESM** | Consumers may be CJS (Novu worker) or ESM (modern bundlers). |
-| TS target | **ES2022** | Native `AsyncIterable`, top-level `await`, `Error.cause`. Matches Node 18+ LTS. |
-| CI | **GitHub Actions** | Standard for public repos. Runs lint, typecheck, test on PR; changesets release on merge to main. |
+
+| Concern         | Tool                     | Rationale                                                                                                 |
+| --------------- | ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Build           | **tsup** (esbuild-based) | Dual CJS + ESM output, `.d.ts` generation, multiple entry points via `entry` array. Fast, minimal config. |
+| Test            | **vitest**               | Native ESM, Jest-compatible API, fast watch mode.                                                         |
+| Lint + Format   | **Biome**                | Single tool for lint and format. Fast, good defaults, no ESLint plugin sprawl.                            |
+| Package manager | **pnpm**                 | Strict, fast, consistent with Novu monorepo.                                                              |
+| Versioning      | **Changesets**           | Changelog generation, npm publish automation, GitHub release creation.                                    |
+| Module format   | **Dual CJS + ESM**       | Consumers may be CJS (Novu worker) or ESM (modern bundlers).                                              |
+| TS target       | **ES2022**               | Native `AsyncIterable`, top-level `await`, `Error.cause`. Matches Node 18+ LTS.                           |
+| CI              | **GitHub Actions**       | Standard for public repos. Runs lint, typecheck, test on PR; changesets release on merge to main.         |
+
 
 ### Design Choices
 
@@ -408,7 +401,7 @@ Unused providers are never bundled.
 - **Self-contained provider folders.** Adding a new provider = add a folder, implement the interface, add a subpath export entry, export from root index.
 - **No local type redefinitions.** Provider-specific types (event shapes, content blocks) are imported directly from vendor SDKs rather than redefined in `<provider>.types.ts` files. Since SDKs are peer dependencies, this ensures compile-time safety when SDKs update and eliminates duplication.
 - **Separate transformer files.** Message translation is the most complex part — isolating it makes testing straightforward.
-- **`stream-utils.ts`** provides helpers like `collectStream()` (consume stream into single response) to reduce consumer boilerplate.
+- `**stream-utils.ts`** provides helpers like `collectStream()` (consume stream into single response) to reduce consumer boilerplate.
 - **Provider SDKs as optional peer dependencies.** Each provider SDK is an optional peer dep — installing `@novu/thalamus` alone brings zero transitive dependencies. Only the provider SDKs you actually use need installing.
 
 ---
@@ -474,18 +467,19 @@ graph TB
     MW --> PKG["@novu/thalamus"]
     PKG -- "API call" --> CL["Claude Managed Agents"]
     PKG -- "API call" --> OA["OpenAI Responses API"]
-    PKG -- "API call" --> BR2["AWS Bedrock Agents"]
     MW -- "direct call" --> HR
 
     HR --> CS["ChatSdkService"]
     CS -- "thread.post()" --> SL2["Slack / Teams / WhatsApp / Email"]
 ```
 
+
+
 ### Async Execution via Worker Queue
 
 Managed agent conversation turns can run for seconds to minutes (tool loops, MCP calls) and may pause indefinitely (human-in-the-loop approval). Running these inline in the API process would block on Slack's 3-second webhook ACK requirement and lose state on process restarts.
 
-The solution is a dedicated **`ManagedAgentQueueService`** (BullMQ) with a **`ManagedAgentWorker`**:
+The solution is a dedicated `**ManagedAgentQueueService**` (BullMQ) with a `**ManagedAgentWorker**`:
 
 1. **API side:** `ManagedRuntime.execute()` enqueues a `ManagedAgentStreamJob` and returns immediately. The webhook gets its ACK within 3 seconds.
 2. **Worker side:** `ManagedAgentWorker` picks up the job, resolves the provider, calls `provider.stream()`, iterates the stream (posting progressive status updates to the channel), and calls `HandleAgentReply` with the final response.
@@ -606,7 +600,6 @@ enum AgentRuntimeEnum {
   BRIDGE = 'bridge',
   ANTHROPIC = 'anthropic',
   OPENAI = 'openai',
-  BEDROCK = 'bedrock',
 }
 
 // New fields on AgentEntity
@@ -642,12 +635,9 @@ apps/api/src/app/agents/
 │   ├── claude/
 │   │   ├── claude-credentials.service.ts
 │   │   └── claude-provisioning.service.ts
-│   ├── openai/
-│   │   ├── openai-credentials.service.ts
-│   │   └── openai-provisioning.service.ts
-│   └── bedrock/
-│       ├── bedrock-credentials.service.ts  # IAM role/key management
-│       └── bedrock-provisioning.service.ts
+│   └── openai/
+│       ├── openai-credentials.service.ts
+│       └── openai-provisioning.service.ts
 
 apps/worker/src/app/workflow/workers/
 └── managed-agent.worker.service.ts       # BullMQ consumer — drains provider streams
@@ -738,28 +728,28 @@ Illustrates the full flow for the most complex scenario — an agent requesting 
 3. **Runtime resolver** — agent has `runtime: 'anthropic'` → routes to `ManagedRuntime`
 4. **Enqueue** — `ManagedRuntime.execute()` enqueues a `ManagedAgentStreamJob` with the messages array. API returns, Slack gets ACK.
 5. **Worker picks up job** — resolves Anthropic provider, checks `conversation.externalSessionId`
-   - First turn: no session yet → `provider.stream({ messages, history })` creates a new session (using `history` to seed context if available), returns `sessionId` on the response → worker stores it as `conversation.externalSessionId`
-   - Subsequent turns: passes existing session ID via `provider.stream({ messages, sessionId })`
+  - First turn: no session yet → `provider.stream({ messages, history })` creates a new session (using `history` to seed context if available), returns `sessionId` on the response → worker stores it as `conversation.externalSessionId`
+  - Subsequent turns: passes existing session ID via `provider.stream({ messages, sessionId })`
 6. **Stream events arrive:**
-   - `{ type: 'thinking', text: 'I need to create a GitHub issue...' }` → worker updates Slack message: **"Thinking..."**
-   - `{ type: 'tool-use-start', toolName: 'github_create_issue', toolUseId: 'tu_789', input: { repo: 'novuhq/novu', ... } }` → worker updates Slack: **"Using tool: GitHub — create_issue"**
-   - `{ type: 'finish', response: { finishReason: 'requires-action', actionsRequired: [{ type: 'tool-confirmation', toolUseId: 'tu_789', toolName: 'github_create_issue', input: {...} }] } }`
+  - `{ type: 'thinking', text: 'I need to create a GitHub issue...' }` → worker updates Slack message: **"Thinking..."**
+  - `{ type: 'tool-use-start', toolName: 'github_create_issue', toolUseId: 'tu_789', input: { repo: 'novuhq/novu', ... } }` → worker updates Slack: **"Using tool: GitHub — create_issue"**
+  - `{ type: 'finish', response: { finishReason: 'requires-action', actionsRequired: [{ type: 'tool-confirmation', toolUseId: 'tu_789', toolName: 'github_create_issue', input: {...} }] } }`
 7. **Worker posts approval card** to Slack via `HandleAgentReply`:
-   ```
+  ```
    Claude wants to use: GitHub — create_issue
    Repo: novuhq/novu | Title: "Fix login timeout" | Labels: bug
    [✅ Allow]  [❌ Deny]
-   ```
+  ```
    The approval card's button values encode the `toolUseId` (e.g. Allow button has `value: 'tu_789'`). Worker job completes. Nothing is running.
 8. **User clicks Allow** (could be seconds or hours later) — Slack → `onAction` webhook → `AgentInboundHandler` receives `{ actionId: 'mcp:allow', value: 'tu_789' }`
 9. **Action routed to managed runtime** — `AgentInboundHandler` loads the conversation from MongoDB. `ManagedRuntime.handleAction()` reads `conversation.externalSessionId` (stored in step 5) to know which provider session to continue. It enqueues a new stream job with `sessionId: conversation.externalSessionId` and `providerOptions: { toolConfirmation: { toolUseId: 'tu_789', result: 'allow' } }`. The `externalSessionId` is the link between Job 1 and Job 2.
 10. **Worker picks up continuation job** — calls `provider.stream({ sessionId, providerOptions })` → the provider resumes the exact same Claude session → Claude proceeds
 11. **Stream events:**
-    - `{ type: 'tool-use-result', toolUseId: 'tu_789', output: 'Created issue #456' }`
+  - `{ type: 'tool-use-result', toolUseId: 'tu_789', output: 'Created issue #456' }`
     - `{ type: 'text-delta', text: 'Done! I created GitHub issue #456...' }`
     - `{ type: 'finish', response: { finishReason: 'stop', content: '...' } }`
 12. **Worker delivers final response** via `HandleAgentReply` → user sees on Slack:
-    > **Agent:** Done! I created GitHub issue #456 "Fix login timeout" with the bug label.
+  > **Agent:** Done! I created GitHub issue #456 "Fix login timeout" with the bug label.
 
 **Key property:** Between steps 7 and 8, nothing is running. Only two things persist: the conversation (MongoDB) and the Claude session (Anthropic's servers, referenced by `externalSessionId`).
 
@@ -813,6 +803,8 @@ sequenceDiagram
     Note over W2: Job 2 completes
 ```
 
+
+
 ---
 
 ## 10. Future Work
@@ -830,10 +822,9 @@ interface ProviderLifecycleService {
 }
 ```
 
-- Anthropic: `provision()` calls `POST /v1/agents` to create a managed agent + `POST /v1/environments` to create an environment. Returns `{ agentId, environmentId }` stored in `Agent.runtimeConfig`.
+- Anthropic: `provision()` calls `POST /v1/agents` to create a managed agent + `POST /v1/environments` to create an environment. Returns `{ agentId, environmentId }` stored in `Agent.runtimeConfig`. Works identically for both direct API and Claude Platform on AWS — only the client auth differs.
 - OpenAI: `provision()` is lighter — OpenAI Prompts are created in the OpenAI dashboard (not via API), so provisioning stores the user-provided `promptId` and creates a Conversation via `POST /v1/conversations`. Returns `{ promptId }`. Alternatively, inline `instructions` + `tools` can be used without a stored Prompt.
-- Bedrock: `provision()` is "connect existing" only — agents are created in the AWS Console or via `CreateAgent` API outside Novu. Provisioning validates the agent exists via `GetAgent`, stores `{ agentId, agentAliasId, region }` in `Agent.runtimeConfig`. `validate()` calls `GetAgent` to confirm the agent and alias still exist and the credentials have `bedrock:InvokeAgent` permission.
-- `validate()` lives on `AgentRuntimeProvider` (see Section 3) — checks whether the stored config still points to a live agent/prompt. Used by dashboard health checks and the "test connection" step in Phase 4.
+- `validate()` lives on `AgentRuntimeProvider` (see Section 3) — checks whether the stored config still points to a live agent/prompt. Used by dashboard health checks and the "test connection" step.
 - `deprovision()` cleans up provider-side resources on agent deletion.
 
 Lives in `apps/api/src/app/agents/providers/<provider>/`. Built per-provider as we ship them. Two modes: "create new" (Novu provisions the agent on the platform) and "connect existing" (user provides their own agent/prompt ID).
@@ -852,16 +843,14 @@ interface AgentCredentialEntity {
 }
 ```
 
-Each provider declares what credentials it needs via a schema (e.g. Anthropic needs `apiKey`, OpenAI needs `apiKey` + optional `organizationId`, Bedrock needs `accessKeyId` + `secretAccessKey` + `region` or an IAM role ARN for cross-account access). The shared infrastructure handles encryption at rest via Novu's existing `encryptSecret`/`decryptSecret` pattern. The worker decrypts at runtime when creating the provider instance. No plaintext keys in memory longer than the job duration.
+Each provider declares what credentials it needs via a schema (e.g. Anthropic needs `apiKey` for direct API or `awsRegion` + `awsWorkspaceId` for Claude Platform on AWS, OpenAI needs `apiKey` for direct API or `awsRegion` for Bedrock endpoint). The shared infrastructure handles encryption at rest via Novu's existing `encryptSecret`/`decryptSecret` pattern. The worker decrypts at runtime when creating the provider instance. No plaintext keys in memory longer than the job duration.
 
 Lives in `libs/dal` (entity + repository) + `apps/api/src/app/agents/services/agent-credentials.service.ts`.
 
 **Session lifecycle.** Three concerns beyond the `externalSessionId` field:
 
-1. **Resolve → archive:** When a conversation is resolved (via `ctx.resolve()` or the resolve signal), the worker calls `provider.endSession(sessionId)` (see Section 3) and clears `externalSessionId`. The Anthropic provider would call `POST /v1/sessions/{id}/archive`. OpenAI conversations persist server-side but we clear our reference. Bedrock: calls `InvokeAgent` with `endSession: true` to signal session end. Providers that don't implement `endSession` are skipped.
-
-2. **Expiry detection:** Claude sessions expire after inactivity. Bedrock sessions have a configurable idle timeout (default 1 hour, max 24 hours). When the worker tries to resume an expired session and gets a 404/410 (Claude) or `ResourceNotFoundException` (Bedrock), it creates a new session and updates `externalSessionId`. Conversation history is replayed from ConversationActivity (Novu is the source of truth, not the provider session).
-
+1. **Resolve → archive:** When a conversation is resolved (via `ctx.resolve()` or the resolve signal), the worker calls `provider.endSession(sessionId)` (see Section 3) and clears `externalSessionId`. The Anthropic provider calls `POST /v1/sessions/{id}/archive`. OpenAI conversations persist server-side but we clear our reference. Providers that don't implement `endSession` are skipped.
+2. **Expiry detection:** Claude sessions expire after inactivity. When the worker tries to resume an expired session and gets a 404/410, it creates a new session and updates `externalSessionId`. Conversation history is replayed from ConversationActivity (Novu is the source of truth, not the provider session).
 3. **Orphan cleanup:** A periodic job scans for conversations with `externalSessionId` set but no activity in N days, and archives those sessions. Prevents unbounded session accumulation on the provider side.
 
 ### Phase 3: MCP Server Integration
@@ -936,16 +925,15 @@ New controllers: `agents-mcp-oauth.controller.ts` (handles OAuth redirect + call
 
 **Agent creation flow.** A multi-step dialog:
 
-1. **Step 1 — Choose runtime:** Four options: "Self-hosted (Bridge)", "Anthropic (Claude)", "OpenAI", "AWS Bedrock". Each shows a brief description and what's needed.
+1. **Step 1 — Choose runtime:** Three options: "Self-hosted (Bridge)", "Anthropic (Claude)", "OpenAI". Each shows a brief description and what's needed.
 2. **Step 2 — Provider config:** Dynamic form based on the chosen runtime.
-   - Bridge: bridge URL input (existing flow)
-   - Anthropic: API key, agent ID (or "create new"), environment ID, model selection
-   - OpenAI: API key, prompt ID (or inline instructions), model selection, built-in tools + MCP servers
-   - Bedrock: AWS region, agent ID, agent alias ID, credentials (access key pair or IAM role ARN)
+  - Bridge: bridge URL input (existing flow)
+  - Anthropic: Auth mode toggle (Direct API / AWS), then API key or AWS region + workspace ID, agent ID (or "create new"), environment ID, model selection
+  - OpenAI: Auth mode toggle (Direct API / AWS Bedrock), then API key or AWS region + model ID, prompt ID (or inline instructions), model selection, built-in tools + MCP servers
 3. **Step 3 — Test connection:** Call `provider.validate()` (see Section 3) to verify credentials and agent exist. Show success/failure before allowing save.
 4. **Step 4 — Connect channels:** Existing channel integration flow (Slack, Teams, etc.)
 
-Implementation: Reuse the existing `create-agent-dialog.tsx` with a new `RuntimeConfigStep` component. Each provider has a config panel component (`AnthropicConfigPanel`, `OpenAIConfigPanel`, `BedrockConfigPanel`) that renders the provider-specific form fields. The panel components live in `apps/dashboard/src/components/agents/runtime-config/`.
+Implementation: Reuse the existing `create-agent-dialog.tsx` with a new `RuntimeConfigStep` component. Each provider has a config panel component (`AnthropicConfigPanel`, `OpenAIConfigPanel`) that renders the provider-specific form fields including auth mode selection. The panel components live in `apps/dashboard/src/components/agents/runtime-config/`.
 
 **MCP server management UI.** Separate section on the agent detail page:
 
@@ -960,4 +948,4 @@ Lives in `apps/dashboard/src/components/agents/mcp/`. Build after Phase 3 backen
 
 **Tool definitions in the package.** Managed agent platforms configure tools on the platform side or via stored config, not per-request from the consumer's perspective. Claude Managed Agents configure tools at agent/environment creation time. OpenAI's Responses API accepts tool config per-request, but these are configured once in Novu's `runtimeConfig` (or via a stored Prompt) and passed through by the provider — the consumer of `@novu/thalamus` never needs to specify tools. Both providers execute tools server-side within their agentic loops (including built-in tools and remote MCP servers). The `tool-use-start` and `tool-use-result` stream events report what the agent did, but the package doesn't need to define what tools the agent can use. If we later add raw LLM providers (not managed agents), this would require rethinking the interface scope.
 
-**Multi-turn tool execution loops in the package.** All three initial providers execute tool loops internally within a single API request — Claude runs tools via its session-based agentic loop, OpenAI's Responses API runs built-in tools and remote MCP within its agentic loop, Bedrock orchestrates action groups and knowledge base queries within its invoke cycle. The package treats tool execution as opaque — the provider handles it internally or returns `requires-action` (e.g. for human-in-the-loop approval via Bedrock's `returnControl` or Claude's tool confirmation). We don't plan to add a generic tool execution loop to the package; each provider implementation handles its own tool loop semantics.
+**Multi-turn tool execution loops in the package.** Both initial providers execute tool loops internally within a single API request — Claude runs tools via its session-based agentic loop, OpenAI's Responses API runs built-in tools and remote MCP within its agentic loop. The package treats tool execution as opaque — the provider handles it internally or returns `requires-action` (e.g. for human-in-the-loop approval via Claude's tool confirmation). We don't plan to add a generic tool execution loop to the package; each provider implementation handles its own tool loop semantics.

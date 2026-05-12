@@ -1,5 +1,6 @@
 {
   "name": "@novu/thalamus",
+  "packageManager": "pnpm@8.15.8",
   "version": "0.1.0",
   "description": "Provider-agnostic managed AI agent runtime for Novu",
   "type": "module",

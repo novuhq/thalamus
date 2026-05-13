@@ -12,6 +12,9 @@ Thalamus gives you a single `Provider` interface that normalizes messages, strea
 
 - **Unified `Provider` interface** — `send()` and `stream()` across all providers
 - **Normalized streaming** — common `StreamPart` events for text, tool use, thinking, errors
+- **MCP server support** — configure remote MCP tools, track tool sources (builtin vs MCP)
+- **Vault & credential management** — store and inject credentials for MCP server authentication
+- **Approval flow** — human-in-the-loop pattern for tool confirmation
 - **Session continuity** — pass `sessionId` to resume conversations with any provider
 - **Tree-shakeable** — subpath exports per provider, install only what you use
 - **TypeScript-first** — full type coverage, dual ESM/CJS output
@@ -94,6 +97,10 @@ interface Provider {
   readonly runtimeId: string;
   send(params: RequestParams): Promise<Response>;
   stream(params: RequestParams): Promise<StreamResult>;
+  createVault(options: VaultOptions): Promise<Vault>;
+  getVault(vaultId: string): Promise<Vault>;
+  createSession(options?: SessionOptions): Promise<string>;
+  endSession(sessionId: string): Promise<void>;
 }
 ```
 
@@ -169,6 +176,111 @@ const second = await provider.send({
 
 How `sessionId` maps to the underlying provider mechanism is handled internally.
 
+### MCP Servers
+
+OpenAI supports configuring remote MCP servers directly:
+
+```typescript
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-4o',
+  mcpServers: [
+    { name: 'github', url: 'https://api.githubcopilot.com/mcp/', approvalPolicy: 'never' },
+  ],
+});
+```
+
+Anthropic MCP servers are configured in the Anthropic console at the environment level.
+
+Tool events include a `source` field to distinguish builtin tools from MCP tools:
+
+```typescript
+for await (const part of result.stream) {
+  if (part.type === 'tool-use-done') {
+    console.log(part.source); // { type: 'builtin' } or { type: 'mcp', serverName: 'github' }
+  }
+  if (part.type === 'mcp-tools-discovered') {
+    console.log(part.serverName, part.tools); // tools available on this MCP server
+  }
+}
+```
+
+### Vault & Credentials
+
+Vaults manage credentials for MCP server authentication. The API is the same regardless of provider — how credentials are stored differs internally:
+
+- **Anthropic** — calls proxy to Anthropic's native Vault API. Credentials are stored and resolved server-side by Anthropic.
+- **OpenAI** — credentials are stored in a `VaultStore` you provide and injected into MCP tool requests at call time.
+
+```typescript
+// Create a vault
+const vault = await provider.createVault({ name: 'Alice' });
+
+// Add a credential — name matches the MCP server name
+await vault.add('github', { type: 'bearer', token: 'ghp_xxx' });
+
+// Stream with vault credentials injected
+await provider.stream({
+  messages: [{ role: MessageRole.USER, content: 'List my GitHub repos' }],
+  vaultIds: [vault.id],
+});
+
+// Manage credentials
+await vault.list();                  // list credentials (without secrets)
+await vault.update('github', cred);  // replace a credential
+await vault.remove('github');        // remove a credential
+await vault.destroy();               // delete the vault entirely
+```
+
+**OpenAI setup** — pass a `VaultStore` when creating the provider:
+
+```typescript
+import { createMemoryVaultStore } from '@novu/thalamus';
+
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  mcpServers: [{ name: 'github', url: 'https://api.githubcopilot.com/mcp/' }],
+  vaultStore: createMemoryVaultStore(),
+});
+```
+
+**Anthropic setup** — no extra configuration needed. Vaults are managed via the Anthropic API:
+
+```typescript
+const provider = createAnthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  agentId: 'agent_01J...',
+  environmentId: 'env_01J...',
+});
+```
+
+`createMemoryVaultStore()` is included for development and testing. For production, implement the `VaultStore` interface with your database.
+
+### Approval Flow
+
+When an MCP tool requires approval, the stream ends with `finishReason: 'requires-action'`:
+
+```typescript
+const result = await provider.stream({ messages: [...] });
+const response = await result.response;
+
+if (response.finishReason === 'requires-action') {
+  for (const action of response.actionsRequired) {
+    console.log(`${action.toolName} wants to run with`, action.input);
+  }
+
+  // Send approval back
+  await provider.stream({
+    messages: [],
+    sessionId: response.sessionId,
+    toolResults: response.actionsRequired.map(a => ({
+      toolUseId: a.toolUseId,
+      approved: true, // or false to deny
+    })),
+  });
+}
+```
+
 ## Error Handling
 
 All errors extend `ThalamusError` with `provider` and `isRetryable` fields:
@@ -180,6 +292,9 @@ All errors extend `ThalamusError` with `provider` and `isRetryable` fields:
 | `ProviderUnavailableError` | Yes | Provider temporarily unavailable |
 | `ProviderResponseError` | No | Invalid response from provider |
 | `SessionExpiredError` | Yes | Session expired or archived (includes `sessionId`) |
+| `VaultNotFoundError` | No | Vault does not exist (includes `vaultId`) |
+| `CredentialExpiredError` | No | Credential expired with no refresh config |
+| `McpServerError` | 5xx only | MCP server returned an error (includes `serverName`, `statusCode`) |
 
 ```typescript
 import { ThalamusError, ProviderRateLimitError } from '@novu/thalamus';

@@ -1,19 +1,19 @@
 # @novu/thalamus
 
-Provider-agnostic runtime for managed AI agents. One interface, same messages in, same streaming events out — regardless of which provider runs the agent.
+Provider-agnostic runtime for managed AI agents. One interface, same messages in, same streaming events out, same credential vault — regardless of which provider runs the agent.
 
 ## Why
 
-Every AI provider has its own session model, event shapes, and streaming format. Supporting multiple providers means writing separate codepaths for each.
+Every AI provider has its own session model, event shapes, streaming format, and credential management. Supporting multiple providers means writing separate codepaths for each.
 
-Thalamus gives you a single `Provider` interface that normalizes messages, streaming events, and session continuity so your application code stays provider-agnostic.
+Thalamus gives you a single `Provider` interface that normalizes messages, streaming events, session continuity, and vault/credential management so your application code stays provider-agnostic.
 
 ## Features
 
 - **Unified `Provider` interface** — single `stream()` method across all providers
 - **Normalized streaming** — common `StreamPart` events for text, tool use, thinking, errors
 - **MCP server support** — configure remote MCP tools, track tool sources (builtin vs MCP)
-- **Vault & credential management** — store and inject credentials for MCP server authentication
+- **Unified `Vault` interface** — same credential API whether backed by Anthropic's server-side vault or a local store
 - **Approval flow** — human-in-the-loop pattern for tool confirmation
 - **Session continuity** — pass `sessionId` to resume conversations with any provider
 - **Tree-shakeable** — subpath exports per provider, install only what you use

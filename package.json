@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "Provider-agnostic managed AI agent runtime for Novu",
   "type": "module",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.cts",
   "files": [
     "dist",
     "package.json",

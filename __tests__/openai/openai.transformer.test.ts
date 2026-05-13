@@ -42,7 +42,7 @@ describe("openaiTransformer.toInput", () => {
         content: [
           {
             type: "input_image",
-            image_url: { url: "https://example.com/img.jpg" },
+            image_url: "https://example.com/img.jpg",
           },
         ],
       },
@@ -62,7 +62,7 @@ describe("openaiTransformer.toInput", () => {
         content: [
           {
             type: "input_image",
-            image_url: { url: "data:image/jpeg;base64,abc123" },
+            image_url: "data:image/jpeg;base64,abc123",
           },
         ],
       },

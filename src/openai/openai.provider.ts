@@ -16,7 +16,7 @@ import {
   ProviderUnavailableError,
   ThalamusError,
 } from "../errors";
-import { collectStream } from "../stream-utils";
+import { createStreamResult } from "../stream-result";
 import {
   type ActionRequired,
   type McpServerConfig,
@@ -25,6 +25,7 @@ import {
   type RequestParams,
   type Response,
   type SessionOptions,
+  type StreamCallbacks,
   type StreamPart,
   type StreamResult,
   type Usage,
@@ -387,21 +388,8 @@ class OpenAIProvider implements Provider {
     this.vaultStore = config.vaultStore;
   }
 
-  async send(params: RequestParams): Promise<Response> {
-    return collectStream(await this.stream(params));
-  }
-
-  async stream(params: RequestParams): Promise<StreamResult> {
-    let resolveResponse!: (r: Response) => void;
-    let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<Response>((res, rej) => {
-      resolveResponse = res;
-      rejectResponse = rej;
-    });
-    return {
-      stream: this.runStream(params, resolveResponse, rejectResponse),
-      response: responsePromise,
-    };
+  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult {
+    return createStreamResult(this.runStream(params), callbacks);
   }
 
   private async resolveSessionParams(
@@ -414,11 +402,7 @@ class OpenAIProvider implements Provider {
     return sessionId ? { previous_response_id: sessionId } : {};
   }
 
-  private async *runStream(
-    params: RequestParams,
-    resolveResponse: (r: Response) => void,
-    rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<StreamPart> {
+  private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
 
@@ -470,12 +454,10 @@ class OpenAIProvider implements Provider {
 
       const response = acc.toResponse();
       yield { type: "finish", response };
-      resolveResponse(response);
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
       yield { type: "error", error: mapped };
-      rejectResponse(mapped);
     }
   }
 

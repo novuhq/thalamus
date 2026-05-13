@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, makeStream } from "./_helpers.js";
 
@@ -60,11 +59,9 @@ describe("MCP server injection", () => {
         },
       ],
     });
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "hi" }],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const mcpTools = callArgs.tools?.filter((t: any) => t.type === "mcp");
@@ -105,20 +102,18 @@ describe("MCP server injection", () => {
       ]),
     );
 
-    await collectStream(
-      await createOpenAIProvider({
-        ...config,
-        mcpServers: [
-          {
-            name: "deepwiki",
-            url: "https://mcp.deepwiki.com/mcp",
-            approvalPolicy: { except: ["ask_question", "read_wiki_structure"] },
-          },
-        ],
-      }).stream({
-        messages: [{ role: MessageRole.USER, content: "hi" }],
-      }),
-    );
+    await createOpenAIProvider({
+      ...config,
+      mcpServers: [
+        {
+          name: "deepwiki",
+          url: "https://mcp.deepwiki.com/mcp",
+          approvalPolicy: { except: ["ask_question", "read_wiki_structure"] },
+        },
+      ],
+    }).stream({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const mcpTool = callArgs.tools?.find(
@@ -151,11 +146,9 @@ describe("MCP server injection", () => {
       ]),
     );
 
-    await collectStream(
-      await createOpenAIProvider(config).stream({
-        messages: [{ role: MessageRole.USER, content: "hi" }],
-      }),
-    );
+    await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     expect(callArgs.tools).toBeUndefined();
@@ -199,11 +192,11 @@ describe("MCP stream events", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const discovered = parts.find(
       (p) => p.type === "mcp-tools-discovered",
@@ -277,11 +270,11 @@ describe("MCP stream events", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
     expect(toolStart).toMatchObject({
@@ -350,11 +343,11 @@ describe("MCP stream events", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const finish = parts.find((p) => p.type === "finish") as any;
     expect(finish.response.finishReason).toBe("requires-action");

@@ -10,7 +10,7 @@ Thalamus gives you a single `Provider` interface that normalizes messages, strea
 
 ## Features
 
-- **Unified `Provider` interface** — `send()` and `stream()` across all providers
+- **Unified `Provider` interface** — single `stream()` method across all providers
 - **Normalized streaming** — common `StreamPart` events for text, tool use, thinking, errors
 - **MCP server support** — configure remote MCP tools, track tool sources (builtin vs MCP)
 - **Vault & credential management** — store and inject credentials for MCP server authentication
@@ -54,24 +54,25 @@ const provider = createAnthropicProvider({
   environmentId: 'env_01J...',
 });
 
-// Streaming
-const result = await provider.stream({
+// Streaming with callbacks
+const response = await provider.stream({
   messages: [{ role: MessageRole.USER, content: 'What can you help me with?' }],
-});
-
-for await (const part of result.stream) {
-  if (part.type === 'text-delta') {
-    process.stdout.write(part.text);
-  }
-}
-
-// Non-streaming
-const response = await provider.send({
-  messages: [{ role: MessageRole.USER, content: 'Hello' }],
+}, {
+  onTextDelta: ({ text }) => process.stdout.write(text),
 });
 
 console.log(response.content);
 console.log(response.sessionId); // pass back to continue the conversation
+
+// Just get the response (no streaming)
+const response = await provider.stream({
+  messages: [{ role: MessageRole.USER, content: 'Hello' }],
+});
+
+// Just get the text
+const text = await provider.stream({
+  messages: [{ role: MessageRole.USER, content: 'Hello' }],
+}).text();
 ```
 
 Swap in any other provider — the rest of the code stays identical:
@@ -95,8 +96,7 @@ The core abstraction. Every provider implements:
 interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): Promise<Response>;
-  stream(params: RequestParams): Promise<StreamResult>;
+  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
@@ -133,16 +133,23 @@ interface Message {
 
 ### Streaming
 
-`stream()` returns a `StreamResult` with two complementary interfaces:
+`stream()` returns a `StreamResult` that is `PromiseLike<Response>`:
 
 ```typescript
-interface StreamResult {
-  stream: AsyncIterable<StreamPart>;  // incremental events
-  response: Promise<Response>;        // final rolled-up result
-}
+// Await to get the final response
+const response = await provider.stream({ messages });
+
+// Or pass callbacks to react to events as they arrive
+const response = await provider.stream({ messages }, {
+  onTextDelta: ({ text }) => process.stdout.write(text),
+  onToolUseDone: ({ toolName }) => console.log(`used ${toolName}`),
+});
+
+// Or just get the text
+const text = await provider.stream({ messages }).text();
 ```
 
-Both resolve from the same underlying generator — consuming either one drives the other. Stream events include:
+Stream events include:
 
 | Event | Description |
 |---|---|
@@ -164,11 +171,11 @@ Both resolve from the same underlying generator — consuming either one drives 
 Pass `sessionId` from a previous response to continue a conversation:
 
 ```typescript
-const first = await provider.send({
+const first = await provider.stream({
   messages: [{ role: MessageRole.USER, content: 'Remember: my name is Alice' }],
 });
 
-const second = await provider.send({
+const second = await provider.stream({
   sessionId: first.sessionId,
   messages: [{ role: MessageRole.USER, content: 'What is my name?' }],
 });
@@ -195,14 +202,14 @@ Anthropic MCP servers are configured in the Anthropic console at the environment
 Tool events include a `source` field to distinguish builtin tools from MCP tools:
 
 ```typescript
-for await (const part of result.stream) {
-  if (part.type === 'tool-use-done') {
+const response = await provider.stream({ messages }, {
+  onToolUseDone: (part) => {
     console.log(part.source); // { type: 'builtin' } or { type: 'mcp', serverName: 'github' }
-  }
-  if (part.type === 'mcp-tools-discovered') {
+  },
+  onMcpToolsDiscovered: (part) => {
     console.log(part.serverName, part.tools); // tools available on this MCP server
-  }
-}
+  },
+});
 ```
 
 ### Vault & Credentials
@@ -261,8 +268,7 @@ const provider = createAnthropicProvider({
 When an MCP tool requires approval, the stream ends with `finishReason: 'requires-action'`:
 
 ```typescript
-const result = await provider.stream({ messages: [...] });
-const response = await result.response;
+const response = await provider.stream({ messages: [...] });
 
 if (response.finishReason === 'requires-action') {
   for (const action of response.actionsRequired) {
@@ -300,7 +306,7 @@ All errors extend `ThalamusError` with `provider` and `isRetryable` fields:
 import { ThalamusError, ProviderRateLimitError } from '@novu/thalamus';
 
 try {
-  await provider.send({ messages });
+  await provider.stream({ messages });
 } catch (err) {
   if (err instanceof ProviderRateLimitError) {
     await sleep(err.retryAfterMs ?? 5000);

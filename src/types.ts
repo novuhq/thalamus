@@ -141,21 +141,47 @@ export type StreamPart =
       data: Record<string, unknown>;
     };
 
-/**
- * Returned by `stream()`. Callers can iterate `stream` for incremental parts
- * and await `response` for the final rolled-up result. Both resolve from the
- * same underlying generator — consuming either one drives the other.
- */
-export interface StreamResult {
-  stream: AsyncIterable<StreamPart>;
-  response: Promise<Response>;
+export interface StreamCallbacks {
+  /** Fires for every stream part, before type-specific callbacks. */
+  onPart?: (part: StreamPart) => void;
+  onTextDelta?: (part: Extract<StreamPart, { type: "text-delta" }>) => void;
+  onThinking?: (part: Extract<StreamPart, { type: "thinking" }>) => void;
+  onRefusal?: (part: Extract<StreamPart, { type: "refusal" }>) => void;
+  onToolUseStart?: (
+    part: Extract<StreamPart, { type: "tool-use-start" }>,
+  ) => void;
+  onToolUseDelta?: (
+    part: Extract<StreamPart, { type: "tool-use-delta" }>,
+  ) => void;
+  onToolUseDone?: (
+    part: Extract<StreamPart, { type: "tool-use-done" }>,
+  ) => void;
+  onToolUseResult?: (
+    part: Extract<StreamPart, { type: "tool-use-result" }>,
+  ) => void;
+  onMcpToolsDiscovered?: (
+    part: Extract<StreamPart, { type: "mcp-tools-discovered" }>,
+  ) => void;
+  onStatusChange?: (
+    part: Extract<StreamPart, { type: "status-change" }>,
+  ) => void;
+  onStreamStart?: (part: Extract<StreamPart, { type: "stream-start" }>) => void;
+  onFinish?: (part: Extract<StreamPart, { type: "finish" }>) => void;
+  onError?: (part: Extract<StreamPart, { type: "error" }>) => void;
+  onProviderEvent?: (
+    part: Extract<StreamPart, { type: "provider-event" }>,
+  ) => void;
+}
+
+export interface StreamResult extends PromiseLike<Response> {
+  readonly response: Promise<Response>;
+  text(): Promise<string>;
 }
 
 export interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): Promise<Response>;
-  stream(params: RequestParams): Promise<StreamResult>;
+  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;

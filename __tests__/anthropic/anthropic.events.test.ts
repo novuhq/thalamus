@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { ThalamusError } from "../../src/errors.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, mockSse } from "./_helpers.js";
 
@@ -47,11 +46,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "think" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "think" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(parts.find((p) => p.type === "thinking")).toMatchObject({
       type: "thinking",
@@ -78,11 +77,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "run ls" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "run ls" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
     expect(toolDone).toMatchObject({
@@ -113,11 +112,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
     expect(toolResult).toMatchObject({
@@ -148,11 +147,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "list repos" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "list repos" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
     expect(toolDone).toMatchObject({
@@ -183,11 +182,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
     expect(toolResult).toMatchObject({
@@ -217,11 +216,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "deploy" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "deploy" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const finish = parts.find((p) => p.type === "finish") as any;
     expect(finish.response.finishReason).toBe("requires-action");
@@ -249,11 +248,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(parts.find((p) => p.type === "status-change")).toMatchObject({
       status: "running",
@@ -274,11 +273,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(parts.find((p) => p.type === "status-change")).toMatchObject({
       status: "retrying",
@@ -292,13 +291,13 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        { messages: [{ role: MessageRole.USER, content: "x" }] },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
@@ -329,10 +328,9 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
+    const response = await createAnthropicProvider(config).stream({
       messages: [{ role: MessageRole.USER, content: "x" }],
     });
-    const response = await collectStream(result);
 
     expect(response.usage).toEqual({
       inputTokens: 10,
@@ -355,11 +353,11 @@ describe("stream — event mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createAnthropicProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const providerEvent = parts.find((p) => p.type === "provider-event") as any;
     expect(providerEvent).toBeDefined();

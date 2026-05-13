@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { createMemoryVaultStore } from "../../src/vault/memory-vault-store.js";
 import { config, makeStream } from "./_helpers.js";
@@ -33,7 +32,7 @@ describe("vault support", () => {
 
     const record = await store.getVault(vault.id);
     expect(record).not.toBeNull();
-    expect(record!.name).toBe("Alice");
+    expect(record?.name).toBe("Alice");
   });
 
   it("getVault retrieves an existing vault", async () => {
@@ -97,12 +96,10 @@ describe("session lifecycle with vault", () => {
       ]),
     );
 
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "hi" }],
-        vaultIds: [vault.id],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+      vaultIds: [vault.id],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const mcpTool = callArgs.tools?.find(
@@ -150,12 +147,10 @@ describe("session lifecycle with vault", () => {
       ]),
     );
 
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "hi" }],
-        vaultIds: [vault.id],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+      vaultIds: [vault.id],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const mcpTool = callArgs.tools?.find(

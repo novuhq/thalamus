@@ -46,13 +46,13 @@ describe("error mapping", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        { messages: [{ role: MessageRole.USER, content: "x" }] },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
@@ -65,14 +65,16 @@ describe("session expiry detection", () => {
     const notFoundError = new APIError(404, undefined, "Not Found", undefined);
     mockSseStream.mockRejectedValue(notFoundError);
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "hello" }],
-      sessionId: "sess_expired",
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        {
+          messages: [{ role: MessageRole.USER, content: "hello" }],
+          sessionId: "sess_expired",
+        },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
@@ -85,14 +87,16 @@ describe("session expiry detection", () => {
     const goneError = new APIError(410, undefined, "Gone", undefined);
     mockSseStream.mockRejectedValue(goneError);
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "hello" }],
-      sessionId: "sess_gone",
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        {
+          messages: [{ role: MessageRole.USER, content: "hello" }],
+          sessionId: "sess_gone",
+        },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
@@ -109,14 +113,16 @@ describe("session expiry detection", () => {
     );
     mockSseStream.mockRejectedValue(serverError);
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "hello" }],
-      sessionId: "sess_other",
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        {
+          messages: [{ role: MessageRole.USER, content: "hello" }],
+          sessionId: "sess_other",
+        },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();
@@ -129,13 +135,13 @@ describe("session expiry detection", () => {
     });
     mockCreate.mockRejectedValue(notFoundError);
 
-    const result = await createAnthropicProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "hello" }],
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createAnthropicProvider(config).stream(
+        { messages: [{ role: MessageRole.USER, content: "hello" }] },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
     expect(errPart).toBeDefined();

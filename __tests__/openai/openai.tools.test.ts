@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, makeStream } from "./_helpers.js";
 
@@ -72,11 +71,11 @@ describe("tool call streaming", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "weather?" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "weather?" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     const toolParts = parts.filter(
       (p) =>
@@ -132,13 +131,11 @@ describe("tool results / approval flow", () => {
     );
 
     const provider = createOpenAIProvider(config);
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "" }],
-        sessionId: "conv_prev",
-        toolResults: [{ toolUseId: "appr_1", approved: true }],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "" }],
+      sessionId: "conv_prev",
+      toolResults: [{ toolUseId: "appr_1", approved: true }],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const approvalInput = callArgs.input?.find(
@@ -174,13 +171,11 @@ describe("tool results / approval flow", () => {
     );
 
     const provider = createOpenAIProvider(config);
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "" }],
-        sessionId: "conv_prev",
-        toolResults: [{ toolUseId: "call_abc", output: '{"result": 42}' }],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "" }],
+      sessionId: "conv_prev",
+      toolResults: [{ toolUseId: "call_abc", output: '{"result": 42}' }],
+    });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];
     const toolOutput = callArgs.input?.find(

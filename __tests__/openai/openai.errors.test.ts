@@ -53,18 +53,17 @@ describe("refusal handling", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "do something bad" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    const response = await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "do something bad" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(parts.filter((p) => p.type === "refusal")).toEqual([
       { type: "refusal", text: "I cannot" },
       { type: "refusal", text: " help with that." },
     ]);
 
-    const response = await result.response;
     expect(response.finishReason).toBe("refused");
   });
 });
@@ -82,16 +81,15 @@ describe("error handling", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
-
+    const parts: any[] = [];
+    const promise = createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "x" }] },
+      { onPart: (p) => parts.push(p) },
+    );
+    await expect(promise).rejects.toBeInstanceOf(ProviderAuthError);
     expect(
       (parts.find((p) => p.type === "error") as any)?.error,
     ).toBeInstanceOf(ProviderAuthError);
-    await expect(result.response).rejects.toBeInstanceOf(ProviderAuthError);
   });
 
   it("maps rate_limit_exceeded to ProviderRateLimitError", async () => {
@@ -106,13 +104,13 @@ describe("error handling", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createOpenAIProvider(config).stream(
+        { messages: [{ role: MessageRole.USER, content: "x" }] },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const { ProviderRateLimitError } = await import("../../src/errors.js");
     expect(
@@ -126,13 +124,13 @@ describe("error handling", () => {
       throw new Error("Service unavailable");
     });
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
-    result.response.catch(() => {});
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    try {
+      await createOpenAIProvider(config).stream(
+        { messages: [{ role: MessageRole.USER, content: "x" }] },
+        { onPart: (p) => parts.push(p) },
+      );
+    } catch (_) {}
 
     const { ProviderUnavailableError } = await import("../../src/errors.js");
     expect(

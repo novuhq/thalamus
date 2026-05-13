@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, mockSse } from "./_helpers.js";
 
@@ -50,13 +49,11 @@ describe("tool results / approval flow", () => {
     mockSend.mockResolvedValue({});
 
     const provider = createAnthropicProvider(config);
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "" }],
-        sessionId: "sess_appr",
-        toolResults: [{ toolUseId: "tu_789", approved: true }],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "" }],
+      sessionId: "sess_appr",
+      toolResults: [{ toolUseId: "tu_789", approved: true }],
+    });
 
     expect(mockSend).toHaveBeenCalledWith("sess_appr", {
       events: [
@@ -82,13 +79,11 @@ describe("tool results / approval flow", () => {
     mockSend.mockResolvedValue({});
 
     const provider = createAnthropicProvider(config);
-    await collectStream(
-      await provider.stream({
-        messages: [{ role: MessageRole.USER, content: "" }],
-        sessionId: "sess_deny",
-        toolResults: [{ toolUseId: "tu_789", approved: false }],
-      }),
-    );
+    await provider.stream({
+      messages: [{ role: MessageRole.USER, content: "" }],
+      sessionId: "sess_deny",
+      toolResults: [{ toolUseId: "tu_789", approved: false }],
+    });
 
     expect(mockSend).toHaveBeenCalledWith("sess_deny", {
       events: [

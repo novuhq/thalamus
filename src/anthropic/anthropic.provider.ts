@@ -18,7 +18,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import { SessionExpiredError, ThalamusError } from "../errors";
-import { collectStream } from "../stream-utils";
+import { createStreamResult } from "../stream-result";
 import {
   type ActionRequired,
   ANTHROPIC,
@@ -26,6 +26,7 @@ import {
   type RequestParams,
   type Response,
   type SessionOptions,
+  type StreamCallbacks,
   type StreamPart,
   type StreamResult,
   type ToolResult,
@@ -312,28 +313,11 @@ class AnthropicProvider implements Provider {
     return this.client;
   }
 
-  async send(params: RequestParams): Promise<Response> {
-    return collectStream(await this.stream(params));
+  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult {
+    return createStreamResult(this.runStream(params), callbacks);
   }
 
-  async stream(params: RequestParams): Promise<StreamResult> {
-    let resolveResponse!: (r: Response) => void;
-    let rejectResponse!: (e: unknown) => void;
-    const responsePromise = new Promise<Response>((res, rej) => {
-      resolveResponse = res;
-      rejectResponse = rej;
-    });
-    return {
-      stream: this.runStream(params, resolveResponse, rejectResponse),
-      response: responsePromise,
-    };
-  }
-
-  private async *runStream(
-    params: RequestParams,
-    resolveResponse: (r: Response) => void,
-    rejectResponse: (e: unknown) => void,
-  ): AsyncIterable<StreamPart> {
+  private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
       const sessionId =
@@ -360,11 +344,9 @@ class AnthropicProvider implements Provider {
 
       const response = acc.toResponse(sessionId);
       yield { type: "finish", response };
-      resolveResponse(response);
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };
-      rejectResponse(error);
     }
   }
 

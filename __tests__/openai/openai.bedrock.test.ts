@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { bedrockConfig, config, makeStream, sigv4Config } from "./_helpers.js";
 
@@ -60,13 +59,12 @@ describe("Bedrock API Key auth — streaming", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(bedrockConfig).stream({
-      messages: [{ role: MessageRole.USER, content: "Hi" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    const response = await createOpenAIProvider(bedrockConfig).stream(
+      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
-    const response = await result.response;
     expect(response.content).toBe("Hello from Bedrock!");
     expect(response.sessionId).toBe("conv_br");
   });
@@ -99,11 +97,9 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    await collectStream(
-      await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: MessageRole.USER, content: "hello" }],
-      }),
-    );
+    await createOpenAIProvider(bedrockConfig).stream({
+      messages: [{ role: MessageRole.USER, content: "hello" }],
+    });
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
   });
@@ -122,10 +118,9 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    const result = await createOpenAIProvider(bedrockConfig).stream({
+    const response = await createOpenAIProvider(bedrockConfig).stream({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
-    const response = await collectStream(result);
     expect(response.sessionId).toBe("resp_br_f2");
   });
 
@@ -143,12 +138,10 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    await collectStream(
-      await createOpenAIProvider(bedrockConfig).stream({
-        messages: [{ role: MessageRole.USER, content: "next" }],
-        sessionId: "resp_br_prev",
-      }),
-    );
+    await createOpenAIProvider(bedrockConfig).stream({
+      messages: [{ role: MessageRole.USER, content: "next" }],
+      sessionId: "resp_br_prev",
+    });
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(
@@ -175,13 +168,12 @@ describe("Bedrock SigV4 auth — streaming", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(sigv4Config).stream({
-      messages: [{ role: MessageRole.USER, content: "Hi" }],
-    });
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    const response = await createOpenAIProvider(sigv4Config).stream(
+      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
-    const response = await result.response;
     expect(response.content).toBe("Signed!");
   });
 });

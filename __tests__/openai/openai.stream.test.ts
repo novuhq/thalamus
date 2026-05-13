@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, makeStream } from "./_helpers.js";
 
@@ -57,12 +56,11 @@ describe("stream — new session (conversation)", () => {
       ]),
     );
 
-    const result = await createOpenAIProvider(config).stream({
-      messages: [{ role: MessageRole.USER, content: "Hi" }],
-    });
-
-    const parts = [];
-    for await (const p of result.stream) parts.push(p);
+    const parts: any[] = [];
+    const response = await createOpenAIProvider(config).stream(
+      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(mockConversationsCreate).toHaveBeenCalledOnce();
     expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
@@ -70,7 +68,6 @@ describe("stream — new session (conversation)", () => {
     });
     expect(parts.filter((p) => p.type === "text-delta")).toHaveLength(2);
 
-    const response = await result.response;
     expect(response.content).toBe("Hello world");
     expect(response.sessionId).toBe("conv_new");
     expect(response.usage?.inputTokens).toBe(5);
@@ -92,12 +89,10 @@ describe("stream — resume session (conversation)", () => {
       ]),
     );
 
-    await collectStream(
-      await createOpenAIProvider(config).stream({
-        messages: [{ role: MessageRole.USER, content: "next" }],
-        sessionId: "conv_existing",
-      }),
-    );
+    await createOpenAIProvider(config).stream({
+      messages: [{ role: MessageRole.USER, content: "next" }],
+      sessionId: "conv_existing",
+    });
 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(

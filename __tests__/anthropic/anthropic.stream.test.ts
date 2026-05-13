@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
-import { collectStream } from "../../src/stream-utils.js";
 import { MessageRole } from "../../src/types.js";
 import { config, mockSse } from "./_helpers.js";
 
@@ -59,12 +58,11 @@ describe("stream — new session", () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    const result = await rt.stream({
-      messages: [{ role: MessageRole.USER, content: "Hi" }],
-    });
-
-    const parts = [];
-    for await (const part of result.stream) parts.push(part);
+    const parts: any[] = [];
+    const response = await rt.stream(
+      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
+      { onPart: (p) => parts.push(p) },
+    );
 
     expect(mockCreate).toHaveBeenCalledOnce();
     expect(mockSend).toHaveBeenCalledOnce();
@@ -76,7 +74,6 @@ describe("stream — new session", () => {
     });
     expect(parts.find((p) => p.type === "finish")).toBeDefined();
 
-    const response = await result.response;
     expect(response.content).toBe("Hello!");
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
@@ -102,12 +99,10 @@ describe("stream — resume session", () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    await collectStream(
-      await rt.stream({
-        messages: [{ role: MessageRole.USER, content: "next" }],
-        sessionId: "sess_existing",
-      }),
-    );
+    await rt.stream({
+      messages: [{ role: MessageRole.USER, content: "next" }],
+      sessionId: "sess_existing",
+    });
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockSseStream).toHaveBeenCalledWith("sess_existing");

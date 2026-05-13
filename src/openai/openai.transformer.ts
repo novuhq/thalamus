@@ -2,7 +2,7 @@ import { type Message, MessageRole } from "../types";
 
 type OpenAIInputContent =
   | { type: "input_text"; text: string }
-  | { type: "input_image"; image_url: { url: string } }
+  | { type: "input_image"; image_url: string }
   | { type: "input_file"; file_data: string; filename?: string };
 
 type OpenAIInputMessage = {
@@ -30,12 +30,12 @@ export const openaiTransformer = {
             parts.push({ type: "input_text", text: part.text });
             break;
           case "image-url":
-            parts.push({ type: "input_image", image_url: { url: part.url } });
+            parts.push({ type: "input_image", image_url: part.url });
             break;
           case "image":
             parts.push({
               type: "input_image",
-              image_url: { url: `data:${part.mediaType};base64,${part.data}` },
+              image_url: `data:${part.mediaType};base64,${part.data}`,
             });
             break;
           case "file":

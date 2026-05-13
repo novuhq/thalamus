@@ -406,9 +406,29 @@ class OpenAIProvider implements Provider {
           ? toMcpTools(this.mcpServers, credentials)
           : undefined;
 
+      let input: any[] = openaiTransformer.toInput(params.messages);
+
+      if (params.toolResults?.length) {
+        const toolInputs = params.toolResults.map((tr) => {
+          if (tr.approved !== undefined) {
+            return {
+              type: "mcp_approval_response",
+              approval_request_id: tr.toolUseId,
+              approve: tr.approved,
+            };
+          }
+          return {
+            type: "function_call_output",
+            call_id: tr.toolUseId,
+            output: tr.output ?? "",
+          };
+        });
+        input = [...toolInputs, ...input];
+      }
+
       const rawStream = await this.client.responses.create({
         model: this.model,
-        input: openaiTransformer.toInput(params.messages),
+        input,
         stream: true,
         ...(this.instructions ? { instructions: this.instructions } : {}),
         ...(mcpTools ? { tools: mcpTools } : {}),

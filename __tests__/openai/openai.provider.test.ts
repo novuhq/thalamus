@@ -1235,3 +1235,89 @@ describe("session lifecycle with vault", () => {
     expect(mcpTool.authorization).toBe("ghp_dynamic");
   });
 });
+
+describe("tool results / approval flow", () => {
+  it("sends mcp_approval_response input when toolResults has approved=true", async () => {
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_apr",
+            conversation: { id: "conv_apr" },
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_apr",
+            output_text: "Done!",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const provider = createOpenAIProvider(config);
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "" }],
+        sessionId: "conv_prev",
+        toolResults: [{ toolUseId: "appr_1", approved: true }],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const approvalInput = callArgs.input?.find(
+      (i: any) => i.type === "mcp_approval_response",
+    );
+    expect(approvalInput).toMatchObject({
+      type: "mcp_approval_response",
+      approval_request_id: "appr_1",
+      approve: true,
+    });
+  });
+
+  it("sends function_call_output input when toolResults has output", async () => {
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_fco",
+            conversation: { id: "conv_fco" },
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_fco",
+            output_text: "Got it",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const provider = createOpenAIProvider(config);
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "" }],
+        sessionId: "conv_prev",
+        toolResults: [{ toolUseId: "call_abc", output: '{"result": 42}' }],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const toolOutput = callArgs.input?.find(
+      (i: any) => i.type === "function_call_output",
+    );
+    expect(toolOutput).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_abc",
+      output: '{"result": 42}',
+    });
+  });
+});

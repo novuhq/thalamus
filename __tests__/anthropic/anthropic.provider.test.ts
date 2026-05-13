@@ -873,3 +873,74 @@ describe("session lifecycle", () => {
     });
   });
 });
+
+describe("tool results / approval flow", () => {
+  it("sends user.tool_confirmation when toolResults has approved=true", async () => {
+    mockSseStream.mockReturnValue(
+      mockSse([
+        {
+          type: "agent.message",
+          id: "evt_1",
+          content: [{ type: "text", text: "Done!" }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const provider = createAnthropicProvider(config);
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "" }],
+        sessionId: "sess_appr",
+        toolResults: [{ toolUseId: "tu_789", approved: true }],
+      }),
+    );
+
+    expect(mockSend).toHaveBeenCalledWith("sess_appr", {
+      events: [
+        {
+          type: "user.tool_confirmation",
+          tool_use_id: "tu_789",
+          result: "allow",
+        },
+      ],
+    });
+  });
+
+  it("sends user.tool_confirmation with deny when approved=false", async () => {
+    mockSseStream.mockReturnValue(
+      mockSse([
+        {
+          type: "session.status_idle",
+          id: "evt_1",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const provider = createAnthropicProvider(config);
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "" }],
+        sessionId: "sess_deny",
+        toolResults: [{ toolUseId: "tu_789", approved: false }],
+      }),
+    );
+
+    expect(mockSend).toHaveBeenCalledWith("sess_deny", {
+      events: [
+        {
+          type: "user.tool_confirmation",
+          tool_use_id: "tu_789",
+          result: "deny",
+        },
+      ],
+    });
+  });
+});

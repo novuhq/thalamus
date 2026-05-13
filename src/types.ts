@@ -17,6 +17,13 @@ export interface Message {
   content: string | ContentPart[];
 }
 
+export interface ToolResult {
+  toolUseId: string;
+  output?: string;
+  isError?: boolean;
+  approved?: boolean;
+}
+
 export interface RequestParams {
   /** Messages for this turn. May include system, user, and assistant messages. */
   messages: Message[];
@@ -24,6 +31,8 @@ export interface RequestParams {
   sessionId?: string;
   /** Vault IDs to bind to this request (credentials available to MCP servers). */
   vaultIds?: string[];
+  /** Approval responses or tool outputs from a previous requires-action turn. */
+  toolResults?: ToolResult[];
   /** Pass-through options forwarded directly to the underlying provider SDK call. */
   providerOptions?: Record<string, unknown>;
 }

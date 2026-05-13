@@ -306,16 +306,37 @@ class AnthropicProvider implements Provider {
       yield { type: "stream-start", sessionId };
 
       const sseStream = await client.beta.sessions.events.stream(sessionId);
-      await client.beta.sessions.events.send(sessionId, {
-        events: [
-          {
-            type: "user.message" as const,
-            content: params.messages.flatMap((msg) =>
-              toContentBlocks(msg.content),
-            ),
-          },
-        ],
-      });
+
+      if (params.toolResults?.length) {
+        const events = params.toolResults.map((tr) => {
+          if (tr.approved !== undefined) {
+            return {
+              type: "user.tool_confirmation" as const,
+              tool_use_id: tr.toolUseId,
+              result: tr.approved ? ("allow" as const) : ("deny" as const),
+            };
+          }
+          return {
+            type: "user.custom_tool_result" as const,
+            tool_use_id: tr.toolUseId,
+            content: [{ type: "text" as const, text: tr.output ?? "" }],
+          };
+        });
+        await client.beta.sessions.events.send(sessionId, {
+          events,
+        } as any);
+      } else {
+        await client.beta.sessions.events.send(sessionId, {
+          events: [
+            {
+              type: "user.message" as const,
+              content: params.messages.flatMap((msg) =>
+                toContentBlocks(msg.content),
+              ),
+            },
+          ],
+        });
+      }
 
       const acc = new ResponseAccumulator();
 

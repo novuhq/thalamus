@@ -22,6 +22,7 @@ import {
   type SessionOptions,
   type StreamPart,
   type StreamResult,
+  type ToolResult,
   type Usage,
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
@@ -68,6 +69,34 @@ function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
     isRetryable: false,
     cause: err,
   });
+}
+
+function buildSendEvents(params: RequestParams): unknown[] {
+  if (params.toolResults?.length) {
+    return params.toolResults.map(toSessionEvent);
+  }
+
+  return [
+    {
+      type: "user.message" as const,
+      content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
+    },
+  ];
+}
+
+function toSessionEvent(tr: ToolResult) {
+  if (tr.approved !== undefined) {
+    return {
+      type: "user.tool_confirmation" as const,
+      tool_use_id: tr.toolUseId,
+      result: tr.approved ? ("allow" as const) : ("deny" as const),
+    };
+  }
+  return {
+    type: "user.custom_tool_result" as const,
+    tool_use_id: tr.toolUseId,
+    content: [{ type: "text" as const, text: tr.output ?? "" }],
+  };
 }
 
 class ResponseAccumulator {
@@ -307,36 +336,10 @@ class AnthropicProvider implements Provider {
 
       const sseStream = await client.beta.sessions.events.stream(sessionId);
 
-      if (params.toolResults?.length) {
-        const events = params.toolResults.map((tr) => {
-          if (tr.approved !== undefined) {
-            return {
-              type: "user.tool_confirmation" as const,
-              tool_use_id: tr.toolUseId,
-              result: tr.approved ? ("allow" as const) : ("deny" as const),
-            };
-          }
-          return {
-            type: "user.custom_tool_result" as const,
-            tool_use_id: tr.toolUseId,
-            content: [{ type: "text" as const, text: tr.output ?? "" }],
-          };
-        });
-        await client.beta.sessions.events.send(sessionId, {
-          events,
-        } as any);
-      } else {
-        await client.beta.sessions.events.send(sessionId, {
-          events: [
-            {
-              type: "user.message" as const,
-              content: params.messages.flatMap((msg) =>
-                toContentBlocks(msg.content),
-              ),
-            },
-          ],
-        });
-      }
+      const events = buildSendEvents(params);
+      await client.beta.sessions.events.send(sessionId, {
+        events,
+      } as any);
 
       const acc = new ResponseAccumulator();
 

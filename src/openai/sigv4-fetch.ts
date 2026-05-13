@@ -7,16 +7,23 @@ export interface SigV4FetchOptions {
   };
 }
 
+type Fetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 /**
  * Creates a custom fetch function that signs requests with AWS SigV4.
  * Requires optional peer deps: @smithy/signature-v4, @aws-crypto/sha256-js
  */
-export function createSigV4Fetch(
-  options: SigV4FetchOptions,
-): (input: any, init?: any) => Promise<any> {
+export function createSigV4Fetch(options: SigV4FetchOptions): Fetch {
   const { region, credentials } = options;
 
-  return async (input: any, init?: any): Promise<any> => {
+  return async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    // Dynamic imports — optional peer deps, types unavailable at compile time
     let SignatureV4: any;
     let Sha256: any;
     try {
@@ -51,12 +58,8 @@ export function createSigV4Fetch(
     const headers: Record<string, string> = {};
     if (init?.headers) {
       const h = init.headers;
-      if (
-        typeof h === "object" &&
-        h !== null &&
-        typeof h.forEach === "function"
-      ) {
-        h.forEach((v: string, k: string) => {
+      if (h instanceof Headers) {
+        h.forEach((v, k) => {
           headers[k] = v;
         });
       } else if (Array.isArray(h)) {

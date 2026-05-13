@@ -1,6 +1,12 @@
-import OpenAI from "openai";
+import OpenAI, { APIError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
+  ResponseErrorEvent,
+  ResponseInput,
+  ResponseMcpCallArgumentsDeltaEvent,
+  ResponseOutputItem,
+  ResponseOutputItemAddedEvent,
+  ResponseOutputItemDoneEvent,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import {
@@ -33,9 +39,24 @@ import type {
 import { openaiTransformer } from "./openai.transformer";
 import { createSigV4Fetch } from "./sigv4-fetch";
 
+function isResponseErrorEvent(e: unknown): e is ResponseErrorEvent {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "type" in e &&
+    (e as ResponseErrorEvent).type === "error" &&
+    "code" in e
+  );
+}
+
 function mapError(error: unknown, provider: string): Error {
   const msg = error instanceof Error ? error.message : String(error);
-  const code = (error as any)?.code ?? "";
+  const code =
+    error instanceof APIError
+      ? (error.code ?? "")
+      : isResponseErrorEvent(error)
+        ? (error.code ?? "")
+        : "";
   if (
     code === "invalid_api_key" ||
     msg.toLowerCase().includes("unauthorized")
@@ -216,15 +237,16 @@ function* mapEvent(
 
     // --- function / tool calls ---
     case "response.output_item.added": {
-      if (event.item.type === "function_call") {
+      const e = event as ResponseOutputItemAddedEvent;
+      if (e.item.type === "function_call") {
         yield {
           type: "tool-use-start",
-          toolName: event.item.name,
-          toolUseId: event.item.call_id,
+          toolName: e.item.name,
+          toolUseId: e.item.call_id,
           source: { type: "builtin" },
         };
-      } else if ((event.item as any).type === "mcp_call") {
-        const item = event.item as any;
+      } else if (e.item.type === "mcp_call") {
+        const item = e.item as ResponseOutputItem.McpCall;
         yield {
           type: "tool-use-start",
           toolName: item.name,
@@ -242,8 +264,8 @@ function* mapEvent(
       };
       break;
     }
-    case "response.mcp_call_arguments.delta" as any: {
-      const e = event as any;
+    case "response.mcp_call_arguments.delta": {
+      const e = event as ResponseMcpCallArgumentsDeltaEvent;
       yield {
         type: "tool-use-delta",
         toolUseId: e.item_id,
@@ -252,26 +274,28 @@ function* mapEvent(
       break;
     }
     case "response.output_item.done": {
-      const item = event.item as any;
-      if (item.type === "function_call") {
+      const e = event as ResponseOutputItemDoneEvent;
+      if (e.item.type === "function_call") {
         yield {
           type: "tool-use-done",
-          toolName: item.name,
-          toolUseId: item.call_id,
-          input: JSON.parse(item.arguments || "{}"),
+          toolName: e.item.name,
+          toolUseId: e.item.call_id,
+          input: JSON.parse(e.item.arguments || "{}"),
           source: { type: "builtin" },
         };
-      } else if (item.type === "mcp_list_tools") {
+      } else if (e.item.type === "mcp_list_tools") {
+        const item = e.item as ResponseOutputItem.McpListTools;
         yield {
           type: "mcp-tools-discovered",
           serverName: item.server_label,
-          tools: (item.tools ?? []).map((t: any) => ({
+          tools: (item.tools ?? []).map((t) => ({
             name: t.name,
-            description: t.description,
-            inputSchema: t.input_schema,
+            description: t.description ?? undefined,
+            inputSchema: t.input_schema as Record<string, unknown> | undefined,
           })),
         };
-      } else if (item.type === "mcp_call") {
+      } else if (e.item.type === "mcp_call") {
+        const item = e.item as ResponseOutputItem.McpCall;
         yield {
           type: "tool-use-done",
           toolName: item.name,
@@ -282,10 +306,11 @@ function* mapEvent(
         yield {
           type: "tool-use-result",
           toolUseId: item.id,
-          output: item.output,
+          output: item.output ?? undefined,
           source: { type: "mcp", serverName: item.server_label },
         };
-      } else if (item.type === "mcp_approval_request") {
+      } else if (e.item.type === "mcp_approval_request") {
+        const item = e.item as ResponseOutputItem.McpApprovalRequest;
         acc.finishReason = "requires-action";
         acc.actionsRequired.push({
           type: "mcp-approval",
@@ -406,19 +431,21 @@ class OpenAIProvider implements Provider {
           ? toMcpTools(this.mcpServers, credentials)
           : undefined;
 
-      let input: any[] = openaiTransformer.toInput(params.messages);
+      let input: ResponseInput = openaiTransformer.toInput(
+        params.messages,
+      ) as ResponseInput;
 
       if (params.toolResults?.length) {
-        const toolInputs = params.toolResults.map((tr) => {
+        const toolInputs: ResponseInput = params.toolResults.map((tr) => {
           if (tr.approved !== undefined) {
             return {
-              type: "mcp_approval_response",
+              type: "mcp_approval_response" as const,
               approval_request_id: tr.toolUseId,
               approve: tr.approved,
             };
           }
           return {
-            type: "function_call_output",
+            type: "function_call_output" as const,
             call_id: tr.toolUseId,
             output: tr.output ?? "",
           };
@@ -455,7 +482,7 @@ class OpenAIProvider implements Provider {
   async createVault(options: VaultOptions): Promise<Vault> {
     if (!this.vaultStore) {
       throw new ThalamusError(
-        "vaultStore is required for OpenAI vault support",
+        "Pass a vaultStore to createOpenAIProvider() to use vault operations",
         {
           provider: OPENAI,
           isRetryable: false,

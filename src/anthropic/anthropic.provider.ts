@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import type {
   BetaManagedAgentsAgentCustomToolUseEvent,
   BetaManagedAgentsAgentMCPToolResultEvent,
@@ -6,11 +6,17 @@ import type {
   BetaManagedAgentsAgentMessageEvent,
   BetaManagedAgentsAgentToolResultEvent,
   BetaManagedAgentsAgentToolUseEvent,
+  BetaManagedAgentsEventParams,
   BetaManagedAgentsSessionErrorEvent,
   BetaManagedAgentsSessionStatusIdleEvent,
   BetaManagedAgentsSpanModelRequestEndEvent,
   BetaManagedAgentsStreamSessionEvents,
+  BetaManagedAgentsUserCustomToolResultEventParams,
+  BetaManagedAgentsUserMessageEventParams,
+  BetaManagedAgentsUserToolConfirmationEventParams,
+  EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
+import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import { SessionExpiredError, ThalamusError } from "../errors";
 import { collectStream } from "../stream-utils";
 import {
@@ -52,8 +58,8 @@ function mapSessionError(raw: unknown): ThalamusError {
 }
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
-  if (sessionId && err instanceof Error && "status" in err) {
-    const status = (err as any).status;
+  if (sessionId && err instanceof APIError) {
+    const status = err.status;
     if (status === 404 || status === 410) {
       return new SessionExpiredError(
         `Session ${sessionId} has expired or been archived`,
@@ -71,20 +77,25 @@ function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   });
 }
 
-function buildSendEvents(params: RequestParams): unknown[] {
+function buildSendEvents(
+  params: RequestParams,
+): BetaManagedAgentsEventParams[] {
   if (params.toolResults?.length) {
     return params.toolResults.map(toSessionEvent);
   }
 
-  return [
-    {
-      type: "user.message" as const,
-      content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
-    },
-  ];
+  const event: BetaManagedAgentsUserMessageEventParams = {
+    type: "user.message",
+    content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
+  };
+  return [event];
 }
 
-function toSessionEvent(tr: ToolResult) {
+function toSessionEvent(
+  tr: ToolResult,
+):
+  | BetaManagedAgentsUserToolConfirmationEventParams
+  | BetaManagedAgentsUserCustomToolResultEventParams {
   if (tr.approved !== undefined) {
     return {
       type: "user.tool_confirmation" as const,
@@ -94,7 +105,7 @@ function toSessionEvent(tr: ToolResult) {
   }
   return {
     type: "user.custom_tool_result" as const,
-    tool_use_id: tr.toolUseId,
+    custom_tool_use_id: tr.toolUseId,
     content: [{ type: "text" as const, text: tr.output ?? "" }],
   };
 }
@@ -173,7 +184,7 @@ function* mapEvent(
         input: e.input,
         source: {
           type: "mcp",
-          serverName: (e as any).server_name ?? "",
+          serverName: e.mcp_server_name ?? "",
         },
       };
       break;
@@ -187,7 +198,7 @@ function* mapEvent(
         output: output?.type === "text" ? output.text : undefined,
         source: {
           type: "mcp",
-          serverName: (e as any).server_name ?? "",
+          serverName: "",
         },
       };
       break;
@@ -337,9 +348,8 @@ class AnthropicProvider implements Provider {
       const sseStream = await client.beta.sessions.events.stream(sessionId);
 
       const events = buildSendEvents(params);
-      await client.beta.sessions.events.send(sessionId, {
-        events,
-      } as any);
+      const sendParams: EventSendParams = { events };
+      await client.beta.sessions.events.send(sessionId, sendParams);
 
       const acc = new ResponseAccumulator();
 
@@ -360,15 +370,13 @@ class AnthropicProvider implements Provider {
 
   async createSession(options?: SessionOptions): Promise<string> {
     const client = await this.getClient();
-    const params: Record<string, unknown> = {
+    const params: SessionCreateParams = {
       agent: this.agentId,
       environment_id: this.environmentId,
+      ...(options?.vaultIds?.length ? { vault_ids: options.vaultIds } : {}),
       ...options?.providerOptions,
     };
-    if (options?.vaultIds?.length) {
-      params.vault_ids = options.vaultIds;
-    }
-    const session = await client.beta.sessions.create(params as any);
+    const session = await client.beta.sessions.create(params);
     return session.id;
   }
 
@@ -378,17 +386,17 @@ class AnthropicProvider implements Provider {
 
   async createVault(options: VaultOptions): Promise<Vault> {
     const client = await this.getClient();
-    const result = await (client.beta as any).vaults.create({
+    const result = await client.beta.vaults.create({
       display_name: options.name,
       metadata: options.metadata,
     });
-    return new AnthropicVault(result.id, client);
+    return new AnthropicVault(result.id, client, this.agentId);
   }
 
   async getVault(vaultId: string): Promise<Vault> {
     const client = await this.getClient();
-    await (client.beta as any).vaults.retrieve(vaultId);
-    return new AnthropicVault(vaultId, client);
+    await client.beta.vaults.retrieve(vaultId);
+    return new AnthropicVault(vaultId, client, this.agentId);
   }
 }
 

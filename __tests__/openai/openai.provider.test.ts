@@ -17,7 +17,8 @@ const mockResponsesCreate = vi.fn();
 const mockConversationsCreate = vi.fn();
 let lastOpenAIConfig: Record<string, unknown> | undefined;
 
-vi.mock("openai", () => {
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
   // biome-ignore lint/complexity/useArrowFunction: must be callable with `new`
   const MockOpenAI = function (config: Record<string, unknown>) {
     lastOpenAIConfig = config;
@@ -26,7 +27,7 @@ vi.mock("openai", () => {
       conversations: { create: mockConversationsCreate },
     };
   };
-  return { default: MockOpenAI };
+  return { default: MockOpenAI, APIError: actual.APIError };
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -1129,7 +1130,7 @@ describe("vault support", () => {
     const provider = createOpenAIProvider(config);
 
     await expect(provider.createVault({ name: "Alice" })).rejects.toThrow(
-      "vaultStore is required",
+      "Pass a vaultStore",
     );
   });
 });

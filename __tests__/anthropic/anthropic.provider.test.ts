@@ -1,3 +1,4 @@
+import { APIError } from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { SessionExpiredError, ThalamusError } from "../../src/errors.js";
@@ -19,7 +20,8 @@ const mockVaultCreate = vi.fn();
 const mockVaultRetrieve = vi.fn();
 const mockAnthropicAws = vi.hoisted(() => vi.fn());
 
-vi.mock("@anthropic-ai/sdk", () => {
+vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
   // biome-ignore lint/complexity/useArrowFunction: must be callable with `new`
   const MockAnthropic = function () {
     return {
@@ -35,7 +37,7 @@ vi.mock("@anthropic-ai/sdk", () => {
       },
     };
   };
-  return { default: MockAnthropic };
+  return { default: MockAnthropic, APIError: actual.APIError };
 });
 
 vi.mock("@anthropic-ai/aws-sdk", () => ({
@@ -541,7 +543,7 @@ describe("stream — event mapping", () => {
           id: "mcp_1",
           name: "create_issue",
           input: {},
-          server_name: "github",
+          mcp_server_name: "github",
         },
         {
           type: "session.status_idle",
@@ -562,7 +564,7 @@ describe("stream — event mapping", () => {
     expect(toolDone.source).toEqual({ type: "mcp", serverName: "github" });
   });
 
-  it("emits source: mcp on agent.mcp_tool_result with serverName", async () => {
+  it("emits source: mcp on agent.mcp_tool_result", async () => {
     mockCreate.mockResolvedValue({ id: "sess_src_mcpr" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -570,7 +572,6 @@ describe("stream — event mapping", () => {
           type: "agent.mcp_tool_result",
           id: "evt_1",
           mcp_tool_use_id: "mcp_1",
-          server_name: "github",
           content: [{ type: "text", text: "Created #456" }],
         },
         {
@@ -589,7 +590,7 @@ describe("stream — event mapping", () => {
     for await (const p of result.stream) parts.push(p);
 
     const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
-    expect(toolResult.source).toEqual({ type: "mcp", serverName: "github" });
+    expect(toolResult.source).toEqual({ type: "mcp", serverName: "" });
   });
 
   it("emits status-change running on session.status_running", async () => {
@@ -728,9 +729,7 @@ describe("stream — event mapping", () => {
 
 describe("session expiry detection", () => {
   it("throws SessionExpiredError when SSE stream returns 404 on resume", async () => {
-    const notFoundError = Object.assign(new Error("Not Found"), {
-      status: 404,
-    });
+    const notFoundError = new APIError(404, undefined, "Not Found", undefined);
     mockSseStream.mockRejectedValue(notFoundError);
 
     const result = await createAnthropicProvider(config).stream({
@@ -750,7 +749,7 @@ describe("session expiry detection", () => {
   });
 
   it("throws SessionExpiredError when SSE stream returns 410 on resume", async () => {
-    const goneError = Object.assign(new Error("Gone"), { status: 410 });
+    const goneError = new APIError(410, undefined, "Gone", undefined);
     mockSseStream.mockRejectedValue(goneError);
 
     const result = await createAnthropicProvider(config).stream({
@@ -769,9 +768,12 @@ describe("session expiry detection", () => {
   });
 
   it("does NOT throw SessionExpiredError for other errors", async () => {
-    const serverError = Object.assign(new Error("Internal Server Error"), {
-      status: 500,
-    });
+    const serverError = new APIError(
+      500,
+      undefined,
+      "Internal Server Error",
+      undefined,
+    );
     mockSseStream.mockRejectedValue(serverError);
 
     const result = await createAnthropicProvider(config).stream({

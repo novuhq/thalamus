@@ -298,7 +298,10 @@ class AnthropicProvider implements Provider {
       const client = await this.getClient();
       const sessionId =
         params.sessionId ??
-        (await this.initSession(client, params.providerOptions));
+        (await this.createSession({
+          vaultIds: params.vaultIds,
+          providerOptions: params.providerOptions,
+        }));
 
       yield { type: "stream-start", sessionId };
 
@@ -329,19 +332,6 @@ class AnthropicProvider implements Provider {
       yield { type: "error", error };
       rejectResponse(error);
     }
-  }
-
-  private async initSession(
-    client: Anthropic,
-    providerOptions?: Record<string, unknown>,
-  ): Promise<string> {
-    const session = await client.beta.sessions.create({
-      agent: this.agentId,
-      environment_id: this.environmentId,
-      ...providerOptions,
-    });
-
-    return session.id;
   }
 
   async createSession(options?: SessionOptions): Promise<string> {

@@ -842,3 +842,34 @@ describe("vault support", () => {
     expect(mockVaultRetrieve).toHaveBeenCalledWith("vlt_abc");
   });
 });
+
+describe("session lifecycle", () => {
+  it("createSession creates a session with vault_ids", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_vault" });
+
+    const provider = createAnthropicProvider(config);
+    const sessionId = await provider.createSession({
+      vaultIds: ["vlt_abc", "vlt_shared"],
+    });
+
+    expect(sessionId).toBe("sess_vault");
+    expect(mockCreate).toHaveBeenCalledWith({
+      agent: "agent_abc",
+      environment_id: "env_xyz",
+      vault_ids: ["vlt_abc", "vlt_shared"],
+    });
+  });
+
+  it("createSession without vaultIds creates session without vault_ids", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_no_vault" });
+
+    const provider = createAnthropicProvider(config);
+    const sessionId = await provider.createSession();
+
+    expect(sessionId).toBe("sess_no_vault");
+    expect(mockCreate).toHaveBeenCalledWith({
+      agent: "agent_abc",
+      environment_id: "env_xyz",
+    });
+  });
+});

@@ -1133,3 +1133,105 @@ describe("vault support", () => {
     );
   });
 });
+
+describe("session lifecycle with vault", () => {
+  it("vaultIds on stream() injects credentials per-request", async () => {
+    const store = createMemoryVaultStore();
+    const provider = createOpenAIProvider({
+      ...config,
+      vaultStore: store,
+      mcpServers: [{ name: "github", url: "https://mcp.github.com" }],
+    });
+
+    const vault = await provider.createVault({ name: "Bob" });
+    await vault.add("github", { type: "bearer", token: "ghp_yyy" });
+
+    mockConversationsCreate.mockResolvedValue({ id: "conv_sl" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_sl",
+            conversation: { id: "conv_sl" },
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_sl",
+            output_text: "ok",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+        vaultIds: [vault.id],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const mcpTool = callArgs.tools?.find(
+      (t: any) => t.type === "mcp" && t.server_label === "github",
+    );
+    expect(mcpTool.authorization).toBe("ghp_yyy");
+  });
+
+  it("vault credential takes priority over static server.authorization", async () => {
+    const store = createMemoryVaultStore();
+    const provider = createOpenAIProvider({
+      ...config,
+      vaultStore: store,
+      mcpServers: [
+        {
+          name: "github",
+          url: "https://mcp.github.com",
+          authorization: "Bearer static_token",
+        },
+      ],
+    });
+
+    const vault = await provider.createVault({ name: "Carol" });
+    await vault.add("github", { type: "bearer", token: "ghp_dynamic" });
+
+    mockConversationsCreate.mockResolvedValue({ id: "conv_pri" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: {
+            id: "resp_pri",
+            conversation: { id: "conv_pri" },
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_pri",
+            output_text: "ok",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    await collectStream(
+      await provider.stream({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+        vaultIds: [vault.id],
+      }),
+    );
+
+    const callArgs = mockResponsesCreate.mock.calls[0][0];
+    const mcpTool = callArgs.tools?.find(
+      (t: any) => t.type === "mcp" && t.server_label === "github",
+    );
+    expect(mcpTool.authorization).toBe("ghp_dynamic");
+  });
+});

@@ -24,7 +24,12 @@ import {
   type Usage,
 } from "../types";
 import { LocalVault } from "../vault/local-vault";
-import type { Vault, VaultOptions, VaultStore } from "../vault/vault.interface";
+import type {
+  Credential,
+  Vault,
+  VaultOptions,
+  VaultStore,
+} from "../vault/vault.interface";
 import { openaiTransformer } from "./openai.transformer";
 import { createSigV4Fetch } from "./sigv4-fetch";
 
@@ -92,16 +97,26 @@ function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
 
 // OpenAI SDK (v6.37) doesn't export MCP tool types yet — using untyped records
 // matching the wire format from https://developers.openai.com/docs/guides/tools-connectors-mcp
-function toMcpTools(servers: McpServerConfig[]): Record<string, unknown>[] {
+function toMcpTools(
+  servers: McpServerConfig[],
+  credentials?: Map<string, Credential>,
+): Record<string, unknown>[] {
   return servers.map((server) => {
     const tool: Record<string, unknown> = {
       type: "mcp",
       server_label: server.name,
       server_url: server.url,
     };
-    if (server.authorization) {
+
+    // Vault credential takes priority over static server.authorization
+    const cred = credentials?.get(server.name);
+    if (cred) {
+      tool.authorization =
+        cred.type === "bearer" ? cred.token : cred.accessToken;
+    } else if (server.authorization) {
       tool.authorization = server.authorization;
     }
+
     if (server.allowedTools) {
       tool.allowed_tools = server.allowedTools;
     }
@@ -382,8 +397,14 @@ class OpenAIProvider implements Provider {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
 
+      const credentials = params.vaultIds?.length
+        ? await this.resolveCredentials(params.vaultIds)
+        : undefined;
+
       const mcpTools =
-        this.mcpServers.length > 0 ? toMcpTools(this.mcpServers) : undefined;
+        this.mcpServers.length > 0
+          ? toMcpTools(this.mcpServers, credentials)
+          : undefined;
 
       const rawStream = await this.client.responses.create({
         model: this.model,
@@ -445,9 +466,28 @@ class OpenAIProvider implements Provider {
     return new LocalVault(record.id, OPENAI, this.vaultStore);
   }
 
+  private async resolveCredentials(
+    vaultIds: string[],
+  ): Promise<Map<string, Credential>> {
+    if (!this.vaultStore) {
+      throw new ThalamusError(
+        "vaultStore is required to resolve vault credentials",
+        { provider: OPENAI, isRetryable: false },
+      );
+    }
+    const merged = new Map<string, Credential>();
+    for (const vid of vaultIds) {
+      const stored = await this.vaultStore.getAll(vid);
+      for (const s of stored) {
+        if (!merged.has(s.name)) {
+          merged.set(s.name, s.credential);
+        }
+      }
+    }
+    return merged;
+  }
+
   async createSession(_options?: SessionOptions): Promise<string> {
-    // OpenAI Responses API is stateless — no server-side session to create.
-    // Return a client-generated ID for tracking purposes.
     return crypto.randomUUID();
   }
 

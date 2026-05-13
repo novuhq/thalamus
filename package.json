@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Provider-agnostic managed AI agent runtime for Novu",
   "type": "module",
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
@@ -34,7 +39,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky && tsup"
   },
   "peerDependencies": {
     "@anthropic-ai/aws-sdk": ">=0.86.0",

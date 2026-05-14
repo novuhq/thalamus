@@ -17,7 +17,11 @@ vi.mock("openai", async (importOriginal) => {
       conversations: { create: mockConversationsCreate },
     };
   };
-  return { default: MockOpenAI, APIError: actual.APIError };
+  return {
+    default: MockOpenAI,
+    APIError: actual.APIError,
+    APIUserAbortError: actual.APIUserAbortError,
+  };
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -146,6 +150,7 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(
       expect.objectContaining({ previous_response_id: "resp_br_prev" }),
+      expect.objectContaining({}),
     );
     expect(mockResponsesCreate.mock.calls[0][0].conversation).toBeUndefined();
   });

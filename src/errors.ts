@@ -98,6 +98,20 @@ export class CredentialExpiredError extends VaultError {
   }
 }
 
+export class AbortedError extends ThalamusError {
+  readonly sessionId?: string;
+
+  constructor(options: {
+    provider: string;
+    sessionId?: string;
+    cause?: unknown;
+  }) {
+    super("Operation aborted", { ...options, isRetryable: false });
+    this.name = "AbortedError";
+    this.sessionId = options.sessionId;
+  }
+}
+
 export class McpServerError extends ThalamusError {
   readonly serverName: string;
   readonly statusCode?: number;

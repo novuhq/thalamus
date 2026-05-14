@@ -15,7 +15,11 @@ vi.mock("openai", async (importOriginal) => {
       conversations: { create: mockConversationsCreate },
     };
   };
-  return { default: MockOpenAI, APIError: actual.APIError };
+  return {
+    default: MockOpenAI,
+    APIError: actual.APIError,
+    APIUserAbortError: actual.APIUserAbortError,
+  };
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -97,6 +101,7 @@ describe("stream — resume session (conversation)", () => {
     expect(mockConversationsCreate).not.toHaveBeenCalled();
     expect(mockResponsesCreate).toHaveBeenCalledWith(
       expect.objectContaining({ conversation: { id: "conv_existing" } }),
+      expect.objectContaining({}),
     );
   });
 });

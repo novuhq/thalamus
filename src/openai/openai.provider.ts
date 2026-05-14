@@ -1,4 +1,4 @@
-import OpenAI, { APIError } from "openai";
+import OpenAI, { APIError, APIUserAbortError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseErrorEvent,
@@ -10,6 +10,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import {
+  AbortedError,
   ProviderAuthError,
   ProviderRateLimitError,
   ProviderResponseError,
@@ -51,6 +52,10 @@ function isResponseErrorEvent(e: unknown): e is ResponseErrorEvent {
 }
 
 function mapError(error: unknown, provider: string): Error {
+  if (error instanceof APIUserAbortError) {
+    return new AbortedError({ provider, cause: error });
+  }
+
   const msg = error instanceof Error ? error.message : String(error);
   const code =
     error instanceof APIError
@@ -437,15 +442,19 @@ class OpenAIProvider implements Provider {
         input = [...toolInputs, ...input];
       }
 
-      const rawStream = await this.client.responses.create({
-        model: this.model,
-        input,
-        stream: true,
-        ...(this.instructions ? { instructions: this.instructions } : {}),
-        ...(mcpTools ? { tools: mcpTools } : {}),
-        ...sessionParams,
-        ...params.providerOptions,
-      } as ResponseCreateParamsStreaming);
+      const signal = params.abortSignal ?? undefined;
+      const rawStream = await this.client.responses.create(
+        {
+          model: this.model,
+          input,
+          stream: true,
+          ...(this.instructions ? { instructions: this.instructions } : {}),
+          ...(mcpTools ? { tools: mcpTools } : {}),
+          ...sessionParams,
+          ...params.providerOptions,
+        } as ResponseCreateParamsStreaming,
+        { signal },
+      );
 
       const acc = new ResponseAccumulator();
       for await (const rawEvent of rawStream) {

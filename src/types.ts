@@ -35,6 +35,8 @@ export interface RequestParams {
   toolResults?: ToolResult[];
   /** Pass-through options forwarded directly to the underlying provider SDK call. */
   providerOptions?: Record<string, unknown>;
+  /** When fired, the SDK closes the connection and the operation yields an `AbortedError`. */
+  abortSignal?: AbortSignal;
 }
 
 export interface SessionOptions {

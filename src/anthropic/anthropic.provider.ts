@@ -1,4 +1,4 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
+import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 import type {
   BetaManagedAgentsAgentCustomToolUseEvent,
   BetaManagedAgentsAgentMCPToolResultEvent,
@@ -17,7 +17,7 @@ import type {
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
-import { SessionExpiredError, ThalamusError } from "../errors";
+import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
 import { createStreamResult } from "../stream-result";
 import {
   type ActionRequired,
@@ -59,6 +59,10 @@ function mapSessionError(raw: unknown): ThalamusError {
 }
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
+  if (err instanceof APIUserAbortError) {
+    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
+  }
+
   if (sessionId && err instanceof APIError) {
     const status = err.status;
     if (status === 404 || status === 410) {
@@ -329,11 +333,18 @@ class AnthropicProvider implements Provider {
 
       yield { type: "stream-start", sessionId };
 
-      const sseStream = await client.beta.sessions.events.stream(sessionId);
+      const signal = params.abortSignal ?? undefined;
+      const sseStream = await client.beta.sessions.events.stream(
+        sessionId,
+        undefined,
+        { signal },
+      );
 
       const events = buildSendEvents(params);
       const sendParams: EventSendParams = { events };
-      await client.beta.sessions.events.send(sessionId, sendParams);
+      await client.beta.sessions.events.send(sessionId, sendParams, {
+        signal,
+      });
 
       const acc = new ResponseAccumulator();
 

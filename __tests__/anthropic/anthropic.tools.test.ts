@@ -21,7 +21,11 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       },
     };
   };
-  return { default: MockAnthropic, APIError: actual.APIError };
+  return {
+    default: MockAnthropic,
+    APIError: actual.APIError,
+    APIUserAbortError: actual.APIUserAbortError,
+  };
 });
 
 vi.mock("@anthropic-ai/aws-sdk", () => ({
@@ -55,15 +59,19 @@ describe("tool results / approval flow", () => {
       toolResults: [{ toolUseId: "tu_789", approved: true }],
     });
 
-    expect(mockSend).toHaveBeenCalledWith("sess_appr", {
-      events: [
-        {
-          type: "user.tool_confirmation",
-          tool_use_id: "tu_789",
-          result: "allow",
-        },
-      ],
-    });
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_appr",
+      {
+        events: [
+          {
+            type: "user.tool_confirmation",
+            tool_use_id: "tu_789",
+            result: "allow",
+          },
+        ],
+      },
+      expect.objectContaining({}),
+    );
   });
 
   it("sends user.tool_confirmation with deny when approved=false", async () => {
@@ -85,14 +93,18 @@ describe("tool results / approval flow", () => {
       toolResults: [{ toolUseId: "tu_789", approved: false }],
     });
 
-    expect(mockSend).toHaveBeenCalledWith("sess_deny", {
-      events: [
-        {
-          type: "user.tool_confirmation",
-          tool_use_id: "tu_789",
-          result: "deny",
-        },
-      ],
-    });
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_deny",
+      {
+        events: [
+          {
+            type: "user.tool_confirmation",
+            tool_use_id: "tu_789",
+            result: "deny",
+          },
+        ],
+      },
+      expect.objectContaining({}),
+    );
   });
 });

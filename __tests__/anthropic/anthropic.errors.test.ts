@@ -23,7 +23,11 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       },
     };
   };
-  return { default: MockAnthropic, APIError: actual.APIError };
+  return {
+    default: MockAnthropic,
+    APIError: actual.APIError,
+    APIUserAbortError: actual.APIUserAbortError,
+  };
 });
 
 vi.mock("@anthropic-ai/aws-sdk", () => ({

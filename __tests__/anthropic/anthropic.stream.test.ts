@@ -21,7 +21,11 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       },
     };
   };
-  return { default: MockAnthropic, APIError: actual.APIError };
+  return {
+    default: MockAnthropic,
+    APIError: actual.APIError,
+    APIUserAbortError: actual.APIUserAbortError,
+  };
 });
 
 vi.mock("@anthropic-ai/aws-sdk", () => ({
@@ -105,6 +109,10 @@ describe("stream — resume session", () => {
     });
 
     expect(mockCreate).not.toHaveBeenCalled();
-    expect(mockSseStream).toHaveBeenCalledWith("sess_existing");
+    expect(mockSseStream).toHaveBeenCalledWith(
+      "sess_existing",
+      undefined,
+      expect.objectContaining({}),
+    );
   });
 });

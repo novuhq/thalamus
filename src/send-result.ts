@@ -1,8 +1,8 @@
 import type {
   Response,
+  SendResult,
   StreamCallbacks,
   StreamPart,
-  StreamResult,
 } from "./types";
 
 const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
@@ -21,13 +21,33 @@ const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
   "provider-event": "onProviderEvent",
 };
 
-class StreamResultImpl implements StreamResult {
+export interface SendResultOptions {
+  autoStart?: boolean;
+}
+
+class SendResultImpl implements SendResult {
   private _promise: Promise<Response> | null = null;
+  private _sessionIdResolve!: (id: string) => void;
+  private readonly _sessionId: Promise<string>;
 
   constructor(
     private readonly source: AsyncIterable<StreamPart>,
     private readonly callbacks?: StreamCallbacks,
-  ) {}
+    options?: SendResultOptions,
+  ) {
+    this._sessionId = new Promise<string>((resolve) => {
+      this._sessionIdResolve = resolve;
+    });
+
+    if (options?.autoStart) {
+      this._promise = this.run();
+    }
+  }
+
+  get sessionId(): Promise<string> {
+    this._promise ??= this.run();
+    return this._sessionId;
+  }
 
   get response(): Promise<Response> {
     this._promise ??= this.run();
@@ -50,6 +70,9 @@ class StreamResultImpl implements StreamResult {
 
   private async run(): Promise<Response> {
     for await (const part of this.source) {
+      if (part.type === "stream-start" && part.sessionId) {
+        this._sessionIdResolve(part.sessionId);
+      }
       this.dispatch(part);
       if (part.type === "finish") return part.response;
       if (part.type === "error") throw part.error;
@@ -66,9 +89,10 @@ class StreamResultImpl implements StreamResult {
   }
 }
 
-export function createStreamResult(
+export function createSendResult(
   source: AsyncIterable<StreamPart>,
   callbacks?: StreamCallbacks,
-): StreamResult {
-  return new StreamResultImpl(source, callbacks);
+  options?: SendResultOptions,
+): SendResult {
+  return new SendResultImpl(source, callbacks, options);
 }

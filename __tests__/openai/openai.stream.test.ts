@@ -61,10 +61,10 @@ describe("stream — new session (conversation)", () => {
     );
 
     const parts: any[] = [];
-    const response = await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const response = await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
     expect(mockConversationsCreate).toHaveBeenCalledOnce();
     expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
@@ -78,7 +78,7 @@ describe("stream — new session (conversation)", () => {
   });
 });
 
-describe("stream — resume session (conversation)", () => {
+describe("send — resume session (conversation)", () => {
   it("passes conversation id when sessionId is provided, skips conversations.create", async () => {
     mockResponsesCreate.mockReturnValue(
       makeStream([
@@ -93,7 +93,7 @@ describe("stream — resume session (conversation)", () => {
       ]),
     );
 
-    await createOpenAIProvider(config).stream({
+    await createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "next" }],
       sessionId: "conv_existing",
     });

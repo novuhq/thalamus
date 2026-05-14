@@ -76,10 +76,10 @@ describe("tool call streaming", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "weather?" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "weather?" }] });
 
     const toolParts = parts.filter(
       (p) =>
@@ -135,7 +135,7 @@ describe("tool results / approval flow", () => {
     );
 
     const provider = createOpenAIProvider(config);
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "" }],
       sessionId: "conv_prev",
       toolResults: [{ toolUseId: "appr_1", approved: true }],
@@ -175,7 +175,7 @@ describe("tool results / approval flow", () => {
     );
 
     const provider = createOpenAIProvider(config);
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "" }],
       sessionId: "conv_prev",
       toolResults: [{ toolUseId: "call_abc", output: '{"result": 42}' }],

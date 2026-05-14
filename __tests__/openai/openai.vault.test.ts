@@ -67,7 +67,7 @@ describe("vault support", () => {
 });
 
 describe("session lifecycle with vault", () => {
-  it("vaultIds on stream() injects credentials per-request", async () => {
+  it("vaultIds on send() injects credentials per-request", async () => {
     const store = createMemoryVaultStore();
     const provider = createOpenAIProvider({
       ...config,
@@ -100,7 +100,7 @@ describe("session lifecycle with vault", () => {
       ]),
     );
 
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
       vaultIds: [vault.id],
     });
@@ -151,7 +151,7 @@ describe("session lifecycle with vault", () => {
       ]),
     );
 
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
       vaultIds: [vault.id],
     });

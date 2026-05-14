@@ -36,7 +36,7 @@ vi.mock("@anthropic-ai/aws-sdk", () => ({
 
 afterEach(() => vi.clearAllMocks());
 
-describe("stream — abort signal", () => {
+describe("send — abort signal", () => {
   it("yields AbortedError when the signal is aborted during SSE streaming", async () => {
     mockCreate.mockResolvedValue({ id: "sess_abort" });
     mockSseStream.mockRejectedValue(new APIUserAbortError());
@@ -46,7 +46,7 @@ describe("stream — abort signal", () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = rt.stream({
+    const result = rt.send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
       abortSignal: controller.signal,
     });
@@ -79,7 +79,7 @@ describe("stream — abort signal", () => {
 
     const controller = new AbortController();
     const rt = createAnthropicProvider(config);
-    await rt.stream({
+    await rt.send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
       abortSignal: controller.signal,
     });

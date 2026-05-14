@@ -52,10 +52,10 @@ describe("error mapping", () => {
 
     const parts: any[] = [];
     try {
-      await createAnthropicProvider(config).stream(
-        { messages: [{ role: MessageRole.USER, content: "x" }] },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createAnthropicProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
@@ -71,13 +71,13 @@ describe("session expiry detection", () => {
 
     const parts: any[] = [];
     try {
-      await createAnthropicProvider(config).stream(
-        {
-          messages: [{ role: MessageRole.USER, content: "hello" }],
-          sessionId: "sess_expired",
-        },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createAnthropicProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({
+        messages: [{ role: MessageRole.USER, content: "hello" }],
+        sessionId: "sess_expired",
+      });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
@@ -93,13 +93,13 @@ describe("session expiry detection", () => {
 
     const parts: any[] = [];
     try {
-      await createAnthropicProvider(config).stream(
-        {
-          messages: [{ role: MessageRole.USER, content: "hello" }],
-          sessionId: "sess_gone",
-        },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createAnthropicProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({
+        messages: [{ role: MessageRole.USER, content: "hello" }],
+        sessionId: "sess_gone",
+      });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
@@ -119,13 +119,13 @@ describe("session expiry detection", () => {
 
     const parts: any[] = [];
     try {
-      await createAnthropicProvider(config).stream(
-        {
-          messages: [{ role: MessageRole.USER, content: "hello" }],
-          sessionId: "sess_other",
-        },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createAnthropicProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({
+        messages: [{ role: MessageRole.USER, content: "hello" }],
+        sessionId: "sess_other",
+      });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
@@ -141,10 +141,12 @@ describe("session expiry detection", () => {
 
     const parts: any[] = [];
     try {
-      await createAnthropicProvider(config).stream(
-        { messages: [{ role: MessageRole.USER, content: "hello" }] },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createAnthropicProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({
+        messages: [{ role: MessageRole.USER, content: "hello" }],
+      });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");

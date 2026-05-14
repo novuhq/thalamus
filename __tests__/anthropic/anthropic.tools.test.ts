@@ -53,7 +53,7 @@ describe("tool results / approval flow", () => {
     mockSend.mockResolvedValue({});
 
     const provider = createAnthropicProvider(config);
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "" }],
       sessionId: "sess_appr",
       toolResults: [{ toolUseId: "tu_789", approved: true }],
@@ -87,7 +87,7 @@ describe("tool results / approval flow", () => {
     mockSend.mockResolvedValue({});
 
     const provider = createAnthropicProvider(config);
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "" }],
       sessionId: "sess_deny",
       toolResults: [{ toolUseId: "tu_789", approved: false }],

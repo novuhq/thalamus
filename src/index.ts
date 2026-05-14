@@ -1,6 +1,5 @@
 export * from "./errors";
-export * from "./stream-result";
-export * from "./stream-utils";
+export * from "./send-result";
 export * from "./types";
 export type {
   Credential,

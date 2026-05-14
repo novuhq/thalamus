@@ -76,12 +76,14 @@ describe("AWS auth variant", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const rt = createAnthropicProvider(awsConfig);
     const parts: any[] = [];
-    const response = await rt.stream(
-      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const rt = createAnthropicProvider({
+      ...awsConfig,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    });
+    const response = await rt.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
 
     expect(parts.find((p) => p.type === "text-delta")).toMatchObject({
       text: "Hello from AWS!",
@@ -107,7 +109,7 @@ describe("AWS auth variant", () => {
       ...awsConfig,
       awsWorkspaceId: "wrkspc_abc",
     });
-    await rt.stream({ messages: [{ role: MessageRole.USER, content: "hi" }] });
+    await rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
 
     expect(mockAnthropicAws).toHaveBeenCalledWith({
       awsRegion: "us-east-1",

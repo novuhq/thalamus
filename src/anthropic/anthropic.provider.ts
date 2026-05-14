@@ -18,17 +18,17 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
-import { createStreamResult } from "../stream-result";
+import { createSendResult } from "../send-result";
 import {
   type ActionRequired,
   ANTHROPIC,
   type Provider,
   type RequestParams,
   type Response,
+  type SendResult,
+  type SessionEventsFactory,
   type SessionOptions,
-  type StreamCallbacks,
   type StreamPart,
-  type StreamResult,
   type ToolResult,
   type Usage,
 } from "../types";
@@ -277,6 +277,7 @@ function* mapEvent(
 export type AnthropicProviderConfig = {
   agentId: string;
   environmentId: string;
+  onSessionEvents?: SessionEventsFactory;
 } & (
   | { apiKey: string; awsRegion?: never; awsWorkspaceId?: never }
   | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
@@ -317,8 +318,13 @@ class AnthropicProvider implements Provider {
     return this.client;
   }
 
-  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult {
-    return createStreamResult(this.runStream(params), callbacks);
+  send(params: RequestParams): SendResult {
+    const callbacks = this.config.onSessionEvents
+      ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>")
+      : undefined;
+    return createSendResult(this.runStream(params), callbacks, {
+      autoStart: !!this.config.onSessionEvents,
+    });
   }
 
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {

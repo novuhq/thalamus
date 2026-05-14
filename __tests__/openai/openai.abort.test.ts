@@ -26,7 +26,7 @@ vi.mock("openai", async (importOriginal) => {
 
 afterEach(() => vi.clearAllMocks());
 
-describe("stream — abort signal", () => {
+describe("send — abort signal", () => {
   it("yields AbortedError when the signal is aborted during streaming", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_abort" });
     mockResponsesCreate.mockRejectedValue(new APIUserAbortError());
@@ -34,7 +34,7 @@ describe("stream — abort signal", () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = createOpenAIProvider(config).stream({
+    const result = createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
       abortSignal: controller.signal,
     });
@@ -63,7 +63,7 @@ describe("stream — abort signal", () => {
     );
 
     const controller = new AbortController();
-    await createOpenAIProvider(config).stream({
+    await createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
       abortSignal: controller.signal,
     });

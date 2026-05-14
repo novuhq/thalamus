@@ -61,12 +61,14 @@ describe("stream — new session", () => {
     );
     mockSend.mockResolvedValue({});
 
-    const rt = createAnthropicProvider(config);
     const parts: any[] = [];
-    const response = await rt.stream(
-      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const rt = createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    });
+    const response = await rt.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
 
     expect(mockCreate).toHaveBeenCalledOnce();
     expect(mockSend).toHaveBeenCalledOnce();
@@ -84,7 +86,7 @@ describe("stream — new session", () => {
   });
 });
 
-describe("stream — resume session", () => {
+describe("send — resume session", () => {
   it("skips session creation when sessionId is provided", async () => {
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -103,7 +105,7 @@ describe("stream — resume session", () => {
     mockSend.mockResolvedValue({});
 
     const rt = createAnthropicProvider(config);
-    await rt.stream({
+    await rt.send({
       messages: [{ role: MessageRole.USER, content: "next" }],
       sessionId: "sess_existing",
     });

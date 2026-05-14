@@ -64,10 +64,10 @@ describe("Bedrock API Key auth — streaming", () => {
     );
 
     const parts: any[] = [];
-    const response = await createOpenAIProvider(bedrockConfig).stream(
-      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const response = await createOpenAIProvider({
+      ...bedrockConfig,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
     expect(response.content).toBe("Hello from Bedrock!");
     expect(response.sessionId).toBe("conv_br");
@@ -101,7 +101,7 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    await createOpenAIProvider(bedrockConfig).stream({
+    await createOpenAIProvider(bedrockConfig).send({
       messages: [{ role: MessageRole.USER, content: "hello" }],
     });
 
@@ -122,7 +122,7 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    const response = await createOpenAIProvider(bedrockConfig).stream({
+    const response = await createOpenAIProvider(bedrockConfig).send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
     expect(response.sessionId).toBe("resp_br_f2");
@@ -142,7 +142,7 @@ describe("Bedrock — no Conversations API (previous_response_id fallback)", () 
       ]),
     );
 
-    await createOpenAIProvider(bedrockConfig).stream({
+    await createOpenAIProvider(bedrockConfig).send({
       messages: [{ role: MessageRole.USER, content: "next" }],
       sessionId: "resp_br_prev",
     });
@@ -174,10 +174,10 @@ describe("Bedrock SigV4 auth — streaming", () => {
     );
 
     const parts: any[] = [];
-    const response = await createOpenAIProvider(sigv4Config).stream(
-      { messages: [{ role: MessageRole.USER, content: "Hi" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const response = await createOpenAIProvider({
+      ...sigv4Config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
     expect(response.content).toBe("Signed!");
   });

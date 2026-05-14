@@ -175,15 +175,18 @@ export interface StreamCallbacks {
   ) => void;
 }
 
-export interface StreamResult extends PromiseLike<Response> {
+export interface SendResult extends PromiseLike<Response> {
+  readonly sessionId: Promise<string>;
   readonly response: Promise<Response>;
   text(): Promise<string>;
 }
 
+export type SessionEventsFactory = (sessionId: string) => StreamCallbacks;
+
 export interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult;
+  send(params: RequestParams): SendResult;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;

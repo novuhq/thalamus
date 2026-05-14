@@ -17,7 +17,7 @@ import {
   ProviderUnavailableError,
   ThalamusError,
 } from "../errors";
-import { createStreamResult } from "../stream-result";
+import { createSendResult } from "../send-result";
 import {
   type ActionRequired,
   type McpServerConfig,
@@ -25,10 +25,10 @@ import {
   type Provider,
   type RequestParams,
   type Response,
+  type SendResult,
+  type SessionEventsFactory,
   type SessionOptions,
-  type StreamCallbacks,
   type StreamPart,
-  type StreamResult,
   type Usage,
 } from "../types";
 import { LocalVault } from "../vault/local-vault";
@@ -115,6 +115,7 @@ type OpenAIBaseConfig = {
   instructions?: string;
   mcpServers?: McpServerConfig[];
   vaultStore?: VaultStore;
+  onSessionEvents?: SessionEventsFactory;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -382,6 +383,7 @@ class OpenAIProvider implements Provider {
   private readonly useConversations: boolean;
   private readonly mcpServers: McpServerConfig[];
   private readonly vaultStore?: VaultStore;
+  private readonly onSessionEvents?: SessionEventsFactory;
 
   constructor(config: OpenAIProviderConfig) {
     this.runtimeId = config.promptId ?? "inline";
@@ -391,10 +393,16 @@ class OpenAIProvider implements Provider {
     this.useConversations = !("awsRegion" in config && config.awsRegion);
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
+    this.onSessionEvents = config.onSessionEvents;
   }
 
-  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult {
-    return createStreamResult(this.runStream(params), callbacks);
+  send(params: RequestParams): SendResult {
+    const callbacks = this.onSessionEvents
+      ? this.onSessionEvents(params.sessionId ?? "<<pending>>")
+      : undefined;
+    return createSendResult(this.runStream(params), callbacks, {
+      autoStart: !!this.onSessionEvents,
+    });
   }
 
   private async resolveSessionParams(

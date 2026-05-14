@@ -63,7 +63,7 @@ describe("MCP server injection", () => {
         },
       ],
     });
-    await provider.stream({
+    await provider.send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
 
@@ -115,7 +115,7 @@ describe("MCP server injection", () => {
           approvalPolicy: { except: ["ask_question", "read_wiki_structure"] },
         },
       ],
-    }).stream({
+    }).send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
 
@@ -150,7 +150,7 @@ describe("MCP server injection", () => {
       ]),
     );
 
-    await createOpenAIProvider(config).stream({
+    await createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
 
@@ -197,10 +197,10 @@ describe("MCP stream events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
     const discovered = parts.find(
       (p) => p.type === "mcp-tools-discovered",
@@ -275,10 +275,10 @@ describe("MCP stream events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
     const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
     expect(toolStart).toMatchObject({
@@ -348,10 +348,10 @@ describe("MCP stream events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
     const finish = parts.find((p) => p.type === "finish") as any;
     expect(finish.response.finishReason).toBe("requires-action");

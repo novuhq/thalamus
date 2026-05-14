@@ -48,10 +48,10 @@ describe("thinking / reasoning events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "think" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "think" }] });
 
     expect(parts.find((p) => p.type === "thinking")).toMatchObject({
       type: "thinking",
@@ -78,10 +78,10 @@ describe("response lifecycle events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
     expect(parts.find((p) => p.type === "status-change")).toMatchObject({
       status: "running",
@@ -105,10 +105,10 @@ describe("response lifecycle events", () => {
 
     const parts: any[] = [];
     try {
-      await createOpenAIProvider(config).stream(
-        { messages: [{ role: MessageRole.USER, content: "x" }] },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createOpenAIProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
     } catch (_) {}
 
     const errPart = parts.find((p) => p.type === "error");
@@ -133,7 +133,7 @@ describe("response lifecycle events", () => {
       ]),
     );
 
-    const response = await createOpenAIProvider(config).stream({
+    const response = await createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "x" }],
     });
 
@@ -157,10 +157,10 @@ describe("response lifecycle events", () => {
     );
 
     const parts: any[] = [];
-    await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
     const providerEvent = parts.find((p) => p.type === "provider-event") as any;
     expect(providerEvent).toBeDefined();

@@ -58,10 +58,12 @@ describe("refusal handling", () => {
     );
 
     const parts: any[] = [];
-    const response = await createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "do something bad" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const response = await createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({
+      messages: [{ role: MessageRole.USER, content: "do something bad" }],
+    });
 
     expect(parts.filter((p) => p.type === "refusal")).toEqual([
       { type: "refusal", text: "I cannot" },
@@ -86,10 +88,10 @@ describe("error handling", () => {
     );
 
     const parts: any[] = [];
-    const promise = createOpenAIProvider(config).stream(
-      { messages: [{ role: MessageRole.USER, content: "x" }] },
-      { onPart: (p) => parts.push(p) },
-    );
+    const promise = createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
     await expect(promise).rejects.toBeInstanceOf(ProviderAuthError);
     expect(
       (parts.find((p) => p.type === "error") as any)?.error,
@@ -110,10 +112,10 @@ describe("error handling", () => {
 
     const parts: any[] = [];
     try {
-      await createOpenAIProvider(config).stream(
-        { messages: [{ role: MessageRole.USER, content: "x" }] },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createOpenAIProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
     } catch (_) {}
 
     const { ProviderRateLimitError } = await import("../../src/errors.js");
@@ -130,10 +132,10 @@ describe("error handling", () => {
 
     const parts: any[] = [];
     try {
-      await createOpenAIProvider(config).stream(
-        { messages: [{ role: MessageRole.USER, content: "x" }] },
-        { onPart: (p) => parts.push(p) },
-      );
+      await createOpenAIProvider({
+        ...config,
+        onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+      }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
     } catch (_) {}
 
     const { ProviderUnavailableError } = await import("../../src/errors.js");

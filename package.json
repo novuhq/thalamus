@@ -41,8 +41,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky",
-    "prepack": "tsup"
+    "prepare": "husky"
   },
   "peerDependencies": {
     "@anthropic-ai/aws-sdk": ">=0.86.0",

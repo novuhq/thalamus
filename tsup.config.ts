@@ -6,6 +6,7 @@ export default defineConfig({
     "anthropic/index": "src/anthropic/index.ts",
     "openai/index": "src/openai/index.ts",
     "vault/index": "src/vault/index.ts",
+    "durable/index": "src/durable/index.ts",
   },
   format: ["cjs", "esm"],
   dts: true,

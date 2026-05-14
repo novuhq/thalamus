@@ -31,6 +31,11 @@
       "import": "./dist/vault/index.mjs",
       "require": "./dist/vault/index.cjs",
       "types": "./dist/vault/index.d.ts"
+    },
+    "./durable": {
+      "import": "./dist/durable/index.mjs",
+      "require": "./dist/durable/index.cjs",
+      "types": "./dist/durable/index.d.ts"
     }
   },
   "scripts": {

@@ -9,6 +9,7 @@ import type {
   ResponseOutputItemDoneEvent,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
+import type { DurabilityBackend, SessionCheckpoint } from "../durable/types";
 import {
   AbortedError,
   ProviderAuthError,
@@ -129,6 +130,7 @@ type OpenAIBaseConfig = {
   mcpServers?: McpServerConfig[];
   vaultStore?: VaultStore;
   onSessionEvents?: SessionEventsFactory;
+  durable?: DurabilityBackend;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -399,8 +401,10 @@ class OpenAIProvider implements Provider {
   private readonly mcpServers: McpServerConfig[];
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
+  private readonly config: OpenAIProviderConfig;
 
   constructor(config: OpenAIProviderConfig) {
+    this.config = config;
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
@@ -409,6 +413,10 @@ class OpenAIProvider implements Provider {
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
+
+    if (config.durable && config.onSessionEvents) {
+      this.recoverActiveSessions().catch(() => {});
+    }
   }
 
   send(params: RequestParams): SendResult {
@@ -521,6 +529,7 @@ class OpenAIProvider implements Provider {
     signal?: AbortSignal,
   ): AsyncIterable<StreamPart> {
     const acc = new ResponseAccumulator();
+    const durable = this.config.durable;
     let lastSequenceNumber = -1;
     let responseId: string | undefined;
     let retries = 0;
@@ -546,7 +555,6 @@ class OpenAIProvider implements Provider {
           );
           dispatched = true;
         } else {
-          // Resume from last known position — no re-dispatch needed
           rawStream = this.resumeObservation(
             responseId!,
             lastSequenceNumber,
@@ -566,14 +574,116 @@ class OpenAIProvider implements Provider {
             responseId = rawEvent.response.id;
           }
           yield* mapEvent(rawEvent, acc);
+          if (durable && responseId) {
+            await durable.save({
+              sessionId: acc.sessionId ?? responseId,
+              provider: "openai",
+              lastEventId: String(lastSequenceNumber),
+              createdAt: Date.now(),
+              metadata: { responseId },
+            });
+          }
         }
 
-        const response = acc.toResponse();
-        yield { type: "finish", response };
+        if (durable && responseId) {
+          await durable.remove(acc.sessionId ?? responseId);
+        }
+        yield { type: "finish", response: acc.toResponse() };
         return;
       } catch (err) {
         if (!isTransientStreamError(err, signal)) throw err;
         if (!responseId || !dispatched) throw err;
+
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
+      }
+    }
+  }
+
+  /**
+   * Best-effort recovery of sessions that were active before a process restart.
+   * Fires onSessionEvents callbacks for missed events, then resumes live
+   * observation for sessions that are still running.
+   */
+  private async recoverActiveSessions(): Promise<void> {
+    const { durable, onSessionEvents } = this.config;
+    if (!durable || !onSessionEvents) return;
+
+    const active = await durable.getActive();
+
+    await Promise.allSettled(
+      active.map(async (checkpoint) => {
+        const responseId = checkpoint.metadata?.responseId;
+        if (!responseId) {
+          await durable.remove(checkpoint.sessionId);
+          return;
+        }
+
+        try {
+          const status = await this.getStatus(responseId);
+
+          if (status === "in_progress" || status === "completed") {
+            const callbacks = onSessionEvents(checkpoint.sessionId);
+            const stream = this.recoverStream(checkpoint, responseId);
+            createSendResult(stream, callbacks, { autoStart: true });
+          } else {
+            await durable.remove(checkpoint.sessionId);
+          }
+        } catch {
+          await durable.remove(checkpoint.sessionId).catch(() => {});
+        }
+      }),
+    );
+  }
+
+  /**
+   * Generates a stream for a recovered session: resumes observation from the
+   * last known sequence number, deduplicates, and checkpoints as it goes.
+   */
+  private async *recoverStream(
+    checkpoint: SessionCheckpoint,
+    responseId: string,
+  ): AsyncIterable<StreamPart> {
+    const { sessionId } = checkpoint;
+    const durable = this.config.durable;
+    const acc = new ResponseAccumulator();
+    let lastSequenceNumber = Number(checkpoint.lastEventId) || -1;
+    let retries = 0;
+
+    yield { type: "stream-start", sessionId };
+
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        const rawStream = this.resumeObservation(
+          responseId,
+          lastSequenceNumber,
+        );
+
+        for await (const rawEvent of rawStream) {
+          if (
+            "sequence_number" in rawEvent &&
+            typeof rawEvent.sequence_number === "number"
+          ) {
+            if (rawEvent.sequence_number <= lastSequenceNumber) continue;
+            lastSequenceNumber = rawEvent.sequence_number;
+          }
+          yield* mapEvent(rawEvent, acc);
+          if (durable) {
+            await durable.save({
+              sessionId,
+              provider: "openai",
+              lastEventId: String(lastSequenceNumber),
+              createdAt: Date.now(),
+              metadata: { responseId },
+            });
+          }
+        }
+
+        if (durable) await durable.remove(sessionId);
+        yield { type: "finish", response: acc.toResponse() };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err)) throw err;
 
         retries++;
         if (retries > MAX_RECONNECT_RETRIES) throw err;

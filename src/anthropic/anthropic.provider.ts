@@ -327,6 +327,61 @@ class AnthropicProvider implements Provider {
     });
   }
 
+  private async dispatch(
+    client: Anthropic,
+    sessionId: string,
+    params: RequestParams,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const events = buildSendEvents(params);
+    const sendParams: EventSendParams = { events };
+    await client.beta.sessions.events.send(sessionId, sendParams, { signal });
+  }
+
+  private async *observe(
+    client: Anthropic,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    const sseStream = await client.beta.sessions.events.stream(
+      sessionId,
+      undefined,
+      { signal },
+    );
+
+    const acc = new ResponseAccumulator();
+    for await (const rawEvent of sseStream) {
+      yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
+      if (acc.done) break;
+    }
+
+    const response = acc.toResponse(sessionId);
+    yield { type: "finish", response };
+  }
+
+  private async *fetchMissedEvents(
+    client: Anthropic,
+    sessionId: string,
+    pageCursor?: string,
+  ): AsyncIterable<StreamPart> {
+    const page = await client.beta.sessions.events.list(sessionId, {
+      ...(pageCursor ? { page: pageCursor } : {}),
+    });
+    const acc = new ResponseAccumulator();
+    for await (const event of page) {
+      yield* mapEvent(event as BetaManagedAgentsStreamSessionEvents, acc);
+      if (acc.done) break;
+    }
+  }
+
+  private async getStatus(
+    client: Anthropic,
+    sessionId: string,
+  ): Promise<string> {
+    const session = await client.beta.sessions.retrieve(sessionId);
+    return session.status;
+  }
+
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
@@ -340,27 +395,13 @@ class AnthropicProvider implements Provider {
       yield { type: "stream-start", sessionId };
 
       const signal = params.abortSignal ?? undefined;
-      const sseStream = await client.beta.sessions.events.stream(
-        sessionId,
-        undefined,
-        { signal },
-      );
 
-      const events = buildSendEvents(params);
-      const sendParams: EventSendParams = { events };
-      await client.beta.sessions.events.send(sessionId, sendParams, {
-        signal,
-      });
+      // Open observation before dispatching to avoid race condition
+      // (Anthropic docs: "Only events emitted after the stream is opened are delivered")
+      const observation = this.observe(client, sessionId, signal);
+      await this.dispatch(client, sessionId, params, signal);
 
-      const acc = new ResponseAccumulator();
-
-      for await (const rawEvent of sseStream) {
-        yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
-        if (acc.done) break;
-      }
-
-      const response = acc.toResponse(sessionId);
-      yield { type: "finish", response };
+      yield* observation;
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };

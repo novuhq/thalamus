@@ -415,6 +415,76 @@ class OpenAIProvider implements Provider {
     return sessionId ? { previous_response_id: sessionId } : {};
   }
 
+  private buildInput(params: RequestParams): ResponseInput {
+    let input: ResponseInput = openaiTransformer.toInput(
+      params.messages,
+    ) as ResponseInput;
+
+    if (params.toolResults?.length) {
+      const toolInputs: ResponseInput = params.toolResults.map((tr) => {
+        if (tr.approved !== undefined) {
+          return {
+            type: "mcp_approval_response" as const,
+            approval_request_id: tr.toolUseId,
+            approve: tr.approved,
+          };
+        }
+        return {
+          type: "function_call_output" as const,
+          call_id: tr.toolUseId,
+          output: tr.output ?? "",
+        };
+      });
+      input = [...toolInputs, ...input];
+    }
+
+    return input;
+  }
+
+  private async *dispatchAndObserve(
+    params: RequestParams,
+    sessionParams: Record<string, unknown>,
+    mcpTools: Record<string, unknown>[] | undefined,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    const input = this.buildInput(params);
+
+    const rawStream = await this.client.responses.create(
+      {
+        model: this.model,
+        input,
+        stream: true,
+        ...(this.instructions ? { instructions: this.instructions } : {}),
+        ...(mcpTools ? { tools: mcpTools } : {}),
+        ...sessionParams,
+        ...params.providerOptions,
+      } as ResponseCreateParamsStreaming,
+      { signal },
+    );
+
+    const acc = new ResponseAccumulator();
+    for await (const rawEvent of rawStream) {
+      yield* mapEvent(rawEvent, acc);
+    }
+
+    const response = acc.toResponse();
+    yield { type: "finish", response };
+  }
+
+  private async *resumeObservation(
+    _responseId: string,
+    _afterCursor: string,
+    _signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    // Will be implemented in Phase 4 (resilient observation).
+    // Uses responses.retrieve(id, { stream: true, starting_after: cursor })
+  }
+
+  private async getStatus(responseId: string): Promise<string | undefined> {
+    const response = await this.client.responses.retrieve(responseId);
+    return response.status;
+  }
+
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
@@ -428,49 +498,9 @@ class OpenAIProvider implements Provider {
           ? toMcpTools(this.mcpServers, credentials)
           : undefined;
 
-      let input: ResponseInput = openaiTransformer.toInput(
-        params.messages,
-      ) as ResponseInput;
-
-      if (params.toolResults?.length) {
-        const toolInputs: ResponseInput = params.toolResults.map((tr) => {
-          if (tr.approved !== undefined) {
-            return {
-              type: "mcp_approval_response" as const,
-              approval_request_id: tr.toolUseId,
-              approve: tr.approved,
-            };
-          }
-          return {
-            type: "function_call_output" as const,
-            call_id: tr.toolUseId,
-            output: tr.output ?? "",
-          };
-        });
-        input = [...toolInputs, ...input];
-      }
-
       const signal = params.abortSignal ?? undefined;
-      const rawStream = await this.client.responses.create(
-        {
-          model: this.model,
-          input,
-          stream: true,
-          ...(this.instructions ? { instructions: this.instructions } : {}),
-          ...(mcpTools ? { tools: mcpTools } : {}),
-          ...sessionParams,
-          ...params.providerOptions,
-        } as ResponseCreateParamsStreaming,
-        { signal },
-      );
 
-      const acc = new ResponseAccumulator();
-      for await (const rawEvent of rawStream) {
-        yield* mapEvent(rawEvent, acc);
-      }
-
-      const response = acc.toResponse();
-      yield { type: "finish", response };
+      yield* this.dispatchAndObserve(params, sessionParams, mcpTools, signal);
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);

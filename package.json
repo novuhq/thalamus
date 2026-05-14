@@ -81,9 +81,9 @@
     "husky": "^9.1.7",
     "lint-staged": "^17.0.4",
     "openai": "latest",
-    "tsup": "latest",
+    "tsup": "^8.5.0",
     "tsx": "^4.21.0",
-    "typescript": "latest",
+    "typescript": "^5.8.0",
     "vitest": "latest"
   }
 }

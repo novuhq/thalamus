@@ -11,8 +11,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "lib": ["ES2022"],
-    "useDefineForClassFields": true,
-    "ignoreDeprecations": "6.0"
+    "useDefineForClassFields": true
   },
   "include": ["src"],
   "exclude": ["dist", "__tests__", "node_modules"]

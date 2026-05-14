@@ -84,6 +84,19 @@ function mapError(error: unknown, provider: string): Error {
   return new ProviderResponseError(msg, { provider, cause: error });
 }
 
+/**
+ * SSE drops manifest as many error types (TypeError, ECONNRESET, socket hang up,
+ * proxy timeouts, etc.) that can't be exhaustively listed. We invert the check:
+ * only abort and application-level errors are terminal; everything else is
+ * treated as a transient transport failure worth retrying.
+ */
+function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  return true;
+}
+
 type OpenAIDirectConfig = {
   apiKey: string;
   awsRegion?: never;
@@ -154,6 +167,8 @@ function toMcpTools(
     return tool;
   });
 }
+
+const MAX_RECONNECT_RETRIES = 3;
 
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
@@ -472,17 +487,98 @@ class OpenAIProvider implements Provider {
   }
 
   private async *resumeObservation(
-    _responseId: string,
-    _afterCursor: string,
-    _signal?: AbortSignal,
-  ): AsyncIterable<StreamPart> {
-    // Will be implemented in Phase 4 (resilient observation).
-    // Uses responses.retrieve(id, { stream: true, starting_after: cursor })
+    responseId: string,
+    afterSequenceNumber: number,
+    signal?: AbortSignal,
+  ): AsyncIterable<ResponseStreamEvent> {
+    const rawStream = (await this.client.responses.retrieve(
+      responseId,
+      { stream: true as const, starting_after: afterSequenceNumber },
+      { signal },
+    )) as AsyncIterable<ResponseStreamEvent>;
+
+    yield* rawStream;
   }
 
   private async getStatus(responseId: string): Promise<string | undefined> {
     const response = await this.client.responses.retrieve(responseId);
     return response.status;
+  }
+
+  /**
+   * Wraps dispatch+observe with auto-reconnect on transient network failures.
+   * OpenAI combines dispatch and observe in a single responses.create() call,
+   * so the first attempt dispatches; retries resume via responses.retrieve()
+   * with starting_after (cursor-based, no event duplication from the API).
+   *
+   * Dedup by sequence_number guards against overlapping events if the API
+   * sends a partial replay on resume.
+   */
+  private async *resilientDispatchAndObserve(
+    params: RequestParams,
+    sessionParams: Record<string, unknown>,
+    mcpTools: Record<string, unknown>[] | undefined,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    const acc = new ResponseAccumulator();
+    let lastSequenceNumber = -1;
+    let responseId: string | undefined;
+    let retries = 0;
+    let dispatched = false;
+
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        let rawStream: AsyncIterable<ResponseStreamEvent>;
+
+        if (!dispatched) {
+          const input = this.buildInput(params);
+          rawStream = await this.client.responses.create(
+            {
+              model: this.model,
+              input,
+              stream: true,
+              ...(this.instructions ? { instructions: this.instructions } : {}),
+              ...(mcpTools ? { tools: mcpTools } : {}),
+              ...sessionParams,
+              ...params.providerOptions,
+            } as ResponseCreateParamsStreaming,
+            { signal },
+          );
+          dispatched = true;
+        } else {
+          // Resume from last known position — no re-dispatch needed
+          rawStream = this.resumeObservation(
+            responseId!,
+            lastSequenceNumber,
+            signal,
+          );
+        }
+
+        for await (const rawEvent of rawStream) {
+          if (
+            "sequence_number" in rawEvent &&
+            typeof rawEvent.sequence_number === "number"
+          ) {
+            if (rawEvent.sequence_number <= lastSequenceNumber) continue;
+            lastSequenceNumber = rawEvent.sequence_number;
+          }
+          if (rawEvent.type === "response.created") {
+            responseId = rawEvent.response.id;
+          }
+          yield* mapEvent(rawEvent, acc);
+        }
+
+        const response = acc.toResponse();
+        yield { type: "finish", response };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err, signal)) throw err;
+        if (!responseId || !dispatched) throw err;
+
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
+      }
+    }
   }
 
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
@@ -500,7 +596,12 @@ class OpenAIProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      yield* this.dispatchAndObserve(params, sessionParams, mcpTools, signal);
+      yield* this.resilientDispatchAndObserve(
+        params,
+        sessionParams,
+        mcpTools,
+        signal,
+      );
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);

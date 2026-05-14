@@ -82,6 +82,19 @@ function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   });
 }
 
+/**
+ * SSE drops manifest as many error types (TypeError, ECONNRESET, socket hang up,
+ * proxy timeouts, etc.) that can't be exhaustively listed. We invert the check:
+ * only abort and application-level errors are terminal; everything else is
+ * treated as a transient transport failure worth retrying.
+ */
+function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  return true;
+}
+
 function buildSendEvents(
   params: RequestParams,
 ): BetaManagedAgentsEventParams[] {
@@ -297,6 +310,8 @@ async function createClient(
   return new Anthropic({ apiKey: config.apiKey });
 }
 
+const MAX_RECONNECT_RETRIES = 3;
+
 class AnthropicProvider implements Provider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
@@ -382,6 +397,81 @@ class AnthropicProvider implements Provider {
     return session.status;
   }
 
+  /**
+   * Iterates raw provider events, deduplicates by ID, maps to StreamParts.
+   * Shared by both live SSE and historical catch-up paths.
+   */
+  private async *consumeEvents(
+    source: AsyncIterable<{ id: string }>,
+    seenIds: Set<string>,
+    acc: ResponseAccumulator,
+  ): AsyncGenerator<StreamPart> {
+    for await (const raw of source) {
+      if (seenIds.has(raw.id)) continue;
+      seenIds.add(raw.id);
+      yield* mapEvent(raw as BetaManagedAgentsStreamSessionEvents, acc);
+      if (acc.done) return;
+    }
+  }
+
+  /**
+   * Wraps SSE observation with auto-reconnect on transient network failures.
+   * Accumulator and seenIds live for the duration of one send() call to
+   * survive TCP resets / proxy timeouts without losing events.
+   *
+   * @param onConnected Called once after the first SSE connection opens.
+   *   Callers pass dispatch() here so events are sent only after SSE is live,
+   *   avoiding the race where dispatch fires before the stream is open.
+   */
+  private async *resilientObserve(
+    client: Anthropic,
+    sessionId: string,
+    signal?: AbortSignal,
+    onConnected?: () => Promise<void>,
+  ): AsyncIterable<StreamPart> {
+    const seenIds = new Set<string>();
+    const acc = new ResponseAccumulator();
+    let retries = 0;
+    let connected = false;
+
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        const sseStream = await client.beta.sessions.events.stream(
+          sessionId,
+          undefined,
+          { signal },
+        );
+
+        // Dispatch only after SSE is open — ensures no events are missed
+        if (!connected && onConnected) {
+          await onConnected();
+          connected = true;
+        }
+
+        yield* this.consumeEvents(sseStream, seenIds, acc);
+        yield { type: "finish", response: acc.toResponse(sessionId) };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err, signal)) throw err;
+
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
+
+        // Catch up on events emitted while disconnected, then re-open SSE
+        try {
+          const missed = await client.beta.sessions.events.list(sessionId);
+          yield* this.consumeEvents(missed, seenIds, acc);
+          if (acc.done) {
+            yield { type: "finish", response: acc.toResponse(sessionId) };
+            return;
+          }
+        } catch {
+          // List failed too — still worth re-opening SSE
+        }
+      }
+    }
+  }
+
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
@@ -396,12 +486,9 @@ class AnthropicProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      // Open observation before dispatching to avoid race condition
-      // (Anthropic docs: "Only events emitted after the stream is opened are delivered")
-      const observation = this.observe(client, sessionId, signal);
-      await this.dispatch(client, sessionId, params, signal);
-
-      yield* observation;
+      yield* this.resilientObserve(client, sessionId, signal, () =>
+        this.dispatch(client, sessionId, params, signal),
+      );
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };

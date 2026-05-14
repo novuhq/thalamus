@@ -1,5 +1,4 @@
 node_modules/
-dist/
 *.local
 scripts/
 .DS_Store

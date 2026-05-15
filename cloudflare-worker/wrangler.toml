@@ -1,0 +1,14 @@
+name = "thalamus-session-observer"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+
+[secrets]
+required = ["API_KEY"]
+
+[[durable_objects.bindings]]
+name = "SESSION_OBSERVER"
+class_name = "SessionObserver"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionObserver"]

@@ -9,7 +9,11 @@ import type {
   ResponseOutputItemDoneEvent,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
-import type { DurabilityBackend, SessionCheckpoint } from "../durable/types";
+import type {
+  DurabilityBackend,
+  EdgeObserver,
+  SessionCheckpoint,
+} from "../durable/types";
 import {
   AbortedError,
   ProviderAuthError,
@@ -131,6 +135,7 @@ type OpenAIBaseConfig = {
   vaultStore?: VaultStore;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurabilityBackend;
+  edgeObserver?: EdgeObserver;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -691,6 +696,57 @@ class OpenAIProvider implements Provider {
     }
   }
 
+  /**
+   * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
+   * events arrive via WebSocket.
+   */
+  private async *edgeObserve(
+    params: RequestParams,
+    sessionParams: Record<string, unknown>,
+    mcpTools: Record<string, unknown>[] | undefined,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    const observer = this.config.edgeObserver as NonNullable<
+      typeof this.config.edgeObserver
+    >;
+    const input = this.buildInput(params);
+
+    const response = await this.client.responses.create(
+      {
+        model: this.model,
+        input,
+        background: true,
+        ...(this.instructions ? { instructions: this.instructions } : {}),
+        ...(mcpTools ? { tools: mcpTools } : {}),
+        ...sessionParams,
+        ...params.providerOptions,
+      } as ResponseCreateParamsStreaming,
+      { signal },
+    );
+
+    const responseId = (response as unknown as { id: string }).id;
+
+    const eventStream = observer.events(responseId);
+
+    await observer.observe({
+      sessionId: responseId,
+      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true`,
+      headers: {
+        Authorization: `Bearer ${this.client.apiKey}`,
+      },
+    });
+
+    const acc = new ResponseAccumulator();
+    for await (const frame of eventStream) {
+      if (signal?.aborted) break;
+      if (!frame.data) continue;
+      const rawEvent = JSON.parse(frame.data) as ResponseStreamEvent;
+      yield* mapEvent(rawEvent, acc);
+    }
+
+    yield { type: "finish", response: acc.toResponse() };
+  }
+
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
@@ -706,12 +762,16 @@ class OpenAIProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      yield* this.resilientDispatchAndObserve(
-        params,
-        sessionParams,
-        mcpTools,
-        signal,
-      );
+      if (this.config.edgeObserver) {
+        yield* this.edgeObserve(params, sessionParams, mcpTools, signal);
+      } else {
+        yield* this.resilientDispatchAndObserve(
+          params,
+          sessionParams,
+          mcpTools,
+          signal,
+        );
+      }
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);

@@ -17,7 +17,11 @@ import type {
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
-import type { DurabilityBackend, SessionCheckpoint } from "../durable/types";
+import type {
+  DurabilityBackend,
+  EdgeObserver,
+  SessionCheckpoint,
+} from "../durable/types";
 import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
 import { createSendResult } from "../send-result";
 import {
@@ -293,6 +297,7 @@ export type AnthropicProviderConfig = {
   environmentId: string;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurabilityBackend;
+  edgeObserver?: EdgeObserver;
 } & (
   | { apiKey: string; awsRegion?: never; awsWorkspaceId?: never }
   | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
@@ -582,6 +587,47 @@ class AnthropicProvider implements Provider {
     yield { type: "finish", response: acc.toResponse(sessionId) };
   }
 
+  /**
+   * Edge observation: SSE runs on the CF Agent, events arrive via WebSocket.
+   * The provider dispatches the message directly and reads parsed events
+   * from the edge observer's WebSocket feed.
+   */
+  private async *edgeObserve(
+    client: Anthropic,
+    sessionId: string,
+    params: RequestParams,
+    signal?: AbortSignal,
+  ): AsyncIterable<StreamPart> {
+    const observer = this.config.edgeObserver as NonNullable<
+      typeof this.config.edgeObserver
+    >;
+
+    const eventStream = observer.events(sessionId);
+
+    await observer.observe({
+      sessionId,
+      streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
+      headers: {
+        "x-api-key": client.apiKey ?? "",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "managed-agents-2026-04-01",
+      },
+    });
+
+    await this.dispatch(client, sessionId, params, signal);
+
+    const acc = new ResponseAccumulator();
+    for await (const frame of eventStream) {
+      if (signal?.aborted) break;
+      if (!frame.data) continue;
+      const rawEvent = JSON.parse(frame.data);
+      yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
+      if (acc.done) break;
+    }
+
+    yield { type: "finish", response: acc.toResponse(sessionId) };
+  }
+
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
@@ -596,9 +642,13 @@ class AnthropicProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      yield* this.resilientObserve(client, sessionId, signal, () =>
-        this.dispatch(client, sessionId, params, signal),
-      );
+      if (this.config.edgeObserver) {
+        yield* this.edgeObserve(client, sessionId, params, signal);
+      } else {
+        yield* this.resilientObserve(client, sessionId, signal, () =>
+          this.dispatch(client, sessionId, params, signal),
+        );
+      }
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };

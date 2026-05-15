@@ -1,12 +1,13 @@
 import {
   ANTHROPIC,
+  AbortedError,
   SessionExpiredError,
   ThalamusError,
-  createStreamResult
-} from "./chunk-LQAFAVC6.js";
+  createSendResult
+} from "./chunk-U2SEW5AP.js";
 
 // src/anthropic/anthropic.provider.ts
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
+import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 
 // src/anthropic/anthropic.transformer.ts
 function toContentBlocks(content) {
@@ -161,6 +162,9 @@ function mapSessionError(raw) {
   return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
 }
 function mapStreamError(err, sessionId) {
+  if (err instanceof APIUserAbortError) {
+    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
+  }
   if (sessionId && err instanceof APIError) {
     const status = err.status;
     if (status === 404 || status === 410) {
@@ -176,6 +180,12 @@ function mapStreamError(err, sessionId) {
     isRetryable: false,
     cause: err
   });
+}
+function isTransientStreamError(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  return true;
 }
 function buildSendEvents(params) {
   if (params.toolResults?.length) {
@@ -358,6 +368,7 @@ async function createClient(config) {
   }
   return new Anthropic({ apiKey: config.apiKey });
 }
+var MAX_RECONNECT_RETRIES = 3;
 var AnthropicProvider = class {
   provider = ANTHROPIC;
   runtimeId;
@@ -370,13 +381,227 @@ var AnthropicProvider = class {
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
+    if (config.durable && config.onSessionEvents) {
+      this.recoverActiveSessions().catch(() => {
+      });
+    }
   }
   async getClient() {
     this.client ??= await createClient(this.config);
     return this.client;
   }
-  stream(params, callbacks) {
-    return createStreamResult(this.runStream(params), callbacks);
+  send(params) {
+    const callbacks = this.config.onSessionEvents ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>") : void 0;
+    return createSendResult(this.runStream(params), callbacks, {
+      autoStart: !!this.config.onSessionEvents
+    });
+  }
+  async dispatch(client, sessionId, params, signal) {
+    const events = buildSendEvents(params);
+    const sendParams = { events };
+    await client.beta.sessions.events.send(sessionId, sendParams, { signal });
+  }
+  async *observe(client, sessionId, signal) {
+    const sseStream = await client.beta.sessions.events.stream(
+      sessionId,
+      void 0,
+      { signal }
+    );
+    const acc = new ResponseAccumulator();
+    for await (const rawEvent of sseStream) {
+      yield* mapEvent(rawEvent, acc);
+      if (acc.done) break;
+    }
+    const response = acc.toResponse(sessionId);
+    yield { type: "finish", response };
+  }
+  async *fetchMissedEvents(client, sessionId, pageCursor) {
+    const page = await client.beta.sessions.events.list(sessionId, {
+      ...pageCursor ? { page: pageCursor } : {}
+    });
+    const acc = new ResponseAccumulator();
+    for await (const event of page) {
+      yield* mapEvent(event, acc);
+      if (acc.done) break;
+    }
+  }
+  async getStatus(client, sessionId) {
+    const session = await client.beta.sessions.retrieve(sessionId);
+    return session.status;
+  }
+  /**
+   * Iterates raw provider events, deduplicates by ID, maps to StreamParts.
+   * Shared by both live SSE and historical catch-up paths.
+   * Optional onEvent callback fires after each new event (used for checkpointing).
+   */
+  async *consumeEvents(source, seenIds, acc, onEvent) {
+    for await (const raw of source) {
+      if (seenIds.has(raw.id)) continue;
+      seenIds.add(raw.id);
+      yield* mapEvent(raw, acc);
+      if (onEvent) await onEvent(raw.id);
+      if (acc.done) return;
+    }
+  }
+  /**
+   * Wraps SSE observation with auto-reconnect on transient network failures.
+   * Accumulator and seenIds live for the duration of one send() call to
+   * survive TCP resets / proxy timeouts without losing events.
+   *
+   * @param onConnected Called once after the first SSE connection opens.
+   *   Callers pass dispatch() here so events are sent only after SSE is live,
+   *   avoiding the race where dispatch fires before the stream is open.
+   */
+  async *resilientObserve(client, sessionId, signal, onConnected, initialSeenIds) {
+    const seenIds = initialSeenIds ?? /* @__PURE__ */ new Set();
+    const acc = new ResponseAccumulator();
+    const durable = this.config.durable;
+    const onEvent = durable ? (eventId) => durable.save({
+      sessionId,
+      provider: "anthropic",
+      lastEventId: eventId,
+      createdAt: Date.now()
+    }) : void 0;
+    let retries = 0;
+    let connected = false;
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        const sseStream = await client.beta.sessions.events.stream(
+          sessionId,
+          void 0,
+          { signal }
+        );
+        if (!connected) {
+          if (onConnected) await onConnected();
+          connected = true;
+        } else {
+          try {
+            const missed = await client.beta.sessions.events.list(sessionId);
+            yield* this.consumeEvents(missed, seenIds, acc, onEvent);
+            if (acc.done) {
+              if (durable) await durable.remove(sessionId);
+              yield { type: "finish", response: acc.toResponse(sessionId) };
+              return;
+            }
+          } catch {
+          }
+        }
+        yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
+        if (durable) await durable.remove(sessionId);
+        yield { type: "finish", response: acc.toResponse(sessionId) };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err, signal)) throw err;
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
+      }
+    }
+  }
+  /**
+   * Best-effort recovery of sessions that were active before a process restart.
+   * Fires onSessionEvents callbacks for missed events, then resumes live
+   * observation for sessions that are still running.
+   */
+  async recoverActiveSessions() {
+    const { durable, onSessionEvents } = this.config;
+    if (!durable || !onSessionEvents) return;
+    const active = await durable.getActive();
+    const client = await this.getClient();
+    await Promise.allSettled(
+      active.map(async (checkpoint) => {
+        try {
+          const status = await this.getStatus(client, checkpoint.sessionId);
+          if (status === "running" || status === "idle") {
+            const callbacks = onSessionEvents(checkpoint.sessionId);
+            const stream = this.recoverStream(
+              client,
+              checkpoint,
+              status === "running"
+            );
+            const result = createSendResult(stream, callbacks, {
+              autoStart: true
+            });
+            result.response.catch(async (err) => {
+              console.error(
+                `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
+                err instanceof Error ? err.message : err
+              );
+              await durable.remove(checkpoint.sessionId).catch(() => {
+              });
+            });
+          } else {
+            await durable.remove(checkpoint.sessionId);
+          }
+        } catch {
+          await durable.remove(checkpoint.sessionId).catch(() => {
+          });
+        }
+      })
+    );
+  }
+  /**
+   * Generates a stream for a recovered session: fetches all historical events,
+   * skips ones already delivered (up to checkpoint.lastEventId), then resumes
+   * live SSE if the session is still running.
+   */
+  async *recoverStream(client, checkpoint, stillRunning) {
+    const { sessionId, lastEventId } = checkpoint;
+    const durable = this.config.durable;
+    const seenIds = /* @__PURE__ */ new Set();
+    const acc = new ResponseAccumulator();
+    const onEvent = durable ? (eventId) => durable.save({
+      sessionId,
+      provider: "anthropic",
+      lastEventId: eventId,
+      createdAt: Date.now()
+    }) : void 0;
+    yield { type: "stream-start", sessionId };
+    const sseStream = stillRunning ? await client.beta.sessions.events.stream(sessionId) : void 0;
+    const allEvents = await client.beta.sessions.events.list(sessionId);
+    let pastCheckpoint = false;
+    for await (const raw of allEvents) {
+      seenIds.add(raw.id);
+      if (!pastCheckpoint) {
+        if (raw.id === lastEventId) pastCheckpoint = true;
+        continue;
+      }
+      yield* mapEvent(raw, acc);
+      if (onEvent) await onEvent(raw.id);
+      if (acc.done) break;
+    }
+    if (sseStream && !acc.done) {
+      yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
+    }
+    if (durable) await durable.remove(sessionId);
+    yield { type: "finish", response: acc.toResponse(sessionId) };
+  }
+  /**
+   * Edge observation: SSE runs on the CF Agent, events arrive via WebSocket.
+   * The provider dispatches the message directly and reads parsed events
+   * from the edge observer's WebSocket feed.
+   */
+  async *edgeObserve(client, sessionId, params, signal) {
+    const observer = this.config.edgeObserver;
+    const eventStream = observer.events(sessionId);
+    await observer.observe({
+      sessionId,
+      streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
+      headers: {
+        "x-api-key": client.apiKey ?? "",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "managed-agents-2026-04-01"
+      }
+    });
+    await this.dispatch(client, sessionId, params, signal);
+    const acc = new ResponseAccumulator();
+    for await (const frame of eventStream) {
+      if (signal?.aborted) break;
+      if (!frame.data) continue;
+      const rawEvent = JSON.parse(frame.data);
+      yield* mapEvent(rawEvent, acc);
+      if (acc.done) break;
+    }
+    yield { type: "finish", response: acc.toResponse(sessionId) };
   }
   async *runStream(params) {
     try {
@@ -386,17 +611,17 @@ var AnthropicProvider = class {
         providerOptions: params.providerOptions
       });
       yield { type: "stream-start", sessionId };
-      const sseStream = await client.beta.sessions.events.stream(sessionId);
-      const events = buildSendEvents(params);
-      const sendParams = { events };
-      await client.beta.sessions.events.send(sessionId, sendParams);
-      const acc = new ResponseAccumulator();
-      for await (const rawEvent of sseStream) {
-        yield* mapEvent(rawEvent, acc);
-        if (acc.done) break;
+      const signal = params.abortSignal ?? void 0;
+      if (this.config.edgeObserver) {
+        yield* this.edgeObserve(client, sessionId, params, signal);
+      } else {
+        yield* this.resilientObserve(
+          client,
+          sessionId,
+          signal,
+          () => this.dispatch(client, sessionId, params, signal)
+        );
       }
-      const response = acc.toResponse(sessionId);
-      yield { type: "finish", response };
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };
@@ -437,4 +662,4 @@ export {
   toContentBlocks,
   createAnthropicProvider
 };
-//# sourceMappingURL=chunk-Z4PRDWGM.js.map
+//# sourceMappingURL=chunk-VUMWMBZB.js.map

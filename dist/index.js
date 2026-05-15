@@ -1,11 +1,12 @@
 import {
   createAnthropicProvider
-} from "./chunk-Z4PRDWGM.js";
+} from "./chunk-VUMWMBZB.js";
 import {
   createOpenAIProvider
-} from "./chunk-6GLROXWH.js";
+} from "./chunk-Q2CARGIY.js";
 import {
   ANTHROPIC,
+  AbortedError,
   CredentialExpiredError,
   McpServerError,
   MessageRole,
@@ -18,17 +19,12 @@ import {
   ThalamusError,
   VaultError,
   VaultNotFoundError,
-  createStreamResult
-} from "./chunk-LQAFAVC6.js";
+  createSendResult
+} from "./chunk-U2SEW5AP.js";
 import {
   createMemoryVaultStore
 } from "./chunk-2CE52QMW.js";
 import "./chunk-L5ITO5PR.js";
-
-// src/stream-utils.ts
-async function collectStream(result) {
-  return result;
-}
 
 // src/index.ts
 var thalamus = {
@@ -37,6 +33,7 @@ var thalamus = {
 };
 export {
   ANTHROPIC,
+  AbortedError,
   CredentialExpiredError,
   McpServerError,
   MessageRole,
@@ -49,11 +46,10 @@ export {
   ThalamusError,
   VaultError,
   VaultNotFoundError,
-  collectStream,
   createAnthropicProvider,
   createMemoryVaultStore,
   createOpenAIProvider,
-  createStreamResult,
+  createSendResult,
   thalamus
 };
 //# sourceMappingURL=index.js.map

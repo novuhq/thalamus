@@ -1,5 +1,6 @@
-import { e as McpServerConfig, P as Provider } from './types-J5hdDFqL.cjs';
-import { c as VaultStore } from './vault.interface-BMCawAU1.cjs';
+import { D as DurabilityBackend, E as EdgeObserver } from './types-Dj7j5_Vh.js';
+import { e as McpServerConfig, j as SessionEventsFactory, P as Provider } from './types-D03ofbVu.js';
+import { c as VaultStore } from './vault.interface-BMCawAU1.js';
 
 type OpenAIDirectConfig = {
     apiKey: string;
@@ -29,6 +30,9 @@ type OpenAIBaseConfig = {
     instructions?: string;
     mcpServers?: McpServerConfig[];
     vaultStore?: VaultStore;
+    onSessionEvents?: SessionEventsFactory;
+    durable?: DurabilityBackend;
+    edgeObserver?: EdgeObserver;
 };
 type OpenAIProviderConfig = OpenAIBaseConfig & (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 declare function createOpenAIProvider(config: OpenAIProviderConfig): Provider;

@@ -72,6 +72,14 @@ var CredentialExpiredError = class extends VaultError {
     this.vaultId = vaultId;
   }
 };
+var AbortedError = class extends ThalamusError {
+  sessionId;
+  constructor(options) {
+    super("Operation aborted", { ...options, isRetryable: false });
+    this.name = "AbortedError";
+    this.sessionId = options.sessionId;
+  }
+};
 var McpServerError = class extends ThalamusError {
   serverName;
   statusCode;
@@ -87,7 +95,7 @@ var McpServerError = class extends ThalamusError {
   }
 };
 
-// src/stream-result.ts
+// src/send-result.ts
 var CALLBACK_MAP = {
   "text-delta": "onTextDelta",
   thinking: "onThinking",
@@ -103,14 +111,26 @@ var CALLBACK_MAP = {
   error: "onError",
   "provider-event": "onProviderEvent"
 };
-var StreamResultImpl = class {
-  constructor(source, callbacks) {
+var SendResultImpl = class {
+  constructor(source, callbacks, options) {
     this.source = source;
     this.callbacks = callbacks;
+    this._sessionId = new Promise((resolve) => {
+      this._sessionIdResolve = resolve;
+    });
+    if (options?.autoStart) {
+      this._promise = this.run();
+    }
   }
   source;
   callbacks;
   _promise = null;
+  _sessionIdResolve;
+  _sessionId;
+  get sessionId() {
+    this._promise ??= this.run();
+    return this._sessionId;
+  }
   get response() {
     this._promise ??= this.run();
     return this._promise;
@@ -124,6 +144,9 @@ var StreamResultImpl = class {
   }
   async run() {
     for await (const part of this.source) {
+      if (part.type === "stream-start" && part.sessionId) {
+        this._sessionIdResolve(part.sessionId);
+      }
       this.dispatch(part);
       if (part.type === "finish") return part.response;
       if (part.type === "error") throw part.error;
@@ -138,8 +161,8 @@ var StreamResultImpl = class {
     if (cb) cb(part);
   }
 };
-function createStreamResult(source, callbacks) {
-  return new StreamResultImpl(source, callbacks);
+function createSendResult(source, callbacks, options) {
+  return new SendResultImpl(source, callbacks, options);
 }
 
 // src/types.ts
@@ -162,10 +185,11 @@ export {
   VaultError,
   VaultNotFoundError,
   CredentialExpiredError,
+  AbortedError,
   McpServerError,
-  createStreamResult,
+  createSendResult,
   MessageRole,
   ANTHROPIC,
   OPENAI
 };
-//# sourceMappingURL=chunk-LQAFAVC6.js.map
+//# sourceMappingURL=chunk-U2SEW5AP.js.map

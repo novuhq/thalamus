@@ -42,6 +42,8 @@ interface RequestParams {
     toolResults?: ToolResult[];
     /** Pass-through options forwarded directly to the underlying provider SDK call. */
     providerOptions?: Record<string, unknown>;
+    /** When fired, the SDK closes the connection and the operation yields an `AbortedError`. */
+    abortSignal?: AbortSignal;
 }
 interface SessionOptions {
     vaultIds?: string[];
@@ -190,14 +192,16 @@ interface StreamCallbacks {
         type: "provider-event";
     }>) => void;
 }
-interface StreamResult extends PromiseLike<Response> {
+interface SendResult extends PromiseLike<Response> {
+    readonly sessionId: Promise<string>;
     readonly response: Promise<Response>;
     text(): Promise<string>;
 }
+type SessionEventsFactory = (sessionId: string) => StreamCallbacks;
 interface Provider {
     readonly provider: string;
     readonly runtimeId: string;
-    stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult;
+    send(params: RequestParams): SendResult;
     createVault(options: VaultOptions): Promise<Vault>;
     getVault(vaultId: string): Promise<Vault>;
     createSession(options?: SessionOptions): Promise<string>;
@@ -206,4 +210,4 @@ interface Provider {
 declare const ANTHROPIC: "anthropic";
 declare const OPENAI: "openai";
 
-export { ANTHROPIC as A, type ContentPart as C, type McpApprovalPolicy as M, OPENAI as O, type Provider as P, type Response as R, type StreamPart as S, type ToolResult as T, type Usage as U, type StreamCallbacks as a, type StreamResult as b, type ActionRequired as c, type AgentStatus as d, type McpServerConfig as e, type McpToolDef as f, type Message as g, MessageRole as h, type RequestParams as i, type SessionOptions as j, type ToolSource as k };
+export { ANTHROPIC as A, type ContentPart as C, type McpApprovalPolicy as M, OPENAI as O, type Provider as P, type RequestParams as R, type StreamPart as S, type ToolResult as T, type Usage as U, type StreamCallbacks as a, type SendResult as b, type ActionRequired as c, type AgentStatus as d, type McpServerConfig as e, type McpToolDef as f, type Message as g, MessageRole as h, type Response as i, type SessionEventsFactory as j, type SessionOptions as k, type ToolSource as l };

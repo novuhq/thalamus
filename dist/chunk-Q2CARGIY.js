@@ -1,18 +1,19 @@
 import {
+  AbortedError,
   OPENAI,
   ProviderAuthError,
   ProviderRateLimitError,
   ProviderResponseError,
   ProviderUnavailableError,
   ThalamusError,
-  createStreamResult
-} from "./chunk-LQAFAVC6.js";
+  createSendResult
+} from "./chunk-U2SEW5AP.js";
 import {
   LocalVault
 } from "./chunk-L5ITO5PR.js";
 
 // src/openai/openai.provider.ts
-import OpenAI, { APIError } from "openai";
+import OpenAI, { APIError, APIUserAbortError } from "openai";
 
 // src/openai/openai.transformer.ts
 var openaiTransformer = {
@@ -114,6 +115,9 @@ function isResponseErrorEvent(e) {
   return typeof e === "object" && e !== null && "type" in e && e.type === "error" && "code" in e;
 }
 function mapError(error, provider) {
+  if (error instanceof APIUserAbortError) {
+    return new AbortedError({ provider, cause: error });
+  }
   const msg = error instanceof Error ? error.message : String(error);
   const code = error instanceof APIError ? error.code ?? "" : isResponseErrorEvent(error) ? error.code ?? "" : "";
   if (code === "invalid_api_key" || msg.toLowerCase().includes("unauthorized")) {
@@ -126,6 +130,15 @@ function mapError(error, provider) {
     return new ProviderUnavailableError(msg, { provider, cause: error });
   }
   return new ProviderResponseError(msg, { provider, cause: error });
+}
+function isTransientStreamError(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  if (err instanceof APIError && err.status >= 400 && err.status < 500) {
+    return false;
+  }
+  return true;
 }
 function mapApprovalPolicy(policy) {
   if (!policy || typeof policy === "string") return policy;
@@ -153,6 +166,7 @@ function toMcpTools(servers, credentials) {
     return tool;
   });
 }
+var MAX_RECONNECT_RETRIES = 3;
 var ResponseAccumulator = class {
   content = "";
   sessionId;
@@ -359,7 +373,10 @@ var OpenAIProvider = class {
   useConversations;
   mcpServers;
   vaultStore;
+  onSessionEvents;
+  config;
   constructor(config) {
+    this.config = config;
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
@@ -367,9 +384,17 @@ var OpenAIProvider = class {
     this.useConversations = !("awsRegion" in config && config.awsRegion);
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
+    this.onSessionEvents = config.onSessionEvents;
+    if (config.durable && config.onSessionEvents) {
+      this.recoverActiveSessions().catch(() => {
+      });
+    }
   }
-  stream(params, callbacks) {
-    return createStreamResult(this.runStream(params), callbacks);
+  send(params) {
+    const callbacks = this.onSessionEvents ? this.onSessionEvents(params.sessionId ?? "<<pending>>") : void 0;
+    return createSendResult(this.runStream(params), callbacks, {
+      autoStart: !!this.onSessionEvents
+    });
   }
   async resolveSessionParams(sessionId) {
     if (this.useConversations) {
@@ -378,32 +403,33 @@ var OpenAIProvider = class {
     }
     return sessionId ? { previous_response_id: sessionId } : {};
   }
-  async *runStream(params) {
-    try {
-      const sessionParams = await this.resolveSessionParams(params.sessionId);
-      const credentials = params.vaultIds?.length ? await this.resolveCredentials(params.vaultIds) : void 0;
-      const mcpTools = this.mcpServers.length > 0 ? toMcpTools(this.mcpServers, credentials) : void 0;
-      let input = openaiTransformer.toInput(
-        params.messages
-      );
-      if (params.toolResults?.length) {
-        const toolInputs = params.toolResults.map((tr) => {
-          if (tr.approved !== void 0) {
-            return {
-              type: "mcp_approval_response",
-              approval_request_id: tr.toolUseId,
-              approve: tr.approved
-            };
-          }
+  buildInput(params) {
+    let input = openaiTransformer.toInput(
+      params.messages
+    );
+    if (params.toolResults?.length) {
+      const toolInputs = params.toolResults.map((tr) => {
+        if (tr.approved !== void 0) {
           return {
-            type: "function_call_output",
-            call_id: tr.toolUseId,
-            output: tr.output ?? ""
+            type: "mcp_approval_response",
+            approval_request_id: tr.toolUseId,
+            approve: tr.approved
           };
-        });
-        input = [...toolInputs, ...input];
-      }
-      const rawStream = await this.client.responses.create({
+        }
+        return {
+          type: "function_call_output",
+          call_id: tr.toolUseId,
+          output: tr.output ?? ""
+        };
+      });
+      input = [...toolInputs, ...input];
+    }
+    return input;
+  }
+  async *dispatchAndObserve(params, sessionParams, mcpTools, signal) {
+    const input = this.buildInput(params);
+    const rawStream = await this.client.responses.create(
+      {
         model: this.model,
         input,
         stream: true,
@@ -411,13 +437,270 @@ var OpenAIProvider = class {
         ...mcpTools ? { tools: mcpTools } : {},
         ...sessionParams,
         ...params.providerOptions
-      });
-      const acc = new ResponseAccumulator();
-      for await (const rawEvent of rawStream) {
-        yield* mapEvent(rawEvent, acc);
+      },
+      { signal }
+    );
+    const acc = new ResponseAccumulator();
+    for await (const rawEvent of rawStream) {
+      yield* mapEvent(rawEvent, acc);
+    }
+    const response = acc.toResponse();
+    yield { type: "finish", response };
+  }
+  async *resumeObservation(responseId, afterSequenceNumber, signal) {
+    const rawStream = await this.client.responses.retrieve(
+      responseId,
+      {
+        stream: true,
+        ...afterSequenceNumber >= 0 ? { starting_after: afterSequenceNumber } : {}
+      },
+      { signal }
+    );
+    yield* rawStream;
+  }
+  async getStatus(responseId) {
+    const response = await this.client.responses.retrieve(responseId);
+    return response.status;
+  }
+  /**
+   * Wraps dispatch+observe with auto-reconnect on transient network failures.
+   * OpenAI combines dispatch and observe in a single responses.create() call,
+   * so the first attempt dispatches; retries resume via responses.retrieve()
+   * with starting_after (cursor-based, no event duplication from the API).
+   *
+   * Dedup by sequence_number guards against overlapping events if the API
+   * sends a partial replay on resume.
+   */
+  async *resilientDispatchAndObserve(params, sessionParams, mcpTools, signal) {
+    const acc = new ResponseAccumulator();
+    const durable = this.config.durable;
+    const input = this.buildInput(params);
+    let lastSequenceNumber = -1;
+    let responseId;
+    let retries = 0;
+    const createParams = {
+      model: this.model,
+      input,
+      ...this.instructions ? { instructions: this.instructions } : {},
+      ...mcpTools ? { tools: mcpTools } : {},
+      ...sessionParams,
+      ...params.providerOptions
+    };
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        let rawStream;
+        if (responseId) {
+          rawStream = this.resumeObservation(
+            responseId,
+            lastSequenceNumber,
+            signal
+          );
+        } else {
+          rawStream = await this.client.responses.create(
+            {
+              ...createParams,
+              stream: true,
+              ...durable ? { background: true } : {}
+            },
+            { signal }
+          );
+        }
+        for await (const rawEvent of rawStream) {
+          if ("sequence_number" in rawEvent && typeof rawEvent.sequence_number === "number") {
+            if (rawEvent.sequence_number <= lastSequenceNumber) continue;
+            lastSequenceNumber = rawEvent.sequence_number;
+          }
+          if (rawEvent.type === "response.created") {
+            responseId = rawEvent.response.id;
+          }
+          yield* mapEvent(rawEvent, acc);
+          if (durable && responseId) {
+            await durable.save({
+              sessionId: acc.sessionId ?? responseId,
+              provider: "openai",
+              lastEventId: String(lastSequenceNumber),
+              createdAt: Date.now(),
+              metadata: { responseId }
+            });
+          }
+        }
+        if (durable && responseId) {
+          await durable.remove(acc.sessionId ?? responseId);
+        }
+        yield { type: "finish", response: acc.toResponse() };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err, signal)) throw err;
+        if (!responseId) throw err;
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
       }
-      const response = acc.toResponse();
-      yield { type: "finish", response };
+    }
+  }
+  /**
+   * Best-effort recovery of sessions that were active before a process restart.
+   * Fires onSessionEvents callbacks for missed events, then resumes live
+   * observation for sessions that are still running.
+   */
+  async recoverActiveSessions() {
+    const { durable, onSessionEvents } = this.config;
+    if (!durable || !onSessionEvents) return;
+    const active = await durable.getActive();
+    await Promise.allSettled(
+      active.map(async (checkpoint) => {
+        const responseId = checkpoint.metadata?.responseId;
+        if (!responseId) {
+          await durable.remove(checkpoint.sessionId);
+          return;
+        }
+        try {
+          const status = await this.getStatus(responseId);
+          if (status === "cancelled" || status === "failed" || status === "incomplete") {
+            await durable.remove(checkpoint.sessionId);
+            return;
+          }
+          const callbacks = onSessionEvents(checkpoint.sessionId);
+          const stream = this.recoverStream(checkpoint, responseId);
+          const result = createSendResult(stream, callbacks, {
+            autoStart: true
+          });
+          result.response.catch(async (err) => {
+            console.error(
+              `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
+              err instanceof Error ? err.message : err
+            );
+            await durable.remove(checkpoint.sessionId).catch(() => {
+            });
+          });
+        } catch (err) {
+          console.error(
+            `[thalamus] recovery failed for ${checkpoint.sessionId}:`,
+            err instanceof Error ? err.message : err
+          );
+          await durable.remove(checkpoint.sessionId).catch(() => {
+          });
+        }
+      })
+    );
+  }
+  /**
+   * Generates a stream for a recovered session: resumes observation from the
+   * last known sequence number, deduplicates, and checkpoints as it goes.
+   * Requires the original response to have been created with `background: true`.
+   */
+  async *recoverStream(checkpoint, responseId) {
+    const { sessionId } = checkpoint;
+    const durable = this.config.durable;
+    const acc = new ResponseAccumulator();
+    let lastSequenceNumber = Number(checkpoint.lastEventId) || -1;
+    let retries = 0;
+    yield { type: "stream-start", sessionId };
+    while (retries <= MAX_RECONNECT_RETRIES) {
+      try {
+        const rawStream = this.resumeObservation(
+          responseId,
+          lastSequenceNumber
+        );
+        for await (const rawEvent of rawStream) {
+          if ("sequence_number" in rawEvent && typeof rawEvent.sequence_number === "number") {
+            if (rawEvent.sequence_number <= lastSequenceNumber) continue;
+            lastSequenceNumber = rawEvent.sequence_number;
+          }
+          yield* mapEvent(rawEvent, acc);
+          if (durable) {
+            await durable.save({
+              sessionId,
+              provider: "openai",
+              lastEventId: String(lastSequenceNumber),
+              createdAt: Date.now(),
+              metadata: { responseId }
+            });
+          }
+        }
+        if (durable) await durable.remove(sessionId);
+        yield { type: "finish", response: acc.toResponse() };
+        return;
+      } catch (err) {
+        if (!isTransientStreamError(err)) throw err;
+        retries++;
+        if (retries > MAX_RECONNECT_RETRIES) throw err;
+      }
+    }
+  }
+  /**
+   * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
+   * events arrive via WebSocket.
+   */
+  async *edgeObserve(params, sessionParams, mcpTools, signal) {
+    const observer = this.config.edgeObserver;
+    const input = this.buildInput(params);
+    const initStream = await this.client.responses.create(
+      {
+        model: this.model,
+        input,
+        stream: true,
+        background: true,
+        ...this.instructions ? { instructions: this.instructions } : {},
+        ...mcpTools ? { tools: mcpTools } : {},
+        ...sessionParams,
+        ...params.providerOptions
+      },
+      { signal }
+    );
+    let responseId;
+    let lastSeqNo = -1;
+    for await (const event of initStream) {
+      if ("sequence_number" in event && typeof event.sequence_number === "number") {
+        lastSeqNo = event.sequence_number;
+      }
+      if (event.type === "response.created") {
+        responseId = event.response.id;
+        break;
+      }
+    }
+    if (!responseId) {
+      throw new ThalamusError(
+        "edge observe: no responseId from initial stream",
+        {
+          provider: OPENAI,
+          isRetryable: false
+        }
+      );
+    }
+    const eventStream = observer.events(responseId);
+    const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
+    await observer.observe({
+      sessionId: responseId,
+      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
+      headers: {
+        Authorization: `Bearer ${this.client.apiKey}`
+      }
+    });
+    const acc = new ResponseAccumulator();
+    for await (const frame of eventStream) {
+      if (signal?.aborted) break;
+      if (!frame.data) continue;
+      const rawEvent = JSON.parse(frame.data);
+      yield* mapEvent(rawEvent, acc);
+    }
+    yield { type: "finish", response: acc.toResponse() };
+  }
+  async *runStream(params) {
+    try {
+      const sessionParams = await this.resolveSessionParams(params.sessionId);
+      const credentials = params.vaultIds?.length ? await this.resolveCredentials(params.vaultIds) : void 0;
+      const mcpTools = this.mcpServers.length > 0 ? toMcpTools(this.mcpServers, credentials) : void 0;
+      const signal = params.abortSignal ?? void 0;
+      if (this.config.edgeObserver) {
+        yield* this.edgeObserve(params, sessionParams, mcpTools, signal);
+      } else {
+        yield* this.resilientDispatchAndObserve(
+          params,
+          sessionParams,
+          mcpTools,
+          signal
+        );
+      }
     } catch (err) {
       const mapped = err instanceof ThalamusError ? err : mapError(err, OPENAI);
       yield { type: "error", error: mapped };
@@ -487,4 +770,4 @@ export {
   openaiTransformer,
   createOpenAIProvider
 };
-//# sourceMappingURL=chunk-6GLROXWH.js.map
+//# sourceMappingURL=chunk-Q2CARGIY.js.map

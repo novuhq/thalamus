@@ -1,9 +1,10 @@
-import { S as StreamPart, a as StreamCallbacks, b as StreamResult, R as Response } from './types-Bx8FEBkB.js';
-export { A as ANTHROPIC, c as ActionRequired, d as AgentStatus, C as ContentPart, M as McpApprovalPolicy, e as McpServerConfig, f as McpToolDef, g as Message, h as MessageRole, O as OPENAI, P as Provider, i as RequestParams, j as SessionOptions, T as ToolResult, k as ToolSource, U as Usage } from './types-Bx8FEBkB.js';
+import { S as StreamPart, a as StreamCallbacks, b as SendResult } from './types-D03ofbVu.js';
+export { A as ANTHROPIC, c as ActionRequired, d as AgentStatus, C as ContentPart, M as McpApprovalPolicy, e as McpServerConfig, f as McpToolDef, g as Message, h as MessageRole, O as OPENAI, P as Provider, R as RequestParams, i as Response, j as SessionEventsFactory, k as SessionOptions, T as ToolResult, l as ToolSource, U as Usage } from './types-D03ofbVu.js';
 export { C as Credential, a as CredentialInfo, V as Vault, b as VaultOptions, c as VaultStore } from './vault.interface-BMCawAU1.js';
 export { c as createMemoryVaultStore } from './memory-vault-store-BvS51wSV.js';
-import { c as createAnthropicProvider } from './anthropic.provider-DtdNU_8p.js';
-import { c as createOpenAIProvider } from './openai.provider-0mVToG7l.js';
+import { c as createAnthropicProvider } from './anthropic.provider-BEV5lXfk.js';
+import { c as createOpenAIProvider } from './openai.provider-7YTQfjrV.js';
+import './types-Dj7j5_Vh.js';
 
 declare class ThalamusError extends Error {
     readonly provider: string;
@@ -70,6 +71,14 @@ declare class CredentialExpiredError extends VaultError {
         cause?: unknown;
     });
 }
+declare class AbortedError extends ThalamusError {
+    readonly sessionId?: string;
+    constructor(options: {
+        provider: string;
+        sessionId?: string;
+        cause?: unknown;
+    });
+}
 declare class McpServerError extends ThalamusError {
     readonly serverName: string;
     readonly statusCode?: number;
@@ -80,14 +89,14 @@ declare class McpServerError extends ThalamusError {
     });
 }
 
-declare function createStreamResult(source: AsyncIterable<StreamPart>, callbacks?: StreamCallbacks): StreamResult;
-
-/** @deprecated Use `await provider.stream(params)` instead. */
-declare function collectStream(result: StreamResult): Promise<Response>;
+interface SendResultOptions {
+    autoStart?: boolean;
+}
+declare function createSendResult(source: AsyncIterable<StreamPart>, callbacks?: StreamCallbacks, options?: SendResultOptions): SendResult;
 
 declare const thalamus: {
     readonly anthropic: typeof createAnthropicProvider;
     readonly openai: typeof createOpenAIProvider;
 };
 
-export { CredentialExpiredError, McpServerError, ProviderAuthError, ProviderRateLimitError, ProviderResponseError, ProviderUnavailableError, Response, SessionExpiredError, StreamCallbacks, StreamPart, StreamResult, ThalamusError, VaultError, VaultNotFoundError, collectStream, createAnthropicProvider, createOpenAIProvider, createStreamResult, thalamus };
+export { AbortedError, CredentialExpiredError, McpServerError, ProviderAuthError, ProviderRateLimitError, ProviderResponseError, ProviderUnavailableError, SendResult, type SendResultOptions, SessionExpiredError, StreamCallbacks, StreamPart, ThalamusError, VaultError, VaultNotFoundError, createAnthropicProvider, createOpenAIProvider, createSendResult, thalamus };

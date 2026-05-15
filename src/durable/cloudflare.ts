@@ -108,22 +108,41 @@ export function cloudflare(options: CloudflareBackendOptions): EdgeObserver {
       const ws = new WebSocket(wsUrl);
       const queue = new AsyncQueue<SSEFrame>();
 
-      ws.addEventListener("message", (e: MessageEvent) =>
-        queue.push(JSON.parse(String(e.data)) as SSEFrame),
-      );
-      ws.addEventListener("close", () => queue.end());
-      ws.addEventListener("error", () =>
-        queue.fail(new Error("WebSocket closed with error")),
-      );
+      ws.addEventListener("message", (e: MessageEvent) => {
+        const parsed = JSON.parse(String(e.data));
+        if (
+          typeof parsed.type === "string" &&
+          parsed.type.startsWith("cf_agent_")
+        )
+          return;
+        queue.push(parsed as SSEFrame);
+      });
+      ws.addEventListener("close", () => {
+        queue.end();
+      });
+      ws.addEventListener("error", () => {
+        queue.fail(new Error("WebSocket closed with error"));
+      });
 
       const ready = new Promise<void>((res, rej) => {
-        ws.addEventListener("open", () => res(), { once: true });
+        const timer = setTimeout(() => {
+          rej(new Error("WebSocket connection timeout"));
+        }, 15_000);
+        ws.addEventListener(
+          "open",
+          () => {
+            clearTimeout(timer);
+            res();
+          },
+          { once: true },
+        );
         ws.addEventListener(
           "error",
-          () => rej(new Error("WebSocket connection failed")),
-          {
-            once: true,
+          () => {
+            clearTimeout(timer);
+            rej(new Error("WebSocket connection failed"));
           },
+          { once: true },
         );
       });
 

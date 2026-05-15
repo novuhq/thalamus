@@ -111,10 +111,14 @@ export class SessionObserver extends Agent<Env, State> {
   }
 
   private relayEvent(event: EventSourceMessage): void {
-    const connections = [...this.getConnections()];
-    if (connections.length > 0) {
+    const sockets = this.ctx.getWebSockets();
+    if (sockets.length > 0) {
       const payload = JSON.stringify(event);
-      for (const conn of connections) conn.send(payload);
+      for (const ws of sockets) {
+        try {
+          ws.send(payload);
+        } catch {}
+      }
     } else if (this.state.eventBuffer.length < MAX_BUFFERED_EVENTS) {
       this.setState({
         ...this.state,

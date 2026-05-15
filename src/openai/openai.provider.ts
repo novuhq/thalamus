@@ -92,13 +92,16 @@ function mapError(error: unknown, provider: string): Error {
 /**
  * SSE drops manifest as many error types (TypeError, ECONNRESET, socket hang up,
  * proxy timeouts, etc.) that can't be exhaustively listed. We invert the check:
- * only abort and application-level errors are terminal; everything else is
- * treated as a transient transport failure worth retrying.
+ * only abort, application-level, and permanent API errors are terminal;
+ * everything else is treated as a transient transport failure worth retrying.
  */
 function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
   if (err instanceof APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
+  if (err instanceof APIError && err.status >= 400 && err.status < 500) {
+    return false;
+  }
   return true;
 }
 
@@ -506,7 +509,12 @@ class OpenAIProvider implements Provider {
   ): AsyncIterable<ResponseStreamEvent> {
     const rawStream = (await this.client.responses.retrieve(
       responseId,
-      { stream: true as const, starting_after: afterSequenceNumber },
+      {
+        stream: true as const,
+        ...(afterSequenceNumber >= 0
+          ? { starting_after: afterSequenceNumber }
+          : {}),
+      },
       { signal },
     )) as AsyncIterable<ResponseStreamEvent>;
 
@@ -535,35 +543,38 @@ class OpenAIProvider implements Provider {
   ): AsyncIterable<StreamPart> {
     const acc = new ResponseAccumulator();
     const durable = this.config.durable;
+    const input = this.buildInput(params);
     let lastSequenceNumber = -1;
     let responseId: string | undefined;
     let retries = 0;
-    let dispatched = false;
+
+    const createParams = {
+      model: this.model,
+      input,
+      ...(this.instructions ? { instructions: this.instructions } : {}),
+      ...(mcpTools ? { tools: mcpTools } : {}),
+      ...sessionParams,
+      ...params.providerOptions,
+    };
 
     while (retries <= MAX_RECONNECT_RETRIES) {
       try {
         let rawStream: AsyncIterable<ResponseStreamEvent>;
 
-        if (!dispatched) {
-          const input = this.buildInput(params);
-          rawStream = await this.client.responses.create(
-            {
-              model: this.model,
-              input,
-              stream: true,
-              ...(this.instructions ? { instructions: this.instructions } : {}),
-              ...(mcpTools ? { tools: mcpTools } : {}),
-              ...sessionParams,
-              ...params.providerOptions,
-            } as ResponseCreateParamsStreaming,
-            { signal },
-          );
-          dispatched = true;
-        } else {
+        if (responseId) {
           rawStream = this.resumeObservation(
-            responseId!,
+            responseId,
             lastSequenceNumber,
             signal,
+          );
+        } else {
+          rawStream = await this.client.responses.create(
+            {
+              ...createParams,
+              stream: true,
+              ...(durable ? { background: true } : {}),
+            } as ResponseCreateParamsStreaming,
+            { signal },
           );
         }
 
@@ -597,7 +608,7 @@ class OpenAIProvider implements Provider {
         return;
       } catch (err) {
         if (!isTransientStreamError(err, signal)) throw err;
-        if (!responseId || !dispatched) throw err;
+        if (!responseId) throw err;
 
         retries++;
         if (retries > MAX_RECONNECT_RETRIES) throw err;
@@ -627,14 +638,32 @@ class OpenAIProvider implements Provider {
         try {
           const status = await this.getStatus(responseId);
 
-          if (status === "in_progress" || status === "completed") {
-            const callbacks = onSessionEvents(checkpoint.sessionId);
-            const stream = this.recoverStream(checkpoint, responseId);
-            createSendResult(stream, callbacks, { autoStart: true });
-          } else {
+          if (
+            status === "cancelled" ||
+            status === "failed" ||
+            status === "incomplete"
+          ) {
             await durable.remove(checkpoint.sessionId);
+            return;
           }
-        } catch {
+
+          const callbacks = onSessionEvents(checkpoint.sessionId);
+          const stream = this.recoverStream(checkpoint, responseId);
+          const result = createSendResult(stream, callbacks, {
+            autoStart: true,
+          });
+          result.response.catch(async (err) => {
+            console.error(
+              `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
+              err instanceof Error ? err.message : err,
+            );
+            await durable.remove(checkpoint.sessionId).catch(() => {});
+          });
+        } catch (err) {
+          console.error(
+            `[thalamus] recovery failed for ${checkpoint.sessionId}:`,
+            err instanceof Error ? err.message : err,
+          );
           await durable.remove(checkpoint.sessionId).catch(() => {});
         }
       }),
@@ -644,6 +673,7 @@ class OpenAIProvider implements Provider {
   /**
    * Generates a stream for a recovered session: resumes observation from the
    * last known sequence number, deduplicates, and checkpoints as it goes.
+   * Requires the original response to have been created with `background: true`.
    */
   private async *recoverStream(
     checkpoint: SessionCheckpoint,
@@ -711,10 +741,13 @@ class OpenAIProvider implements Provider {
     >;
     const input = this.buildInput(params);
 
-    const response = await this.client.responses.create(
+    // Must use stream + background together: OpenAI only persists events for
+    // later retrieval when the create call includes stream: true.
+    const initStream = await this.client.responses.create(
       {
         model: this.model,
         input,
+        stream: true,
         background: true,
         ...(this.instructions ? { instructions: this.instructions } : {}),
         ...(mcpTools ? { tools: mcpTools } : {}),
@@ -724,13 +757,38 @@ class OpenAIProvider implements Provider {
       { signal },
     );
 
-    const responseId = (response as unknown as { id: string }).id;
+    // Drain until we have the responseId so the CF Worker can take over.
+    let responseId: string | undefined;
+    let lastSeqNo = -1;
+    for await (const event of initStream as AsyncIterable<ResponseStreamEvent>) {
+      if (
+        "sequence_number" in event &&
+        typeof event.sequence_number === "number"
+      ) {
+        lastSeqNo = event.sequence_number;
+      }
+      if (event.type === "response.created") {
+        responseId = event.response.id;
+        break;
+      }
+    }
+
+    if (!responseId) {
+      throw new ThalamusError(
+        "edge observe: no responseId from initial stream",
+        {
+          provider: OPENAI,
+          isRetryable: false,
+        },
+      );
+    }
 
     const eventStream = observer.events(responseId);
 
+    const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
     await observer.observe({
       sessionId: responseId,
-      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true`,
+      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
       headers: {
         Authorization: `Bearer ${this.client.apiKey}`,
       },

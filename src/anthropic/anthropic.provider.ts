@@ -523,7 +523,16 @@ class AnthropicProvider implements Provider {
               checkpoint,
               status === "running",
             );
-            createSendResult(stream, callbacks, { autoStart: true });
+            const result = createSendResult(stream, callbacks, {
+              autoStart: true,
+            });
+            result.response.catch(async (err) => {
+              console.error(
+                `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
+                err instanceof Error ? err.message : err,
+              );
+              await durable.remove(checkpoint.sessionId).catch(() => {});
+            });
           } else {
             await durable.remove(checkpoint.sessionId);
           }

@@ -1,6 +1,7 @@
 name = "thalamus-session-observer"
 main = "src/index.ts"
 compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
 
 [secrets]
 required = ["API_KEY"]

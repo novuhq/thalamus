@@ -1,9 +1,9 @@
 import {
   createAnthropicProvider
-} from "./chunk-VUMWMBZB.js";
+} from "./chunk-CP6UCCND.js";
 import {
   createOpenAIProvider
-} from "./chunk-Q2CARGIY.js";
+} from "./chunk-75EWVV4W.js";
 import {
   ANTHROPIC,
   AbortedError,
@@ -25,6 +25,10 @@ import {
   createMemoryVaultStore
 } from "./chunk-2CE52QMW.js";
 import "./chunk-L5ITO5PR.js";
+import {
+  cloudflare
+} from "./chunk-3AFTTNQC.js";
+import "./chunk-AX4L5BDL.js";
 
 // src/index.ts
 var thalamus = {
@@ -46,6 +50,7 @@ export {
   ThalamusError,
   VaultError,
   VaultNotFoundError,
+  cloudflare,
   createAnthropicProvider,
   createMemoryVaultStore,
   createOpenAIProvider,

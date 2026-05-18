@@ -44,6 +44,7 @@ __export(src_exports, {
   ThalamusError: () => ThalamusError,
   VaultError: () => VaultError,
   VaultNotFoundError: () => VaultNotFoundError,
+  cloudflare: () => cloudflare,
   createAnthropicProvider: () => createAnthropicProvider,
   createMemoryVaultStore: () => createMemoryVaultStore,
   createOpenAIProvider: () => createOpenAIProvider,
@@ -51,6 +52,149 @@ __export(src_exports, {
   thalamus: () => thalamus
 });
 module.exports = __toCommonJS(src_exports);
+
+// src/durable/cloudflare.ts
+var AsyncQueue = class {
+  buffer = [];
+  wake = null;
+  done = false;
+  err = null;
+  push(value) {
+    this.buffer.push(value);
+    this.notify();
+  }
+  end() {
+    this.done = true;
+    this.notify();
+  }
+  fail(error) {
+    this.err = error;
+    this.done = true;
+    this.notify();
+  }
+  notify() {
+    if (this.wake) {
+      const r = this.wake;
+      this.wake = null;
+      r();
+    }
+  }
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+  async next() {
+    while (true) {
+      if (this.buffer.length > 0)
+        return { value: this.buffer.shift(), done: false };
+      if (this.err) throw this.err;
+      if (this.done) return { value: void 0, done: true };
+      await new Promise((r) => {
+        this.wake = r;
+      });
+    }
+  }
+  async return() {
+    this.done = true;
+    return { value: void 0, done: true };
+  }
+};
+function cloudflare(options) {
+  const base = options.url.replace(/\/+$/, "");
+  const headers = {
+    "Content-Type": "application/json",
+    ...options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}
+  };
+  const wsBase = base.replace(/^http/, "ws");
+  return {
+    async observe(params) {
+      const res = await fetch(`${base}/observe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(params)
+      });
+      if (!res.ok) {
+        throw new Error(`cloudflare observe failed: ${res.status}`);
+      }
+    },
+    async stop(sessionId) {
+      const res = await fetch(
+        `${base}/observe/${encodeURIComponent(sessionId)}`,
+        { method: "DELETE", headers }
+      );
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`cloudflare stop failed: ${res.status}`);
+      }
+    },
+    async listActive() {
+      try {
+        const res = await fetch(`${base}/active-sessions`, { headers });
+        if (!res.ok) return [];
+        return await res.json();
+      } catch {
+        return [];
+      }
+    },
+    events(sessionId) {
+      let wsUrl = `${wsBase}?sessionId=${encodeURIComponent(sessionId)}`;
+      if (options.apiKey) {
+        wsUrl += `&token=${encodeURIComponent(options.apiKey)}`;
+      }
+      const ws = new WebSocket(wsUrl);
+      const queue = new AsyncQueue();
+      ws.addEventListener("message", (e) => {
+        const parsed = JSON.parse(String(e.data));
+        if (typeof parsed.type === "string" && parsed.type.startsWith("cf_agent_"))
+          return;
+        queue.push(parsed);
+      });
+      ws.addEventListener("close", () => {
+        queue.end();
+      });
+      ws.addEventListener("error", () => {
+        queue.fail(new Error("WebSocket closed with error"));
+      });
+      const ready = new Promise((res, rej) => {
+        const timer = setTimeout(() => {
+          rej(new Error("WebSocket connection timeout"));
+        }, 15e3);
+        ws.addEventListener(
+          "open",
+          () => {
+            clearTimeout(timer);
+            res();
+          },
+          { once: true }
+        );
+        ws.addEventListener(
+          "error",
+          () => {
+            clearTimeout(timer);
+            rej(new Error("WebSocket connection failed"));
+          },
+          { once: true }
+        );
+      });
+      let connected = false;
+      const iter = {
+        [Symbol.asyncIterator]() {
+          return iter;
+        },
+        async next() {
+          if (!connected) {
+            await ready;
+            connected = true;
+          }
+          return queue.next();
+        },
+        async return() {
+          ws.close();
+          return queue.return?.() ?? { value: void 0, done: true };
+        }
+      };
+      return iter;
+    }
+  };
+}
 
 // src/errors.ts
 var ThalamusError = class extends Error {
@@ -329,6 +473,11 @@ function createMemoryVaultStore() {
 
 // src/anthropic/anthropic.provider.ts
 var import_sdk = __toESM(require("@anthropic-ai/sdk"), 1);
+
+// src/durable/types.ts
+function isEdgeObserver(backend) {
+  return "observe" in backend && "events" in backend;
+}
 
 // src/anthropic/anthropic.transformer.ts
 function toContentBlocks(content) {
@@ -697,14 +846,23 @@ var AnthropicProvider = class {
   config;
   agentId;
   environmentId;
+  _recovered;
   constructor(config) {
     this.config = config;
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
     if (config.durable && config.onSessionEvents) {
-      this.recoverActiveSessions().catch(() => {
-      });
+      if (isEdgeObserver(config.durable)) {
+        this._recovered = this.recoverFromEdge().catch(() => {
+        });
+      } else {
+        this.recoverActiveSessions().catch(() => {
+        });
+        this._recovered = Promise.resolve();
+      }
+    } else {
+      this._recovered = Promise.resolve();
     }
   }
   async getClient() {
@@ -721,30 +879,6 @@ var AnthropicProvider = class {
     const events = buildSendEvents(params);
     const sendParams = { events };
     await client.beta.sessions.events.send(sessionId, sendParams, { signal });
-  }
-  async *observe(client, sessionId, signal) {
-    const sseStream = await client.beta.sessions.events.stream(
-      sessionId,
-      void 0,
-      { signal }
-    );
-    const acc = new ResponseAccumulator();
-    for await (const rawEvent of sseStream) {
-      yield* mapEvent(rawEvent, acc);
-      if (acc.done) break;
-    }
-    const response = acc.toResponse(sessionId);
-    yield { type: "finish", response };
-  }
-  async *fetchMissedEvents(client, sessionId, pageCursor) {
-    const page = await client.beta.sessions.events.list(sessionId, {
-      ...pageCursor ? { page: pageCursor } : {}
-    });
-    const acc = new ResponseAccumulator();
-    for await (const event of page) {
-      yield* mapEvent(event, acc);
-      if (acc.done) break;
-    }
   }
   async getStatus(client, sessionId) {
     const session = await client.beta.sessions.retrieve(sessionId);
@@ -776,8 +910,8 @@ var AnthropicProvider = class {
   async *resilientObserve(client, sessionId, signal, onConnected, initialSeenIds) {
     const seenIds = initialSeenIds ?? /* @__PURE__ */ new Set();
     const acc = new ResponseAccumulator();
-    const durable = this.config.durable;
-    const onEvent = durable ? (eventId) => durable.save({
+    const backend = this.checkpointBackend;
+    const onEvent = backend ? (eventId) => backend.save({
       sessionId,
       provider: "anthropic",
       lastEventId: eventId,
@@ -800,7 +934,7 @@ var AnthropicProvider = class {
             const missed = await client.beta.sessions.events.list(sessionId);
             yield* this.consumeEvents(missed, seenIds, acc, onEvent);
             if (acc.done) {
-              if (durable) await durable.remove(sessionId);
+              if (backend) await backend.remove(sessionId);
               yield { type: "finish", response: acc.toResponse(sessionId) };
               return;
             }
@@ -808,7 +942,7 @@ var AnthropicProvider = class {
           }
         }
         yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
-        if (durable) await durable.remove(sessionId);
+        if (backend) await backend.remove(sessionId);
         yield { type: "finish", response: acc.toResponse(sessionId) };
         return;
       } catch (err) {
@@ -819,14 +953,15 @@ var AnthropicProvider = class {
     }
   }
   /**
-   * Best-effort recovery of sessions that were active before a process restart.
+   * Recovers sessions that were active before a process restart.
    * Fires onSessionEvents callbacks for missed events, then resumes live
    * observation for sessions that are still running.
    */
   async recoverActiveSessions() {
-    const { durable, onSessionEvents } = this.config;
-    if (!durable || !onSessionEvents) return;
-    const active = await durable.getActive();
+    const backend = this.checkpointBackend;
+    const { onSessionEvents } = this.config;
+    if (!backend || !onSessionEvents) return;
+    const active = await backend.getActive();
     const client = await this.getClient();
     await Promise.allSettled(
       active.map(async (checkpoint) => {
@@ -847,14 +982,14 @@ var AnthropicProvider = class {
                 `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
                 err instanceof Error ? err.message : err
               );
-              await durable.remove(checkpoint.sessionId).catch(() => {
+              await backend.remove(checkpoint.sessionId).catch(() => {
               });
             });
           } else {
-            await durable.remove(checkpoint.sessionId);
+            await backend.remove(checkpoint.sessionId);
           }
         } catch {
-          await durable.remove(checkpoint.sessionId).catch(() => {
+          await backend.remove(checkpoint.sessionId).catch(() => {
           });
         }
       })
@@ -867,10 +1002,10 @@ var AnthropicProvider = class {
    */
   async *recoverStream(client, checkpoint, stillRunning) {
     const { sessionId, lastEventId } = checkpoint;
-    const durable = this.config.durable;
+    const backend = this.checkpointBackend;
     const seenIds = /* @__PURE__ */ new Set();
     const acc = new ResponseAccumulator();
-    const onEvent = durable ? (eventId) => durable.save({
+    const onEvent = backend ? (eventId) => backend.save({
       sessionId,
       provider: "anthropic",
       lastEventId: eventId,
@@ -893,7 +1028,55 @@ var AnthropicProvider = class {
     if (sseStream && !acc.done) {
       yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
     }
-    if (durable) await durable.remove(sessionId);
+    if (backend) await backend.remove(sessionId);
+    yield { type: "finish", response: acc.toResponse(sessionId) };
+  }
+  /**
+   * Recovers sessions via the edge observer path. Queries the edge for
+   * active sessions and reconnects to each, flushing buffered events
+   * through onSessionEvents callbacks.
+   */
+  get edgeObserver() {
+    return this.config.durable && isEdgeObserver(this.config.durable) ? this.config.durable : null;
+  }
+  get checkpointBackend() {
+    return this.config.durable && !isEdgeObserver(this.config.durable) ? this.config.durable : null;
+  }
+  async recoverFromEdge() {
+    const observer = this.edgeObserver;
+    const { onSessionEvents } = this.config;
+    if (!observer || !onSessionEvents) return;
+    const active = await observer.listActive();
+    for (const sessionId of active) {
+      const callbacks = onSessionEvents(sessionId);
+      const stream = this.edgeRecoverStream(sessionId);
+      const result = createSendResult(stream, callbacks, { autoStart: true });
+      result.response.catch((err) => {
+        console.error(
+          `[thalamus] edge recovery failed for ${sessionId}:`,
+          err instanceof Error ? err.message : err
+        );
+      });
+    }
+  }
+  async *edgeRecoverStream(sessionId) {
+    const observer = this.edgeObserver;
+    const eventStream = observer.events(sessionId);
+    const acc = new ResponseAccumulator();
+    let hasEvents = false;
+    for await (const frame of eventStream) {
+      if (!frame.data) continue;
+      if (!hasEvents) {
+        hasEvents = true;
+        yield { type: "stream-start", sessionId };
+      }
+      const rawEvent = JSON.parse(frame.data);
+      yield* mapEvent(rawEvent, acc);
+      if (acc.done) break;
+    }
+    if (!hasEvents) return;
+    await observer.stop(sessionId).catch(() => {
+    });
     yield { type: "finish", response: acc.toResponse(sessionId) };
   }
   /**
@@ -902,8 +1085,8 @@ var AnthropicProvider = class {
    * from the edge observer's WebSocket feed.
    */
   async *edgeObserve(client, sessionId, params, signal) {
-    const observer = this.config.edgeObserver;
-    const eventStream = observer.events(sessionId);
+    await this._recovered;
+    const observer = this.edgeObserver;
     await observer.observe({
       sessionId,
       streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
@@ -913,6 +1096,7 @@ var AnthropicProvider = class {
         "anthropic-beta": "managed-agents-2026-04-01"
       }
     });
+    const eventStream = observer.events(sessionId);
     await this.dispatch(client, sessionId, params, signal);
     const acc = new ResponseAccumulator();
     for await (const frame of eventStream) {
@@ -922,6 +1106,8 @@ var AnthropicProvider = class {
       yield* mapEvent(rawEvent, acc);
       if (acc.done) break;
     }
+    await observer.stop(sessionId).catch(() => {
+    });
     yield { type: "finish", response: acc.toResponse(sessionId) };
   }
   async *runStream(params) {
@@ -933,7 +1119,7 @@ var AnthropicProvider = class {
       });
       yield { type: "stream-start", sessionId };
       const signal = params.abortSignal ?? void 0;
-      if (this.config.edgeObserver) {
+      if (this.edgeObserver) {
         yield* this.edgeObserve(client, sessionId, params, signal);
       } else {
         yield* this.resilientObserve(
@@ -1342,6 +1528,13 @@ var OpenAIProvider = class {
   vaultStore;
   onSessionEvents;
   config;
+  _recovered;
+  get edgeObserver() {
+    return this.config.durable && isEdgeObserver(this.config.durable) ? this.config.durable : null;
+  }
+  get checkpointBackend() {
+    return this.config.durable && !isEdgeObserver(this.config.durable) ? this.config.durable : null;
+  }
   constructor(config) {
     this.config = config;
     this.runtimeId = config.promptId ?? "inline";
@@ -1353,8 +1546,16 @@ var OpenAIProvider = class {
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
     if (config.durable && config.onSessionEvents) {
-      this.recoverActiveSessions().catch(() => {
-      });
+      if (isEdgeObserver(config.durable)) {
+        this._recovered = this.recoverFromEdge().catch(() => {
+        });
+      } else {
+        this.recoverActiveSessions().catch(() => {
+        });
+        this._recovered = Promise.resolve();
+      }
+    } else {
+      this._recovered = Promise.resolve();
     }
   }
   send(params) {
@@ -1440,7 +1641,7 @@ var OpenAIProvider = class {
    */
   async *resilientDispatchAndObserve(params, sessionParams, mcpTools, signal) {
     const acc = new ResponseAccumulator2();
-    const durable = this.config.durable;
+    const backend = this.checkpointBackend;
     const input = this.buildInput(params);
     let lastSequenceNumber = -1;
     let responseId;
@@ -1467,7 +1668,7 @@ var OpenAIProvider = class {
             {
               ...createParams,
               stream: true,
-              ...durable ? { background: true } : {}
+              ...backend ? { background: true } : {}
             },
             { signal }
           );
@@ -1481,8 +1682,8 @@ var OpenAIProvider = class {
             responseId = rawEvent.response.id;
           }
           yield* mapEvent2(rawEvent, acc);
-          if (durable && responseId) {
-            await durable.save({
+          if (backend && responseId) {
+            await backend.save({
               sessionId: acc.sessionId ?? responseId,
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
@@ -1491,8 +1692,8 @@ var OpenAIProvider = class {
             });
           }
         }
-        if (durable && responseId) {
-          await durable.remove(acc.sessionId ?? responseId);
+        if (backend && responseId) {
+          await backend.remove(acc.sessionId ?? responseId);
         }
         yield { type: "finish", response: acc.toResponse() };
         return;
@@ -1505,25 +1706,26 @@ var OpenAIProvider = class {
     }
   }
   /**
-   * Best-effort recovery of sessions that were active before a process restart.
+   * Recovers sessions that were active before a process restart.
    * Fires onSessionEvents callbacks for missed events, then resumes live
    * observation for sessions that are still running.
    */
   async recoverActiveSessions() {
-    const { durable, onSessionEvents } = this.config;
-    if (!durable || !onSessionEvents) return;
-    const active = await durable.getActive();
+    const backend = this.checkpointBackend;
+    const { onSessionEvents } = this.config;
+    if (!backend || !onSessionEvents) return;
+    const active = await backend.getActive();
     await Promise.allSettled(
       active.map(async (checkpoint) => {
         const responseId = checkpoint.metadata?.responseId;
         if (!responseId) {
-          await durable.remove(checkpoint.sessionId);
+          await backend.remove(checkpoint.sessionId);
           return;
         }
         try {
           const status = await this.getStatus(responseId);
           if (status === "cancelled" || status === "failed" || status === "incomplete") {
-            await durable.remove(checkpoint.sessionId);
+            await backend.remove(checkpoint.sessionId);
             return;
           }
           const callbacks = onSessionEvents(checkpoint.sessionId);
@@ -1536,7 +1738,7 @@ var OpenAIProvider = class {
               `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
               err instanceof Error ? err.message : err
             );
-            await durable.remove(checkpoint.sessionId).catch(() => {
+            await backend.remove(checkpoint.sessionId).catch(() => {
             });
           });
         } catch (err) {
@@ -1544,7 +1746,7 @@ var OpenAIProvider = class {
             `[thalamus] recovery failed for ${checkpoint.sessionId}:`,
             err instanceof Error ? err.message : err
           );
-          await durable.remove(checkpoint.sessionId).catch(() => {
+          await backend.remove(checkpoint.sessionId).catch(() => {
           });
         }
       })
@@ -1557,7 +1759,7 @@ var OpenAIProvider = class {
    */
   async *recoverStream(checkpoint, responseId) {
     const { sessionId } = checkpoint;
-    const durable = this.config.durable;
+    const backend = this.checkpointBackend;
     const acc = new ResponseAccumulator2();
     let lastSequenceNumber = Number(checkpoint.lastEventId) || -1;
     let retries = 0;
@@ -1574,8 +1776,8 @@ var OpenAIProvider = class {
             lastSequenceNumber = rawEvent.sequence_number;
           }
           yield* mapEvent2(rawEvent, acc);
-          if (durable) {
-            await durable.save({
+          if (backend) {
+            await backend.save({
               sessionId,
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
@@ -1584,7 +1786,7 @@ var OpenAIProvider = class {
             });
           }
         }
-        if (durable) await durable.remove(sessionId);
+        if (backend) await backend.remove(sessionId);
         yield { type: "finish", response: acc.toResponse() };
         return;
       } catch (err) {
@@ -1595,11 +1797,54 @@ var OpenAIProvider = class {
     }
   }
   /**
+   * Recovers sessions via the edge observer path. Queries the edge for
+   * active sessions and reconnects to each, flushing buffered events
+   * through onSessionEvents callbacks.
+   */
+  async recoverFromEdge() {
+    const observer = this.edgeObserver;
+    const { onSessionEvents } = this.config;
+    if (!observer || !onSessionEvents) return;
+    const active = await observer.listActive();
+    for (const responseId of active) {
+      const callbacks = onSessionEvents(responseId);
+      const stream = this.edgeRecoverStream(responseId);
+      const result = createSendResult(stream, callbacks, { autoStart: true });
+      result.response.catch((err) => {
+        console.error(
+          `[thalamus] edge recovery failed for ${responseId}:`,
+          err instanceof Error ? err.message : err
+        );
+      });
+    }
+  }
+  async *edgeRecoverStream(responseId) {
+    const observer = this.edgeObserver;
+    const eventStream = observer.events(responseId);
+    const acc = new ResponseAccumulator2();
+    acc.sessionId = responseId;
+    let hasEvents = false;
+    for await (const frame of eventStream) {
+      if (!frame.data) continue;
+      if (!hasEvents) {
+        hasEvents = true;
+        yield { type: "stream-start", sessionId: responseId };
+      }
+      const rawEvent = JSON.parse(frame.data);
+      yield* mapEvent2(rawEvent, acc);
+    }
+    if (!hasEvents) return;
+    await observer.stop(responseId).catch(() => {
+    });
+    yield { type: "finish", response: acc.toResponse() };
+  }
+  /**
    * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
    * events arrive via WebSocket.
    */
   async *edgeObserve(params, sessionParams, mcpTools, signal) {
-    const observer = this.config.edgeObserver;
+    await this._recovered;
+    const observer = this.edgeObserver;
     const input = this.buildInput(params);
     const initStream = await this.client.responses.create(
       {
@@ -1634,7 +1879,6 @@ var OpenAIProvider = class {
         }
       );
     }
-    const eventStream = observer.events(responseId);
     const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
     await observer.observe({
       sessionId: responseId,
@@ -1643,6 +1887,7 @@ var OpenAIProvider = class {
         Authorization: `Bearer ${this.client.apiKey}`
       }
     });
+    const eventStream = observer.events(responseId);
     const acc = new ResponseAccumulator2();
     for await (const frame of eventStream) {
       if (signal?.aborted) break;
@@ -1650,6 +1895,8 @@ var OpenAIProvider = class {
       const rawEvent = JSON.parse(frame.data);
       yield* mapEvent2(rawEvent, acc);
     }
+    await observer.stop(responseId).catch(() => {
+    });
     yield { type: "finish", response: acc.toResponse() };
   }
   async *runStream(params) {
@@ -1658,7 +1905,7 @@ var OpenAIProvider = class {
       const credentials = params.vaultIds?.length ? await this.resolveCredentials(params.vaultIds) : void 0;
       const mcpTools = this.mcpServers.length > 0 ? toMcpTools(this.mcpServers, credentials) : void 0;
       const signal = params.abortSignal ?? void 0;
-      if (this.config.edgeObserver) {
+      if (this.edgeObserver) {
         yield* this.edgeObserve(params, sessionParams, mcpTools, signal);
       } else {
         yield* this.resilientDispatchAndObserve(
@@ -1754,6 +2001,7 @@ var thalamus = {
   ThalamusError,
   VaultError,
   VaultNotFoundError,
+  cloudflare,
   createAnthropicProvider,
   createMemoryVaultStore,
   createOpenAIProvider,

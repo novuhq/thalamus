@@ -1,12 +1,11 @@
-import { D as DurabilityBackend, E as EdgeObserver } from './types-Dj7j5_Vh.cjs';
-import { j as SessionEventsFactory, P as Provider } from './types-Dt6a3qIc.cjs';
+import { D as DurableBackend } from './types-D5De32xL.js';
+import { j as SessionEventsFactory, P as Provider } from './types-D03ofbVu.js';
 
 type AnthropicProviderConfig = {
     agentId: string;
     environmentId: string;
     onSessionEvents?: SessionEventsFactory;
-    durable?: DurabilityBackend;
-    edgeObserver?: EdgeObserver;
+    durable?: DurableBackend;
 } & ({
     apiKey: string;
     awsRegion?: never;

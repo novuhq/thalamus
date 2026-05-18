@@ -1,19 +1,6 @@
-import { E as EdgeObserver, D as DurabilityBackend } from '../types-Dj7j5_Vh.cjs';
-export { a as EdgeObserveParams, S as SSEFrame, b as SessionCheckpoint } from '../types-Dj7j5_Vh.cjs';
-
-interface CloudflareBackendOptions {
-    url: string;
-    apiKey?: string;
-}
-/**
- * Creates an edge observer backed by the `thalamus-session-observer`
- * Cloudflare Worker.
- *
- * The Worker's Durable Object opens SSE connections to the provider
- * API on your behalf, forwarding events over WebSocket. Observation
- * survives DO eviction via `runFiber()` + automatic recovery.
- */
-declare function cloudflare(options: CloudflareBackendOptions): EdgeObserver;
+export { C as CloudflareBackendOptions, c as cloudflare } from '../cloudflare-CJwNwFRJ.cjs';
+import { b as DurabilityBackend } from '../types-D5De32xL.cjs';
+export { D as DurableBackend, E as EdgeObserveParams, a as EdgeObserver, S as SSEFrame, c as SessionCheckpoint, i as isEdgeObserver } from '../types-D5De32xL.cjs';
 
 /** Minimal subset of `redis` / `ioredis` — pass your own client instance. */
 interface RedisLike {
@@ -25,4 +12,4 @@ declare function redis(client: RedisLike, options?: {
     key?: string;
 }): DurabilityBackend;
 
-export { type CloudflareBackendOptions, DurabilityBackend, EdgeObserver, type RedisLike, cloudflare, redis };
+export { DurabilityBackend, type RedisLike, redis };

@@ -282,13 +282,15 @@ if (response.finishReason === 'requires-action') {
 
 Agent sessions can run for minutes. During that time your server might redeploy, the SSE connection might drop due to a proxy timeout or TCP reset, or the process might crash. Without durability, the session is lost and the user has to start over.
 
-The durability layer solves this:
+The `durable` option accepts two kinds of backends — **checkpoint** and **edge observer** — which solve the problem differently.
 
-1. **Checkpointing** — as events arrive, the SDK saves a checkpoint (session ID + last event cursor) to a storage backend.
-2. **Auto-reconnect** — on connection drops, the SDK reconnects from the last checkpoint with up to 3 retries. Events are deduplicated by sequence number (OpenAI) or event ID (Anthropic), so callbacks never fire twice for the same event.
-3. **Process recovery** — when the provider is created, it reads active checkpoints from the backend and resumes observation for sessions that are still running. Your `onSessionEvents` callbacks fire for missed events as if nothing happened.
+Both require `onSessionEvents` to be set, so the provider knows how to re-attach callbacks when recovering sessions after a restart.
 
-### Setup
+### Checkpoint backends (Redis)
+
+The SDK holds the SSE connection in your Node.js process. As events arrive, it saves a checkpoint (session ID + last event cursor) to storage. On connection drops, it reconnects from the last checkpoint with up to 3 retries. Events are deduplicated by sequence number (OpenAI) or event ID (Anthropic), so callbacks never fire twice.
+
+On process restart, the provider reads active checkpoints and resumes from the last cursor.
 
 ```typescript
 import { redis } from '@novu/thalamus/durable';
@@ -306,20 +308,25 @@ const provider = createOpenAIProvider({
 });
 ```
 
-Both `durable` and `onSessionEvents` are required for recovery to work — the backend handles session persistence (checkpoint storage or edge observation), and the factory re-creates the callbacks for recovered sessions. The `durable` option accepts either a checkpoint backend (like Redis) or an edge observer (like Cloudflare).
-
-### Backends
-
-**Redis** — works with any `ioredis` or `redis` client:
+**Limitations:** the SSE connection lives in your process — if it crashes, events generated between the crash and restart are only recoverable if the provider supports resuming from a cursor. Long-lived connections also tie up server resources and don't work well with serverless or auto-scaling.
 
 ```typescript
-import { redis } from '@novu/thalamus/durable';
-
 const backend = redis(redisClient);
 const backend = redis(redisClient, { key: 'myapp:sessions' }); // custom hash key
 ```
 
-**Cloudflare edge observer** — in production, holding long-lived SSE connections on your origin ties up server resources and doesn't work well with serverless or auto-scaling. The edge observer offloads SSE to a Cloudflare Worker that keeps the connection alive independently:
+### Edge observer (Cloudflare)
+
+Instead of holding the SSE connection in your Node.js process, the edge observer offloads it to a Cloudflare Worker. The Worker maintains a Durable Object per session that:
+
+- Opens the SSE connection to the AI provider on behalf of your app
+- Buffers events when no consumer is connected (crash survival)
+- Relays events over WebSocket to your app in real-time
+- Survives DO eviction via `runFiber()` (Cloudflare Agents SDK)
+
+Your Node.js process connects via WebSocket to receive events. If it crashes, events keep buffering in the DO. When any node restarts, it discovers active sessions via a `SessionRegistry` DO and reconnects — your `onSessionEvents` callbacks fire for all missed events.
+
+**Multi-node safety:** each Durable Object enforces single-consumer — if a node is already connected and consuming events, other nodes that try to recover the same session are rejected. This prevents duplicate processing without locks, TTLs, or coordination logic.
 
 ```typescript
 import { cloudflare } from '@novu/thalamus/durable';
@@ -331,14 +338,18 @@ const provider = createOpenAIProvider({
     url: 'https://session-observer.your-domain.workers.dev',
     apiKey: process.env.OBSERVER_API_KEY,
   }),
+  onSessionEvents: (sessionId) => ({
+    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+    onFinish: ({ response }) => saveResponse(sessionId, response),
+  }),
 });
 ```
 
-The companion Worker lives in `cloudflare-worker/`. It uses a Durable Object per session to hold the SSE connection, relay events over WebSocket, and survive eviction via `runFiber()`.
+The companion Worker lives in `cloudflare-worker/`. Deploy it with `wrangler deploy`.
 
 ### Custom backend
 
-Implement the `DurabilityBackend` interface to use any storage:
+Implement the `DurabilityBackend` interface for checkpoint-based durability with any storage:
 
 ```typescript
 interface DurabilityBackend {

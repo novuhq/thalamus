@@ -1,3 +1,12 @@
+export {
+  type CloudflareBackendOptions,
+  cloudflare,
+} from "./durable/cloudflare";
+export type {
+  EdgeObserveParams,
+  EdgeObserver,
+  SSEFrame,
+} from "./durable/types";
 export * from "./errors";
 export * from "./send-result";
 export * from "./types";

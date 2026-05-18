@@ -26,8 +26,4 @@ class_name = "SessionRegistry"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["SessionObserver"]
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["SessionRegistry"]
+new_sqlite_classes = ["SessionObserver", "SessionRegistry"]

@@ -777,18 +777,23 @@ class OpenAIProvider implements Provider {
     responseId: string,
   ): AsyncIterable<StreamPart> {
     const observer = this.edgeObserver!;
-
-    yield { type: "stream-start", sessionId: responseId };
-
     const eventStream = observer.events(responseId);
     const acc = new ResponseAccumulator();
     acc.sessionId = responseId;
+    let hasEvents = false;
 
     for await (const frame of eventStream) {
       if (!frame.data) continue;
+      if (!hasEvents) {
+        hasEvents = true;
+        yield { type: "stream-start", sessionId: responseId };
+      }
       const rawEvent = JSON.parse(frame.data) as ResponseStreamEvent;
       yield* mapEvent(rawEvent, acc);
     }
+
+    // WS was rejected (another consumer is connected) — skip silently.
+    if (!hasEvents) return;
 
     await observer.stop(responseId).catch(() => {});
     yield { type: "finish", response: acc.toResponse() };

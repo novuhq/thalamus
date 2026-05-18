@@ -591,13 +591,9 @@ class AnthropicProvider implements Provider {
 
     const active = await observer.listActive();
 
-    console.log("active sessions", active);
-
     for (const sessionId of active) {
-      console.log("processing session: ", sessionId);
       const callbacks = onSessionEvents(sessionId);
       const stream = this.edgeRecoverStream(sessionId);
-      console.log("recovered stream :", stream);
       const result = createSendResult(stream, callbacks, { autoStart: true });
       result.response.catch((err) => {
         console.error(
@@ -612,21 +608,23 @@ class AnthropicProvider implements Provider {
     sessionId: string,
   ): AsyncIterable<StreamPart> {
     const observer = this.edgeObserver!;
-
-    yield { type: "stream-start", sessionId };
-
     const eventStream = observer.events(sessionId);
-
     const acc = new ResponseAccumulator();
+    let hasEvents = false;
 
-    console.log("eventstream events: ==");
     for await (const frame of eventStream) {
-      console.log("frame/event", frame);
       if (!frame.data) continue;
+      if (!hasEvents) {
+        hasEvents = true;
+        yield { type: "stream-start", sessionId };
+      }
       const rawEvent = JSON.parse(frame.data);
       yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
       if (acc.done) break;
     }
+
+    // WS was rejected (another consumer is connected) — skip silently.
+    if (!hasEvents) return;
 
     await observer.stop(sessionId).catch(() => {});
     yield { type: "finish", response: acc.toResponse(sessionId) };

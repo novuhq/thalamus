@@ -90,6 +90,11 @@ export class SessionObserver extends Agent<Env, State> {
       }
     }
 
+    if (this.ctx.getWebSockets().length > 1) {
+      connection.close(4002, "consumer already connected");
+      return;
+    }
+
     if (this.state.eventBuffer.length > 0) {
       for (const event of this.state.eventBuffer) {
         connection.send(JSON.stringify(event));

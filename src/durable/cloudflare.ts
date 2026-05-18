@@ -100,6 +100,16 @@ export function cloudflare(options: CloudflareBackendOptions): EdgeObserver {
       }
     },
 
+    async listActive(): Promise<string[]> {
+      try {
+        const res = await fetch(`${base}/active-sessions`, { headers });
+        if (!res.ok) return [];
+        return (await res.json()) as string[];
+      } catch {
+        return [];
+      }
+    },
+
     events(sessionId: string): AsyncIterable<SSEFrame> {
       let wsUrl = `${wsBase}?sessionId=${encodeURIComponent(sessionId)}`;
       if (options.apiKey) {

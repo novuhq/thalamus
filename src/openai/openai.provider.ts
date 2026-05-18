@@ -9,10 +9,12 @@ import type {
   ResponseOutputItemDoneEvent,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
-import type {
-  DurabilityBackend,
-  EdgeObserver,
-  SessionCheckpoint,
+import {
+  type DurabilityBackend,
+  type DurableBackend,
+  type EdgeObserver,
+  isEdgeObserver,
+  type SessionCheckpoint,
 } from "../durable/types";
 import {
   AbortedError,
@@ -137,8 +139,7 @@ type OpenAIBaseConfig = {
   mcpServers?: McpServerConfig[];
   vaultStore?: VaultStore;
   onSessionEvents?: SessionEventsFactory;
-  durable?: DurabilityBackend;
-  edgeObserver?: EdgeObserver;
+  durable?: DurableBackend;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -410,6 +411,19 @@ class OpenAIProvider implements Provider {
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
   private readonly config: OpenAIProviderConfig;
+  private readonly _recovered: Promise<void>;
+
+  private get edgeObserver(): EdgeObserver | null {
+    return this.config.durable && isEdgeObserver(this.config.durable)
+      ? this.config.durable
+      : null;
+  }
+
+  private get checkpointBackend(): DurabilityBackend | null {
+    return this.config.durable && !isEdgeObserver(this.config.durable)
+      ? this.config.durable
+      : null;
+  }
 
   constructor(config: OpenAIProviderConfig) {
     this.config = config;
@@ -423,7 +437,14 @@ class OpenAIProvider implements Provider {
     this.onSessionEvents = config.onSessionEvents;
 
     if (config.durable && config.onSessionEvents) {
-      this.recoverActiveSessions().catch(() => {});
+      if (isEdgeObserver(config.durable)) {
+        this._recovered = this.recoverFromEdge().catch(() => {});
+      } else {
+        this.recoverActiveSessions().catch(() => {});
+        this._recovered = Promise.resolve();
+      }
+    } else {
+      this._recovered = Promise.resolve();
     }
   }
 
@@ -542,7 +563,7 @@ class OpenAIProvider implements Provider {
     signal?: AbortSignal,
   ): AsyncIterable<StreamPart> {
     const acc = new ResponseAccumulator();
-    const durable = this.config.durable;
+    const backend = this.checkpointBackend;
     const input = this.buildInput(params);
     let lastSequenceNumber = -1;
     let responseId: string | undefined;
@@ -572,7 +593,7 @@ class OpenAIProvider implements Provider {
             {
               ...createParams,
               stream: true,
-              ...(durable ? { background: true } : {}),
+              ...(backend ? { background: true } : {}),
             } as ResponseCreateParamsStreaming,
             { signal },
           );
@@ -590,8 +611,8 @@ class OpenAIProvider implements Provider {
             responseId = rawEvent.response.id;
           }
           yield* mapEvent(rawEvent, acc);
-          if (durable && responseId) {
-            await durable.save({
+          if (backend && responseId) {
+            await backend.save({
               sessionId: acc.sessionId ?? responseId,
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
@@ -601,8 +622,8 @@ class OpenAIProvider implements Provider {
           }
         }
 
-        if (durable && responseId) {
-          await durable.remove(acc.sessionId ?? responseId);
+        if (backend && responseId) {
+          await backend.remove(acc.sessionId ?? responseId);
         }
         yield { type: "finish", response: acc.toResponse() };
         return;
@@ -617,21 +638,22 @@ class OpenAIProvider implements Provider {
   }
 
   /**
-   * Best-effort recovery of sessions that were active before a process restart.
+   * Recovers sessions that were active before a process restart.
    * Fires onSessionEvents callbacks for missed events, then resumes live
    * observation for sessions that are still running.
    */
   private async recoverActiveSessions(): Promise<void> {
-    const { durable, onSessionEvents } = this.config;
-    if (!durable || !onSessionEvents) return;
+    const backend = this.checkpointBackend;
+    const { onSessionEvents } = this.config;
+    if (!backend || !onSessionEvents) return;
 
-    const active = await durable.getActive();
+    const active = await backend.getActive();
 
     await Promise.allSettled(
       active.map(async (checkpoint) => {
         const responseId = checkpoint.metadata?.responseId;
         if (!responseId) {
-          await durable.remove(checkpoint.sessionId);
+          await backend.remove(checkpoint.sessionId);
           return;
         }
 
@@ -643,7 +665,7 @@ class OpenAIProvider implements Provider {
             status === "failed" ||
             status === "incomplete"
           ) {
-            await durable.remove(checkpoint.sessionId);
+            await backend.remove(checkpoint.sessionId);
             return;
           }
 
@@ -657,14 +679,14 @@ class OpenAIProvider implements Provider {
               `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
               err instanceof Error ? err.message : err,
             );
-            await durable.remove(checkpoint.sessionId).catch(() => {});
+            await backend.remove(checkpoint.sessionId).catch(() => {});
           });
         } catch (err) {
           console.error(
             `[thalamus] recovery failed for ${checkpoint.sessionId}:`,
             err instanceof Error ? err.message : err,
           );
-          await durable.remove(checkpoint.sessionId).catch(() => {});
+          await backend.remove(checkpoint.sessionId).catch(() => {});
         }
       }),
     );
@@ -680,7 +702,7 @@ class OpenAIProvider implements Provider {
     responseId: string,
   ): AsyncIterable<StreamPart> {
     const { sessionId } = checkpoint;
-    const durable = this.config.durable;
+    const backend = this.checkpointBackend;
     const acc = new ResponseAccumulator();
     let lastSequenceNumber = Number(checkpoint.lastEventId) || -1;
     let retries = 0;
@@ -703,8 +725,8 @@ class OpenAIProvider implements Provider {
             lastSequenceNumber = rawEvent.sequence_number;
           }
           yield* mapEvent(rawEvent, acc);
-          if (durable) {
-            await durable.save({
+          if (backend) {
+            await backend.save({
               sessionId,
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
@@ -714,7 +736,7 @@ class OpenAIProvider implements Provider {
           }
         }
 
-        if (durable) await durable.remove(sessionId);
+        if (backend) await backend.remove(sessionId);
         yield { type: "finish", response: acc.toResponse() };
         return;
       } catch (err) {
@@ -727,6 +749,52 @@ class OpenAIProvider implements Provider {
   }
 
   /**
+   * Recovers sessions via the edge observer path. Queries the edge for
+   * active sessions and reconnects to each, flushing buffered events
+   * through onSessionEvents callbacks.
+   */
+  private async recoverFromEdge(): Promise<void> {
+    const observer = this.edgeObserver;
+    const { onSessionEvents } = this.config;
+    if (!observer || !onSessionEvents) return;
+
+    const active = await observer.listActive();
+
+    for (const responseId of active) {
+      const callbacks = onSessionEvents(responseId);
+      const stream = this.edgeRecoverStream(responseId);
+      const result = createSendResult(stream, callbacks, { autoStart: true });
+      result.response.catch((err) => {
+        console.error(
+          `[thalamus] edge recovery failed for ${responseId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      });
+    }
+  }
+
+  private async *edgeRecoverStream(
+    responseId: string,
+  ): AsyncIterable<StreamPart> {
+    const observer = this.edgeObserver!;
+
+    yield { type: "stream-start", sessionId: responseId };
+
+    const eventStream = observer.events(responseId);
+    const acc = new ResponseAccumulator();
+    acc.sessionId = responseId;
+
+    for await (const frame of eventStream) {
+      if (!frame.data) continue;
+      const rawEvent = JSON.parse(frame.data) as ResponseStreamEvent;
+      yield* mapEvent(rawEvent, acc);
+    }
+
+    await observer.stop(responseId).catch(() => {});
+    yield { type: "finish", response: acc.toResponse() };
+  }
+
+  /**
    * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
    * events arrive via WebSocket.
    */
@@ -736,9 +804,9 @@ class OpenAIProvider implements Provider {
     mcpTools: Record<string, unknown>[] | undefined,
     signal?: AbortSignal,
   ): AsyncIterable<StreamPart> {
-    const observer = this.config.edgeObserver as NonNullable<
-      typeof this.config.edgeObserver
-    >;
+    await this._recovered;
+
+    const observer = this.edgeObserver!;
     const input = this.buildInput(params);
 
     // Must use stream + background together: OpenAI only persists events for
@@ -783,8 +851,6 @@ class OpenAIProvider implements Provider {
       );
     }
 
-    const eventStream = observer.events(responseId);
-
     const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
     await observer.observe({
       sessionId: responseId,
@@ -794,6 +860,7 @@ class OpenAIProvider implements Provider {
       },
     });
 
+    const eventStream = observer.events(responseId);
     const acc = new ResponseAccumulator();
     for await (const frame of eventStream) {
       if (signal?.aborted) break;
@@ -802,6 +869,7 @@ class OpenAIProvider implements Provider {
       yield* mapEvent(rawEvent, acc);
     }
 
+    await observer.stop(responseId).catch(() => {});
     yield { type: "finish", response: acc.toResponse() };
   }
 
@@ -820,7 +888,7 @@ class OpenAIProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      if (this.config.edgeObserver) {
+      if (this.edgeObserver) {
         yield* this.edgeObserve(params, sessionParams, mcpTools, signal);
       } else {
         yield* this.resilientDispatchAndObserve(

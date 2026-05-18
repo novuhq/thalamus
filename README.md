@@ -306,7 +306,7 @@ const provider = createOpenAIProvider({
 });
 ```
 
-Both `durable` and `onSessionEvents` are required for recovery to work — the backend stores the checkpoints, and the factory re-creates the callbacks for recovered sessions.
+Both `durable` and `onSessionEvents` are required for recovery to work — the backend handles session persistence (checkpoint storage or edge observation), and the factory re-creates the callbacks for recovered sessions. The `durable` option accepts either a checkpoint backend (like Redis) or an edge observer (like Cloudflare).
 
 ### Backends
 
@@ -327,7 +327,7 @@ import { cloudflare } from '@novu/thalamus/durable';
 const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
-  edgeObserver: cloudflare({
+  durable: cloudflare({
     url: 'https://session-observer.your-domain.workers.dev',
     apiKey: process.env.OBSERVER_API_KEY,
   }),
@@ -388,7 +388,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
 
 Tree-shakeable — install and import only the provider you use. Zero runtime dependencies; only peer deps for the provider SDKs.
 

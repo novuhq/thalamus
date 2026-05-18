@@ -15,6 +15,7 @@ import {
 
 export interface Env {
   SESSION_OBSERVER: DurableObjectNamespace<SessionObserver>;
+  SESSION_REGISTRY: DurableObjectNamespace<SessionRegistry>;
   API_KEY?: string;
 }
 
@@ -69,6 +70,10 @@ export class SessionObserver extends Agent<Env, State> {
     this.setState({ observation: null, eventBuffer: [] });
   }
 
+  async getStatus(): Promise<string> {
+    return this.state.observation?.status ?? "none";
+  }
+
   /* ---------- WebSocket ---------- */
 
   async onConnect(
@@ -90,6 +95,11 @@ export class SessionObserver extends Agent<Env, State> {
         connection.send(JSON.stringify(event));
       }
       this.setState({ ...this.state, eventBuffer: [] });
+    }
+
+    const status = this.state.observation?.status;
+    if (!status || status === "completed" || status === "error") {
+      connection.close(1000, "observation ended");
     }
   }
 
@@ -124,6 +134,42 @@ export class SessionObserver extends Agent<Env, State> {
         ...this.state,
         eventBuffer: [...this.state.eventBuffer, event],
       });
+    }
+
+    if (this.isResponseComplete(event)) {
+      this.markCompleted();
+    }
+  }
+
+  /**
+   * Detects provider-level "response finished" signals in the SSE stream.
+   * Anthropic sends `session.status_idle` when the AI finishes a turn.
+   */
+  private isResponseComplete(event: EventSourceMessage): boolean {
+    if (!event.data) return false;
+    try {
+      const parsed = JSON.parse(event.data);
+      return parsed.type === "session.status_idle";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Marks observation completed and closes all WS clients so recovery
+   * streams don't hang waiting for events that will never come.
+   */
+  private markCompleted(): void {
+    if (this.state.observation) {
+      this.updateObservation({
+        ...this.state.observation,
+        status: "completed",
+      });
+    }
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.close(1000, "response complete");
+      } catch {}
     }
   }
 
@@ -174,8 +220,32 @@ export class SessionObserver extends Agent<Env, State> {
         ...this.state.observation,
         status: "completed",
       });
-      this.setState({ ...this.state, eventBuffer: [] });
     }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  SessionRegistry — singleton DO that tracks active session IDs.     */
+/*  Strongly consistent alternative to KV list().                      */
+/* ------------------------------------------------------------------ */
+
+export class SessionRegistry extends Agent<Env, { sessions: string[] }> {
+  initialState = { sessions: [] as string[] };
+
+  async add(sessionId: string): Promise<void> {
+    if (!this.state.sessions.includes(sessionId)) {
+      this.setState({ sessions: [...this.state.sessions, sessionId] });
+    }
+  }
+
+  async remove(sessionId: string): Promise<void> {
+    this.setState({
+      sessions: this.state.sessions.filter((s) => s !== sessionId),
+    });
+  }
+
+  async list(): Promise<string[]> {
+    return this.state.sessions;
   }
 }
 
@@ -242,6 +312,8 @@ export default {
         }
         const stub = env.SESSION_OBSERVER.getByName(body.sessionId);
         await stub.startObserving(body);
+        const registry = env.SESSION_REGISTRY.getByName("global");
+        await registry.add(body.sessionId);
         return new Response(null, { status: 204 });
       }
 
@@ -249,7 +321,15 @@ export default {
         const sessionId = decodeURIComponent(path.slice("/observe/".length));
         const stub = env.SESSION_OBSERVER.getByName(sessionId);
         await stub.stopObserving();
+        const registry = env.SESSION_REGISTRY.getByName("global");
+        await registry.remove(sessionId);
         return new Response(null, { status: 204 });
+      }
+
+      if (request.method === "GET" && path === "/active-sessions") {
+        const registry = env.SESSION_REGISTRY.getByName("global");
+        const sessionIds = await registry.list();
+        return Response.json(sessionIds);
       }
 
       if (isWsUpgrade) {

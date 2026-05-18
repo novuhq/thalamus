@@ -6,6 +6,7 @@ export interface SessionCheckpoint {
   metadata?: Record<string, string>;
 }
 
+/** Checkpoint-based durability — stores event cursors in an external store. */
 export interface DurabilityBackend {
   save(checkpoint: SessionCheckpoint): Promise<void>;
   remove(sessionId: string): Promise<void>;
@@ -13,8 +14,8 @@ export interface DurabilityBackend {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Edge observer — optional extension for backends that can           */
-/*  observe SSE streams on behalf of the application (e.g. Cloudflare) */
+/*  Edge observer — holds SSE connections at the edge on behalf of     */
+/*  the application (e.g. Cloudflare Durable Objects).                 */
 /* ------------------------------------------------------------------ */
 
 export interface SSEFrame {
@@ -29,9 +30,22 @@ export interface EdgeObserveParams {
   headers: Record<string, string>;
 }
 
-/** Backends that implement this can open SSE connections at the edge. */
+/** Edge-proxy durability — SSE lives outside the consumer process. */
 export interface EdgeObserver {
   observe(params: EdgeObserveParams): Promise<void>;
   stop(sessionId: string): Promise<void>;
   events(sessionId: string): AsyncIterable<SSEFrame>;
+  listActive(): Promise<string[]>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Unified type                                                       */
+/* ------------------------------------------------------------------ */
+
+export type DurableBackend = DurabilityBackend | EdgeObserver;
+
+export function isEdgeObserver(
+  backend: DurableBackend,
+): backend is EdgeObserver {
+  return "observe" in backend && "events" in backend;
 }

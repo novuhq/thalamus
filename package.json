@@ -1,7 +1,7 @@
 {
   "name": "@novu/thalamus",
   "packageManager": "pnpm@8.15.8",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "publishConfig": {
     "access": "public"
   },
@@ -14,6 +14,25 @@
     "package.json",
     "README.md"
   ],
+  "typesVersions": {
+    "*": {
+      "anthropic": [
+        "./dist/anthropic/index.d.ts"
+      ],
+      "openai": [
+        "./dist/openai/index.d.ts"
+      ],
+      "vault": [
+        "./dist/vault/index.d.ts"
+      ],
+      "durable": [
+        "./dist/durable/index.d.ts"
+      ],
+      "webhook": [
+        "./dist/webhook/index.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

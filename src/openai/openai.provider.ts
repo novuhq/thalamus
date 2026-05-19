@@ -1,4 +1,4 @@
-import OpenAI, { APIError, APIUserAbortError } from "openai";
+import type OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
@@ -12,14 +12,19 @@ import {
   isEdgeObserver,
   type SessionCheckpoint,
 } from "../durable/types";
-import { AbortedError, ThalamusError } from "../errors";
+import {
+  AbortedError,
+  ProviderAuthError,
+  ProviderRateLimitError,
+  ProviderResponseError,
+  ProviderUnavailableError,
+  ThalamusError,
+} from "../errors";
 import { createSendResult } from "../send-result";
 import {
   type McpServerConfig,
   OPENAI,
-  type Provider,
   type RequestParams,
-  type Response,
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
@@ -35,8 +40,43 @@ import type {
   VaultStore,
 } from "../vault/vault.interface";
 import { openaiTransformer } from "./openai.transformer";
-import { mapError, mapEvent, ResponseAccumulator } from "./openai-parser";
+import { mapEvent, ResponseAccumulator } from "./openai-parser";
 import { createSigV4Fetch } from "./sigv4-fetch";
+
+type OpenAIModule = typeof import("openai");
+let _sdk: OpenAIModule | undefined;
+async function loadSDK(): Promise<OpenAIModule> {
+  if (!_sdk) _sdk = await import("openai");
+  return _sdk;
+}
+
+export function mapError(error: unknown, provider: string): Error {
+  if (_sdk && error instanceof _sdk.APIUserAbortError) {
+    return new AbortedError({ provider, cause: error });
+  }
+
+  const msg = error instanceof Error ? error.message : String(error);
+  const code = _sdk && error instanceof _sdk.APIError ? (error.code ?? "") : "";
+  if (
+    code === "invalid_api_key" ||
+    msg.toLowerCase().includes("unauthorized")
+  ) {
+    return new ProviderAuthError(msg, { provider, cause: error });
+  }
+  if (
+    code === "rate_limit_exceeded" ||
+    msg.toLowerCase().includes("rate limit")
+  ) {
+    return new ProviderRateLimitError(msg, { provider, cause: error });
+  }
+  if (
+    msg.toLowerCase().includes("unavailable") ||
+    msg.toLowerCase().includes("503")
+  ) {
+    return new ProviderUnavailableError(msg, { provider, cause: error });
+  }
+  return new ProviderResponseError(msg, { provider, cause: error });
+}
 
 /**
  * SSE drops manifest as many error types (TypeError, ECONNRESET, socket hang up,
@@ -46,9 +86,14 @@ import { createSigV4Fetch } from "./sigv4-fetch";
  */
 function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
-  if (err instanceof APIUserAbortError) return false;
+  if (_sdk && err instanceof _sdk.APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
-  if (err instanceof APIError && err.status >= 400 && err.status < 500) {
+  if (
+    _sdk &&
+    err instanceof _sdk.APIError &&
+    err.status >= 400 &&
+    err.status < 500
+  ) {
     return false;
   }
   return true;
@@ -131,7 +176,11 @@ const MAX_RECONNECT_RETRIES = 3;
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 
-function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
+async function buildOpenAIClient(
+  config: OpenAIProviderConfig,
+): Promise<OpenAI> {
+  const { default: OpenAI } = await loadSDK();
+
   if (!("awsRegion" in config) || !config.awsRegion) {
     return new OpenAI({ apiKey: config.apiKey });
   }
@@ -160,7 +209,7 @@ class OpenAIProvider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
 
-  private readonly client: OpenAI;
+  private client?: OpenAI;
   private readonly model: string;
   private readonly instructions?: string;
   private readonly useConversations: boolean;
@@ -186,7 +235,6 @@ class OpenAIProvider {
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
-    this.client = buildOpenAIClient(config);
     this.useConversations = !("awsRegion" in config && config.awsRegion);
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
@@ -199,6 +247,11 @@ class OpenAIProvider {
     ) {
       this.recoverActiveSessions().catch(() => {});
     }
+  }
+
+  private async getClient(): Promise<OpenAI> {
+    this.client ??= await buildOpenAIClient(this.config);
+    return this.client;
   }
 
   send(params: RequestParams): SendResult | Promise<string> {
@@ -229,7 +282,8 @@ class OpenAIProvider {
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
     if (this.useConversations) {
-      const id = sessionId ?? (await this.client.conversations.create()).id;
+      const client = await this.getClient();
+      const id = sessionId ?? (await client.conversations.create()).id;
       return { conversation: { id } };
     }
     return sessionId ? { previous_response_id: sessionId } : {};
@@ -261,42 +315,13 @@ class OpenAIProvider {
     return input;
   }
 
-  private async *dispatchAndObserve(
-    params: RequestParams,
-    sessionParams: Record<string, unknown>,
-    mcpTools: Record<string, unknown>[] | undefined,
-    signal?: AbortSignal,
-  ): AsyncIterable<StreamPart> {
-    const input = this.buildInput(params);
-
-    const rawStream = await this.client.responses.create(
-      {
-        model: this.model,
-        input,
-        stream: true,
-        ...(this.instructions ? { instructions: this.instructions } : {}),
-        ...(mcpTools ? { tools: mcpTools } : {}),
-        ...sessionParams,
-        ...params.providerOptions,
-      } as ResponseCreateParamsStreaming,
-      { signal },
-    );
-
-    const acc = new ResponseAccumulator();
-    for await (const rawEvent of rawStream) {
-      yield* mapEvent(rawEvent, acc);
-    }
-
-    const response = acc.toResponse();
-    yield { type: "finish", response };
-  }
-
   private async *resumeObservation(
     responseId: string,
     afterSequenceNumber: number,
     signal?: AbortSignal,
   ): AsyncIterable<ResponseStreamEvent> {
-    const rawStream = (await this.client.responses.retrieve(
+    const client = await this.getClient();
+    const rawStream = (await client.responses.retrieve(
       responseId,
       {
         stream: true as const,
@@ -311,7 +336,8 @@ class OpenAIProvider {
   }
 
   private async getStatus(responseId: string): Promise<string | undefined> {
-    const response = await this.client.responses.retrieve(responseId);
+    const client = await this.getClient();
+    const response = await client.responses.retrieve(responseId);
     return response.status;
   }
 
@@ -332,6 +358,7 @@ class OpenAIProvider {
   ): AsyncIterable<StreamPart> {
     const acc = new ResponseAccumulator();
     const backend = this.checkpointBackend;
+    const client = await this.getClient();
     const input = this.buildInput(params);
     let lastSequenceNumber = -1;
     let responseId: string | undefined;
@@ -357,7 +384,7 @@ class OpenAIProvider {
             signal,
           );
         } else {
-          rawStream = await this.client.responses.create(
+          rawStream = await client.responses.create(
             {
               ...createParams,
               stream: true,
@@ -522,9 +549,10 @@ class OpenAIProvider {
     mcpTools: Record<string, unknown>[] | undefined,
   ): Promise<string> {
     const observer = this.edgeObserver!;
+    const client = await this.getClient();
     const input = this.buildInput(params);
 
-    const initStream = await this.client.responses.create({
+    const initStream = await client.responses.create({
       model: this.model,
       input,
       stream: true,
@@ -560,9 +588,9 @@ class OpenAIProvider {
     const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
     await observer.observe({
       sessionId: responseId,
-      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
+      streamUrl: `${client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
       headers: {
-        Authorization: `Bearer ${this.client.apiKey}`,
+        Authorization: `Bearer ${client.apiKey}`,
       },
       provider: "openai",
       webhook: {

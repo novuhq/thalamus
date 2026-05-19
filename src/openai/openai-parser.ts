@@ -1,6 +1,4 @@
-import { APIError, APIUserAbortError } from "openai";
 import type {
-  ResponseErrorEvent,
   ResponseMcpCallArgumentsDeltaEvent,
   ResponseOutputItem,
   ResponseOutputItemAddedEvent,
@@ -8,7 +6,6 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import {
-  AbortedError,
   ProviderAuthError,
   ProviderRateLimitError,
   ProviderResponseError,
@@ -23,47 +20,34 @@ import {
   type Usage,
 } from "../types";
 
-function isResponseErrorEvent(e: unknown): e is ResponseErrorEvent {
-  return (
-    typeof e === "object" &&
-    e !== null &&
-    "type" in e &&
-    (e as ResponseErrorEvent).type === "error" &&
-    "code" in e
-  );
-}
-
-export function mapError(error: unknown, provider: string): Error {
-  if (error instanceof APIUserAbortError) {
-    return new AbortedError({ provider, cause: error });
-  }
-
-  const msg = error instanceof Error ? error.message : String(error);
-  const code =
-    error instanceof APIError
-      ? (error.code ?? "")
-      : isResponseErrorEvent(error)
-        ? (error.code ?? "")
-        : "";
+function mapStreamErrorEvent(event: {
+  code?: string | null;
+  message?: string;
+}): Error {
+  const msg = event.message ?? "Stream error";
+  const code = event.code ?? "";
   if (
     code === "invalid_api_key" ||
     msg.toLowerCase().includes("unauthorized")
   ) {
-    return new ProviderAuthError(msg, { provider, cause: error });
+    return new ProviderAuthError(msg, { provider: OPENAI, cause: event });
   }
   if (
     code === "rate_limit_exceeded" ||
     msg.toLowerCase().includes("rate limit")
   ) {
-    return new ProviderRateLimitError(msg, { provider, cause: error });
+    return new ProviderRateLimitError(msg, { provider: OPENAI, cause: event });
   }
   if (
     msg.toLowerCase().includes("unavailable") ||
     msg.toLowerCase().includes("503")
   ) {
-    return new ProviderUnavailableError(msg, { provider, cause: error });
+    return new ProviderUnavailableError(msg, {
+      provider: OPENAI,
+      cause: event,
+    });
   }
-  return new ProviderResponseError(msg, { provider, cause: error });
+  return new ProviderResponseError(msg, { provider: OPENAI, cause: event });
 }
 
 export class ResponseAccumulator {
@@ -236,7 +220,9 @@ export function* mapEvent(
     }
 
     case "error": {
-      throw mapError(event, OPENAI);
+      throw mapStreamErrorEvent(
+        event as { code?: string | null; message?: string },
+      );
     }
 
     default: {

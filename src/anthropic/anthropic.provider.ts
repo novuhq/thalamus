@@ -1,4 +1,4 @@
-import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import type {
   BetaManagedAgentsEventParams,
   BetaManagedAgentsStreamSessionEvents,
@@ -20,9 +20,7 @@ import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
 import { createSendResult } from "../send-result";
 import {
   ANTHROPIC,
-  type Provider,
   type RequestParams,
-  type Response,
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
@@ -36,12 +34,19 @@ import { toContentBlocks } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
 
+type AnthropicModule = typeof import("@anthropic-ai/sdk");
+let _sdk: AnthropicModule | undefined;
+async function loadSDK(): Promise<AnthropicModule> {
+  if (!_sdk) _sdk = await import("@anthropic-ai/sdk");
+  return _sdk;
+}
+
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
-  if (err instanceof APIUserAbortError) {
+  if (_sdk && err instanceof _sdk.APIUserAbortError) {
     return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
   }
 
-  if (sessionId && err instanceof APIError) {
+  if (sessionId && _sdk && err instanceof _sdk.APIError) {
     const status = err.status;
     if (status === 404 || status === 410) {
       return new SessionExpiredError(
@@ -68,7 +73,7 @@ function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
  */
 function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
-  if (err instanceof APIUserAbortError) return false;
+  if (_sdk && err instanceof _sdk.APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
   return true;
 }
@@ -119,6 +124,8 @@ export type AnthropicProviderConfig = {
 async function createClient(
   config: AnthropicProviderConfig,
 ): Promise<Anthropic> {
+  const sdk = await loadSDK();
+
   if ("awsRegion" in config && config.awsRegion) {
     const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
     return new AnthropicAws({
@@ -127,7 +134,7 @@ async function createClient(
     }) as unknown as Anthropic;
   }
 
-  return new Anthropic({ apiKey: config.apiKey });
+  return new sdk.default({ apiKey: config.apiKey });
 }
 
 const MAX_RECONNECT_RETRIES = 3;

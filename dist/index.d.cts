@@ -1,11 +1,11 @@
-export { C as CloudflareBackendOptions, c as cloudflare } from './cloudflare-CJwNwFRJ.cjs';
-export { E as EdgeObserveParams, a as EdgeObserver, S as SSEFrame } from './types-D5De32xL.cjs';
-import { S as StreamPart, a as StreamCallbacks, b as SendResult } from './types-Dt6a3qIc.cjs';
-export { A as ANTHROPIC, c as ActionRequired, d as AgentStatus, C as ContentPart, M as McpApprovalPolicy, e as McpServerConfig, f as McpToolDef, g as Message, h as MessageRole, O as OPENAI, P as Provider, R as RequestParams, i as Response, j as SessionEventsFactory, k as SessionOptions, T as ToolResult, l as ToolSource, U as Usage } from './types-Dt6a3qIc.cjs';
+export { C as CloudflareBackendOptions, c as cloudflare } from './cloudflare-C1Hfnja7.cjs';
+export { E as EdgeObserveParams, a as EdgeObserver } from './types-BJUMp1Dw.cjs';
+import { S as StreamPart, a as StreamCallbacks, b as SendResult } from './types-D5jxkcf8.cjs';
+export { A as ANTHROPIC, c as ActionRequired, d as AgentStatus, C as ContentPart, M as McpApprovalPolicy, e as McpServerConfig, f as McpToolDef, g as Message, h as MessageRole, O as OPENAI, P as Provider, R as RequestParams, i as Response, j as SessionEventsFactory, k as SessionOptions, T as ToolResult, l as ToolSource, U as Usage } from './types-D5jxkcf8.cjs';
 export { C as Credential, a as CredentialInfo, V as Vault, b as VaultOptions, c as VaultStore } from './vault.interface-BMCawAU1.cjs';
 export { c as createMemoryVaultStore } from './memory-vault-store-BoD8Nj7J.cjs';
-import { c as createAnthropicProvider } from './anthropic.provider-jea7nC8x.cjs';
-import { c as createOpenAIProvider } from './openai.provider-BIJRwsB0.cjs';
+import { c as createAnthropicProvider } from './anthropic.provider-DzqwnKdw.cjs';
+import { c as createOpenAIProvider } from './openai.provider-BvbMfJyr.cjs';
 
 declare class ThalamusError extends Error {
     readonly provider: string;
@@ -90,6 +90,7 @@ declare class McpServerError extends ThalamusError {
     });
 }
 
+declare const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks>;
 interface SendResultOptions {
     autoStart?: boolean;
 }
@@ -100,4 +101,4 @@ declare const thalamus: {
     readonly openai: typeof createOpenAIProvider;
 };
 
-export { AbortedError, CredentialExpiredError, McpServerError, ProviderAuthError, ProviderRateLimitError, ProviderResponseError, ProviderUnavailableError, SendResult, type SendResultOptions, SessionExpiredError, StreamCallbacks, StreamPart, ThalamusError, VaultError, VaultNotFoundError, createAnthropicProvider, createOpenAIProvider, createSendResult, thalamus };
+export { AbortedError, CALLBACK_MAP, CredentialExpiredError, McpServerError, ProviderAuthError, ProviderRateLimitError, ProviderResponseError, ProviderUnavailableError, SendResult, type SendResultOptions, SessionExpiredError, StreamCallbacks, StreamPart, ThalamusError, VaultError, VaultNotFoundError, createAnthropicProvider, createOpenAIProvider, createSendResult, thalamus };

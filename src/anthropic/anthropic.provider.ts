@@ -8,10 +8,10 @@ import type {
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
+import type { CloudflareEdgeObserver } from "../durable/cloudflare";
 import {
   type DurabilityBackend,
   type DurableBackend,
-  type EdgeObserver,
   isEdgeObserver,
   type SessionCheckpoint,
 } from "../durable/types";
@@ -137,7 +137,6 @@ class AnthropicProvider implements Provider {
   private readonly config: AnthropicProviderConfig;
   private readonly agentId: string;
   private readonly environmentId: string;
-  private readonly _recovered: Promise<void>;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
@@ -145,15 +144,12 @@ class AnthropicProvider implements Provider {
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
 
-    if (config.durable && config.onSessionEvents) {
-      if (isEdgeObserver(config.durable)) {
-        this._recovered = this.recoverFromEdge().catch(() => {});
-      } else {
-        this.recoverActiveSessions().catch(() => {});
-        this._recovered = Promise.resolve();
-      }
-    } else {
-      this._recovered = Promise.resolve();
+    if (
+      config.durable &&
+      config.onSessionEvents &&
+      !isEdgeObserver(config.durable)
+    ) {
+      this.recoverActiveSessions().catch(() => {});
     }
   }
 
@@ -376,14 +372,9 @@ class AnthropicProvider implements Provider {
     yield { type: "finish", response: acc.toResponse(sessionId) };
   }
 
-  /**
-   * Recovers sessions via the edge observer path. Queries the edge for
-   * active sessions and reconnects to each, flushing buffered events
-   * through onSessionEvents callbacks.
-   */
-  private get edgeObserver(): EdgeObserver | null {
+  private get edgeObserver(): CloudflareEdgeObserver | null {
     return this.config.durable && isEdgeObserver(this.config.durable)
-      ? this.config.durable
+      ? (this.config.durable as CloudflareEdgeObserver)
       : null;
   }
 
@@ -393,65 +384,12 @@ class AnthropicProvider implements Provider {
       : null;
   }
 
-  private async recoverFromEdge(): Promise<void> {
-    const observer = this.edgeObserver;
-    const { onSessionEvents } = this.config;
-    if (!observer || !onSessionEvents) return;
-
-    const active = await observer.listActive();
-
-    for (const sessionId of active) {
-      const callbacks = onSessionEvents(sessionId);
-      const stream = this.edgeRecoverStream(sessionId);
-      const result = createSendResult(stream, callbacks, { autoStart: true });
-      result.response.catch((err) => {
-        console.error(
-          `[thalamus] edge recovery failed for ${sessionId}:`,
-          err instanceof Error ? err.message : err,
-        );
-      });
-    }
-  }
-
-  private async *edgeRecoverStream(
-    sessionId: string,
-  ): AsyncIterable<StreamPart> {
-    const observer = this.edgeObserver!;
-    const eventStream = observer.events(sessionId);
-    const acc = new ResponseAccumulator();
-    let hasEvents = false;
-
-    for await (const frame of eventStream) {
-      if (!frame.data) continue;
-      if (!hasEvents) {
-        hasEvents = true;
-        yield { type: "stream-start", sessionId };
-      }
-      const rawEvent = JSON.parse(frame.data);
-      yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
-      if (acc.done) break;
-    }
-
-    // WS was rejected (another consumer is connected) — skip silently.
-    if (!hasEvents) return;
-
-    await observer.stop(sessionId).catch(() => {});
-    yield { type: "finish", response: acc.toResponse(sessionId) };
-  }
-
-  /**
-   * Edge observation: SSE runs on the CF Agent, events arrive via WebSocket.
-   * The provider dispatches the message directly and reads parsed events
-   * from the edge observer's WebSocket feed.
-   */
-  private async *edgeObserve(
+  private async edgeObserve(
     client: Anthropic,
     sessionId: string,
     params: RequestParams,
     signal?: AbortSignal,
-  ): AsyncIterable<StreamPart> {
-    await this._recovered;
-
+  ): Promise<void> {
     const observer = this.edgeObserver!;
 
     await observer.observe({
@@ -462,23 +400,14 @@ class AnthropicProvider implements Provider {
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "managed-agents-2026-04-01",
       },
+      provider: "anthropic",
+      webhook: {
+        ...observer.webhook,
+        metadata: params.webhookMetadata,
+      },
     });
 
-    const eventStream = observer.events(sessionId);
-
     await this.dispatch(client, sessionId, params, signal);
-
-    const acc = new ResponseAccumulator();
-    for await (const frame of eventStream) {
-      if (signal?.aborted) break;
-      if (!frame.data) continue;
-      const rawEvent = JSON.parse(frame.data);
-      yield* mapEvent(rawEvent as BetaManagedAgentsStreamSessionEvents, acc);
-      if (acc.done) break;
-    }
-
-    await observer.stop(sessionId).catch(() => {});
-    yield { type: "finish", response: acc.toResponse(sessionId) };
   }
 
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
@@ -496,7 +425,7 @@ class AnthropicProvider implements Provider {
       const signal = params.abortSignal ?? undefined;
 
       if (this.edgeObserver) {
-        yield* this.edgeObserve(client, sessionId, params, signal);
+        await this.edgeObserve(client, sessionId, params, signal);
       } else {
         yield* this.resilientObserve(client, sessionId, signal, () =>
           this.dispatch(client, sessionId, params, signal),

@@ -4,10 +4,10 @@ import type {
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
+import type { CloudflareEdgeObserver } from "../durable/cloudflare";
 import {
   type DurabilityBackend,
   type DurableBackend,
-  type EdgeObserver,
   isEdgeObserver,
   type SessionCheckpoint,
 } from "../durable/types";
@@ -165,11 +165,10 @@ class OpenAIProvider implements Provider {
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
   private readonly config: OpenAIProviderConfig;
-  private readonly _recovered: Promise<void>;
 
-  private get edgeObserver(): EdgeObserver | null {
+  private get edgeObserver(): CloudflareEdgeObserver | null {
     return this.config.durable && isEdgeObserver(this.config.durable)
-      ? this.config.durable
+      ? (this.config.durable as CloudflareEdgeObserver)
       : null;
   }
 
@@ -190,15 +189,12 @@ class OpenAIProvider implements Provider {
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
 
-    if (config.durable && config.onSessionEvents) {
-      if (isEdgeObserver(config.durable)) {
-        this._recovered = this.recoverFromEdge().catch(() => {});
-      } else {
-        this.recoverActiveSessions().catch(() => {});
-        this._recovered = Promise.resolve();
-      }
-    } else {
-      this._recovered = Promise.resolve();
+    if (
+      config.durable &&
+      config.onSessionEvents &&
+      !isEdgeObserver(config.durable)
+    ) {
+      this.recoverActiveSessions().catch(() => {});
     }
   }
 
@@ -502,74 +498,15 @@ class OpenAIProvider implements Provider {
     }
   }
 
-  /**
-   * Recovers sessions via the edge observer path. Queries the edge for
-   * active sessions and reconnects to each, flushing buffered events
-   * through onSessionEvents callbacks.
-   */
-  private async recoverFromEdge(): Promise<void> {
-    const observer = this.edgeObserver;
-    const { onSessionEvents } = this.config;
-    if (!observer || !onSessionEvents) return;
-
-    const active = await observer.listActive();
-
-    for (const responseId of active) {
-      const callbacks = onSessionEvents(responseId);
-      const stream = this.edgeRecoverStream(responseId);
-      const result = createSendResult(stream, callbacks, { autoStart: true });
-      result.response.catch((err) => {
-        console.error(
-          `[thalamus] edge recovery failed for ${responseId}:`,
-          err instanceof Error ? err.message : err,
-        );
-      });
-    }
-  }
-
-  private async *edgeRecoverStream(
-    responseId: string,
-  ): AsyncIterable<StreamPart> {
-    const observer = this.edgeObserver!;
-    const eventStream = observer.events(responseId);
-    const acc = new ResponseAccumulator();
-    acc.sessionId = responseId;
-    let hasEvents = false;
-
-    for await (const frame of eventStream) {
-      if (!frame.data) continue;
-      if (!hasEvents) {
-        hasEvents = true;
-        yield { type: "stream-start", sessionId: responseId };
-      }
-      const rawEvent = JSON.parse(frame.data) as ResponseStreamEvent;
-      yield* mapEvent(rawEvent, acc);
-    }
-
-    // WS was rejected (another consumer is connected) — skip silently.
-    if (!hasEvents) return;
-
-    await observer.stop(responseId).catch(() => {});
-    yield { type: "finish", response: acc.toResponse() };
-  }
-
-  /**
-   * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
-   * events arrive via WebSocket.
-   */
-  private async *edgeObserve(
+  private async edgeObserve(
     params: RequestParams,
     sessionParams: Record<string, unknown>,
     mcpTools: Record<string, unknown>[] | undefined,
     signal?: AbortSignal,
-  ): AsyncIterable<StreamPart> {
-    await this._recovered;
-
+  ): Promise<string> {
     const observer = this.edgeObserver!;
     const input = this.buildInput(params);
 
-    // Must use stream + background together: OpenAI only persists events for
-    // later retrieval when the create call includes stream: true.
     const initStream = await this.client.responses.create(
       {
         model: this.model,
@@ -584,7 +521,6 @@ class OpenAIProvider implements Provider {
       { signal },
     );
 
-    // Drain until we have the responseId so the CF Worker can take over.
     let responseId: string | undefined;
     let lastSeqNo = -1;
     for await (const event of initStream as AsyncIterable<ResponseStreamEvent>) {
@@ -603,10 +539,7 @@ class OpenAIProvider implements Provider {
     if (!responseId) {
       throw new ThalamusError(
         "edge observe: no responseId from initial stream",
-        {
-          provider: OPENAI,
-          isRetryable: false,
-        },
+        { provider: OPENAI, isRetryable: false },
       );
     }
 
@@ -617,19 +550,14 @@ class OpenAIProvider implements Provider {
       headers: {
         Authorization: `Bearer ${this.client.apiKey}`,
       },
+      provider: "openai",
+      webhook: {
+        ...observer.webhook,
+        metadata: params.webhookMetadata,
+      },
     });
 
-    const eventStream = observer.events(responseId);
-    const acc = new ResponseAccumulator();
-    for await (const frame of eventStream) {
-      if (signal?.aborted) break;
-      if (!frame.data) continue;
-      const rawEvent = JSON.parse(frame.data) as ResponseStreamEvent;
-      yield* mapEvent(rawEvent, acc);
-    }
-
-    await observer.stop(responseId).catch(() => {});
-    yield { type: "finish", response: acc.toResponse() };
+    return responseId;
   }
 
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
@@ -648,7 +576,13 @@ class OpenAIProvider implements Provider {
       const signal = params.abortSignal ?? undefined;
 
       if (this.edgeObserver) {
-        yield* this.edgeObserve(params, sessionParams, mcpTools, signal);
+        const responseId = await this.edgeObserve(
+          params,
+          sessionParams,
+          mcpTools,
+          signal,
+        );
+        yield { type: "stream-start", sessionId: responseId };
       } else {
         yield* this.resilientDispatchAndObserve(
           params,

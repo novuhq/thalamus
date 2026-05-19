@@ -18,24 +18,22 @@ export interface DurabilityBackend {
 /*  the application (e.g. Cloudflare Durable Objects).                 */
 /* ------------------------------------------------------------------ */
 
-export interface SSEFrame {
-  event?: string;
-  id?: string;
-  data?: string;
-}
-
 export interface EdgeObserveParams {
   sessionId: string;
   streamUrl: string;
   headers: Record<string, string>;
+  provider: string;
+  webhook: {
+    url: string;
+    secret: string;
+    metadata?: Record<string, string>;
+  };
 }
 
-/** Edge-proxy durability — SSE lives outside the consumer process. */
+/** Edge-proxy durability — SSE lives outside the consumer process, events delivered via webhook. */
 export interface EdgeObserver {
   observe(params: EdgeObserveParams): Promise<void>;
   stop(sessionId: string): Promise<void>;
-  events(sessionId: string): AsyncIterable<SSEFrame>;
-  listActive(): Promise<string[]>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -47,5 +45,5 @@ export type DurableBackend = DurabilityBackend | EdgeObserver;
 export function isEdgeObserver(
   backend: DurableBackend,
 ): backend is EdgeObserver {
-  return "observe" in backend && "events" in backend;
+  return "observe" in backend && "stop" in backend && !("save" in backend);
 }

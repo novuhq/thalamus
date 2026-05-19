@@ -5,7 +5,6 @@ export {
 export type {
   EdgeObserveParams,
   EdgeObserver,
-  SSEFrame,
 } from "./durable/types";
 export * from "./errors";
 export * from "./send-result";

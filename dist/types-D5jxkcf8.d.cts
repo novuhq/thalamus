@@ -1,4 +1,4 @@
-import { b as VaultOptions, V as Vault } from './vault.interface-BMCawAU1.js';
+import { b as VaultOptions, V as Vault } from './vault.interface-BMCawAU1.cjs';
 
 declare enum MessageRole {
     USER = "user",
@@ -44,6 +44,8 @@ interface RequestParams {
     providerOptions?: Record<string, unknown>;
     /** When fired, the SDK closes the connection and the operation yields an `AbortedError`. */
     abortSignal?: AbortSignal;
+    /** Metadata forwarded in the webhook payload for routing/context on the receiving end. */
+    webhookMetadata?: Record<string, string>;
 }
 interface SessionOptions {
     vaultIds?: string[];

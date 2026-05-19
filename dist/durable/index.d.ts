@@ -1,6 +1,6 @@
-export { C as CloudflareBackendOptions, c as cloudflare } from '../cloudflare-C2MsywK1.js';
-import { b as DurabilityBackend } from '../types-D5De32xL.js';
-export { D as DurableBackend, E as EdgeObserveParams, a as EdgeObserver, S as SSEFrame, c as SessionCheckpoint, i as isEdgeObserver } from '../types-D5De32xL.js';
+export { C as CloudflareBackendOptions, a as CloudflareEdgeObserver, W as WebhookConfig, c as cloudflare } from '../cloudflare-CiVgvda3.js';
+import { b as DurabilityBackend } from '../types-BJUMp1Dw.js';
+export { D as DurableBackend, E as EdgeObserveParams, a as EdgeObserver, S as SessionCheckpoint, i as isEdgeObserver } from '../types-BJUMp1Dw.js';
 
 /** Minimal subset of `redis` / `ioredis` — pass your own client instance. */
 interface RedisLike {

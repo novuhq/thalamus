@@ -11,24 +11,23 @@ interface DurabilityBackend {
     remove(sessionId: string): Promise<void>;
     getActive(): Promise<SessionCheckpoint[]>;
 }
-interface SSEFrame {
-    event?: string;
-    id?: string;
-    data?: string;
-}
 interface EdgeObserveParams {
     sessionId: string;
     streamUrl: string;
     headers: Record<string, string>;
+    provider: string;
+    webhook: {
+        url: string;
+        secret: string;
+        metadata?: Record<string, string>;
+    };
 }
-/** Edge-proxy durability — SSE lives outside the consumer process. */
+/** Edge-proxy durability — SSE lives outside the consumer process, events delivered via webhook. */
 interface EdgeObserver {
     observe(params: EdgeObserveParams): Promise<void>;
     stop(sessionId: string): Promise<void>;
-    events(sessionId: string): AsyncIterable<SSEFrame>;
-    listActive(): Promise<string[]>;
 }
 type DurableBackend = DurabilityBackend | EdgeObserver;
 declare function isEdgeObserver(backend: DurableBackend): backend is EdgeObserver;
 
-export { type DurableBackend as D, type EdgeObserveParams as E, type SSEFrame as S, type EdgeObserver as a, type DurabilityBackend as b, type SessionCheckpoint as c, isEdgeObserver as i };
+export { type DurableBackend as D, type EdgeObserveParams as E, type SessionCheckpoint as S, type EdgeObserver as a, type DurabilityBackend as b, isEdgeObserver as i };

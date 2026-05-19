@@ -1,4 +1,9 @@
-export { type CloudflareBackendOptions, cloudflare } from "./cloudflare";
+export {
+  type CloudflareBackendOptions,
+  type CloudflareEdgeObserver,
+  cloudflare,
+  type WebhookConfig,
+} from "./cloudflare";
 export { type RedisLike, redis } from "./redis";
 export type {
   DurabilityBackend,
@@ -6,6 +11,5 @@ export type {
   EdgeObserveParams,
   EdgeObserver,
   SessionCheckpoint,
-  SSEFrame,
 } from "./types";
 export { isEdgeObserver } from "./types";

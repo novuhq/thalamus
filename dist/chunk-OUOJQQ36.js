@@ -5,15 +5,17 @@ import {
   ProviderRateLimitError,
   ProviderResponseError,
   ProviderUnavailableError,
-  ThalamusError,
-  createSendResult
-} from "./chunk-U2SEW5AP.js";
+  ThalamusError
+} from "./chunk-7MIIXWP4.js";
 import {
   LocalVault
 } from "./chunk-L5ITO5PR.js";
 import {
   isEdgeObserver
-} from "./chunk-AX4L5BDL.js";
+} from "./chunk-YFRF7YPZ.js";
+import {
+  createSendResult
+} from "./chunk-73H2VIN4.js";
 
 // src/openai/openai.provider.ts
 import OpenAI, { APIError as APIError2, APIUserAbortError as APIUserAbortError2 } from "openai";
@@ -374,7 +376,6 @@ var OpenAIProvider = class {
   vaultStore;
   onSessionEvents;
   config;
-  _recovered;
   get edgeObserver() {
     return this.config.durable && isEdgeObserver(this.config.durable) ? this.config.durable : null;
   }
@@ -391,17 +392,9 @@ var OpenAIProvider = class {
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
-    if (config.durable && config.onSessionEvents) {
-      if (isEdgeObserver(config.durable)) {
-        this._recovered = this.recoverFromEdge().catch(() => {
-        });
-      } else {
-        this.recoverActiveSessions().catch(() => {
-        });
-        this._recovered = Promise.resolve();
-      }
-    } else {
-      this._recovered = Promise.resolve();
+    if (config.durable && config.onSessionEvents && !isEdgeObserver(config.durable)) {
+      this.recoverActiveSessions().catch(() => {
+      });
     }
   }
   send(params) {
@@ -643,53 +636,10 @@ var OpenAIProvider = class {
     }
   }
   /**
-   * Recovers sessions via the edge observer path. Queries the edge for
-   * active sessions and reconnects to each, flushing buffered events
-   * through onSessionEvents callbacks.
-   */
-  async recoverFromEdge() {
-    const observer = this.edgeObserver;
-    const { onSessionEvents } = this.config;
-    if (!observer || !onSessionEvents) return;
-    const active = await observer.listActive();
-    for (const responseId of active) {
-      const callbacks = onSessionEvents(responseId);
-      const stream = this.edgeRecoverStream(responseId);
-      const result = createSendResult(stream, callbacks, { autoStart: true });
-      result.response.catch((err) => {
-        console.error(
-          `[thalamus] edge recovery failed for ${responseId}:`,
-          err instanceof Error ? err.message : err
-        );
-      });
-    }
-  }
-  async *edgeRecoverStream(responseId) {
-    const observer = this.edgeObserver;
-    const eventStream = observer.events(responseId);
-    const acc = new ResponseAccumulator();
-    acc.sessionId = responseId;
-    let hasEvents = false;
-    for await (const frame of eventStream) {
-      if (!frame.data) continue;
-      if (!hasEvents) {
-        hasEvents = true;
-        yield { type: "stream-start", sessionId: responseId };
-      }
-      const rawEvent = JSON.parse(frame.data);
-      yield* mapEvent(rawEvent, acc);
-    }
-    if (!hasEvents) return;
-    await observer.stop(responseId).catch(() => {
-    });
-    yield { type: "finish", response: acc.toResponse() };
-  }
-  /**
-   * Edge observation: dispatch via background mode, SSE runs on the CF Agent,
-   * events arrive via WebSocket.
+   * Edge observation: dispatch via background mode, SSE runs on the CF Worker DO,
+   * events delivered via webhook. Provider just sets up and returns.
    */
   async *edgeObserve(params, sessionParams, mcpTools, signal) {
-    await this._recovered;
     const observer = this.edgeObserver;
     const input = this.buildInput(params);
     const initStream = await this.client.responses.create(
@@ -719,10 +669,7 @@ var OpenAIProvider = class {
     if (!responseId) {
       throw new ThalamusError(
         "edge observe: no responseId from initial stream",
-        {
-          provider: OPENAI,
-          isRetryable: false
-        }
+        { provider: OPENAI, isRetryable: false }
       );
     }
     const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
@@ -731,19 +678,13 @@ var OpenAIProvider = class {
       streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
       headers: {
         Authorization: `Bearer ${this.client.apiKey}`
+      },
+      provider: "openai",
+      webhook: {
+        ...observer.webhook,
+        metadata: params.webhookMetadata
       }
     });
-    const eventStream = observer.events(responseId);
-    const acc = new ResponseAccumulator();
-    for await (const frame of eventStream) {
-      if (signal?.aborted) break;
-      if (!frame.data) continue;
-      const rawEvent = JSON.parse(frame.data);
-      yield* mapEvent(rawEvent, acc);
-    }
-    await observer.stop(responseId).catch(() => {
-    });
-    yield { type: "finish", response: acc.toResponse() };
   }
   async *runStream(params) {
     try {
@@ -833,4 +774,4 @@ export {
   mapEvent,
   createOpenAIProvider
 };
-//# sourceMappingURL=chunk-2IUFEPVP.js.map
+//# sourceMappingURL=chunk-OUOJQQ36.js.map

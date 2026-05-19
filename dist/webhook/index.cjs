@@ -23,6 +23,8 @@ __export(webhook_exports, {
   createWebhookHandler: () => createWebhookHandler
 });
 module.exports = __toCommonJS(webhook_exports);
+
+// src/send-result.ts
 var CALLBACK_MAP = {
   "text-delta": "onTextDelta",
   thinking: "onThinking",
@@ -38,20 +40,10 @@ var CALLBACK_MAP = {
   error: "onError",
   "provider-event": "onProviderEvent"
 };
+
+// src/webhook/index.ts
 function createWebhookHandler(options) {
   const { secret, tolerance = 300, onSessionEvents } = options;
-  const sessionCache = /* @__PURE__ */ new Map();
-  function getCallbacks(sessionId, metadata) {
-    let callbacks = sessionCache.get(sessionId);
-    if (!callbacks) {
-      callbacks = onSessionEvents(sessionId, metadata);
-      sessionCache.set(sessionId, callbacks);
-    }
-    return callbacks;
-  }
-  function evictSession(sessionId) {
-    sessionCache.delete(sessionId);
-  }
   async function verifySignature(rawBody, signatureHeader) {
     const parts = signatureHeader.split(",");
     const tPart = parts.find((p) => p.startsWith("t="));
@@ -87,59 +79,60 @@ function createWebhookHandler(options) {
   }
   async function processRequest(rawBody, signatureHeader) {
     if (!signatureHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing X-Thalamus-Signature header" }),
-        { status: 401, headers: { "Content-Type": "application/json" } }
-      );
+      return {
+        status: 401,
+        body: JSON.stringify({ error: "Missing X-Thalamus-Signature header" })
+      };
     }
     const valid = await verifySignature(rawBody, signatureHeader);
     if (!valid) {
-      return new Response(
-        JSON.stringify({ error: "Invalid signature" }),
-        { status: 401, headers: { "Content-Type": "application/json" } }
-      );
+      return {
+        status: 401,
+        body: JSON.stringify({ error: "Invalid signature" })
+      };
     }
     let payload;
     try {
       payload = JSON.parse(rawBody);
     } catch {
-      return new Response(
-        JSON.stringify({ error: "Malformed JSON body" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "Malformed JSON body" })
+      };
     }
     const { sessionId, metadata, event } = payload;
     if (!sessionId || !event?.type) {
-      return new Response(
-        JSON.stringify({ error: "Missing sessionId or event" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "Missing sessionId or event" })
+      };
     }
-    const callbacks = getCallbacks(sessionId, metadata ?? {});
+    const callbacks = onSessionEvents(sessionId, metadata ?? {});
     try {
       dispatch(callbacks, event);
-    } catch (err) {
-      return new Response(
-        JSON.stringify({ error: "Callback error" }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+    } catch {
+      return { status: 500, body: JSON.stringify({ error: "Callback error" }) };
     }
-    if (event.type === "finish" || event.type === "error") {
-      evictSession(sessionId);
-    }
-    return new Response(null, { status: 200 });
+    return { status: 200, body: null };
   }
   return {
+    async handleRaw(rawBody, signatureHeader) {
+      return processRequest(rawBody, signatureHeader);
+    },
     async handle(req) {
       if (req.method !== "POST") {
-        return new Response(
-          JSON.stringify({ error: "Method not allowed" }),
-          { status: 405, headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "Method not allowed" }), {
+          status: 405,
+          headers: { "Content-Type": "application/json" }
+        });
       }
       const rawBody = await req.text();
       const signatureHeader = req.headers.get("X-Thalamus-Signature");
-      return processRequest(rawBody, signatureHeader);
+      const result = await processRequest(rawBody, signatureHeader);
+      return new Response(result.body, {
+        status: result.status,
+        headers: result.body ? { "Content-Type": "application/json" } : {}
+      });
     },
     async express(req, res) {
       if (req.method !== "POST") {
@@ -149,11 +142,12 @@ function createWebhookHandler(options) {
       }
       const rawBody = await readNodeBody(req);
       const signatureHeader = req.headers["x-thalamus-signature"] ?? null;
-      const response = await processRequest(rawBody, signatureHeader);
-      res.writeHead(response.status, {
-        "Content-Type": response.headers.get("Content-Type") ?? "application/json"
-      });
-      res.end(await response.text());
+      const result = await processRequest(rawBody, signatureHeader);
+      res.writeHead(
+        result.status,
+        result.body ? { "Content-Type": "application/json" } : {}
+      );
+      res.end(result.body);
     }
   };
 }

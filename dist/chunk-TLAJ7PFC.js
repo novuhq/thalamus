@@ -145,7 +145,7 @@ var AnthropicVault = class {
   }
 };
 
-// src/anthropic/anthropic.provider.ts
+// src/anthropic/anthropic-parser.ts
 function mapStopReason(reason) {
   switch (reason.type) {
     case "end_turn":
@@ -163,56 +163,6 @@ function mapSessionError(raw) {
   const msg = obj?.message ?? String(raw);
   const isAuth = obj?.type === "authentication_error";
   return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
-}
-function mapStreamError(err, sessionId) {
-  if (err instanceof APIUserAbortError) {
-    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
-  }
-  if (sessionId && err instanceof APIError) {
-    const status = err.status;
-    if (status === 404 || status === 410) {
-      return new SessionExpiredError(
-        `Session ${sessionId} has expired or been archived`,
-        { provider: ANTHROPIC, sessionId, cause: err }
-      );
-    }
-  }
-  if (err instanceof ThalamusError) return err;
-  return new ThalamusError(String(err), {
-    provider: ANTHROPIC,
-    isRetryable: false,
-    cause: err
-  });
-}
-function isTransientStreamError(err, signal) {
-  if (signal?.aborted) return false;
-  if (err instanceof APIUserAbortError) return false;
-  if (err instanceof ThalamusError) return false;
-  return true;
-}
-function buildSendEvents(params) {
-  if (params.toolResults?.length) {
-    return params.toolResults.map(toSessionEvent);
-  }
-  const event = {
-    type: "user.message",
-    content: params.messages.flatMap((msg) => toContentBlocks(msg.content))
-  };
-  return [event];
-}
-function toSessionEvent(tr) {
-  if (tr.approved !== void 0) {
-    return {
-      type: "user.tool_confirmation",
-      tool_use_id: tr.toolUseId,
-      result: tr.approved ? "allow" : "deny"
-    };
-  }
-  return {
-    type: "user.custom_tool_result",
-    custom_tool_use_id: tr.toolUseId,
-    content: [{ type: "text", text: tr.output ?? "" }]
-  };
 }
 var ResponseAccumulator = class {
   content = "";
@@ -232,7 +182,6 @@ var ResponseAccumulator = class {
 };
 function* mapEvent(event, acc) {
   switch (event.type) {
-    // --- text streaming ---
     case "agent.message": {
       const e = event;
       for (const block of e.content) {
@@ -243,12 +192,10 @@ function* mapEvent(event, acc) {
       }
       break;
     }
-    // --- reasoning / thinking ---
     case "agent.thinking": {
       yield { type: "thinking", text: "" };
       break;
     }
-    // --- tool calls ---
     case "agent.tool_use": {
       const e = event;
       yield {
@@ -310,7 +257,6 @@ function* mapEvent(event, acc) {
       acc.finishReason = "requires-action";
       break;
     }
-    // --- lifecycle ---
     case "session.status_running": {
       yield { type: "status-change", status: "running" };
       break;
@@ -332,12 +278,10 @@ function* mapEvent(event, acc) {
         isRetryable: false
       });
     }
-    // --- error ---
     case "session.error": {
       const e = event;
       throw mapSessionError(e.error);
     }
-    // --- usage ---
     case "span.model_request_end": {
       const e = event;
       if (e.model_usage) {
@@ -349,7 +293,6 @@ function* mapEvent(event, acc) {
       }
       break;
     }
-    // --- escape hatch for everything else ---
     default: {
       yield {
         type: "provider-event",
@@ -360,6 +303,58 @@ function* mapEvent(event, acc) {
       break;
     }
   }
+}
+
+// src/anthropic/anthropic.provider.ts
+function mapStreamError(err, sessionId) {
+  if (err instanceof APIUserAbortError) {
+    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
+  }
+  if (sessionId && err instanceof APIError) {
+    const status = err.status;
+    if (status === 404 || status === 410) {
+      return new SessionExpiredError(
+        `Session ${sessionId} has expired or been archived`,
+        { provider: ANTHROPIC, sessionId, cause: err }
+      );
+    }
+  }
+  if (err instanceof ThalamusError) return err;
+  return new ThalamusError(String(err), {
+    provider: ANTHROPIC,
+    isRetryable: false,
+    cause: err
+  });
+}
+function isTransientStreamError(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  return true;
+}
+function buildSendEvents(params) {
+  if (params.toolResults?.length) {
+    return params.toolResults.map(toSessionEvent);
+  }
+  const event = {
+    type: "user.message",
+    content: params.messages.flatMap((msg) => toContentBlocks(msg.content))
+  };
+  return [event];
+}
+function toSessionEvent(tr) {
+  if (tr.approved !== void 0) {
+    return {
+      type: "user.tool_confirmation",
+      tool_use_id: tr.toolUseId,
+      result: tr.approved ? "allow" : "deny"
+    };
+  }
+  return {
+    type: "user.custom_tool_result",
+    custom_tool_use_id: tr.toolUseId,
+    content: [{ type: "text", text: tr.output ?? "" }]
+  };
 }
 async function createClient(config) {
   if ("awsRegion" in config && config.awsRegion) {
@@ -700,6 +695,8 @@ function createAnthropicProvider(config) {
 
 export {
   toContentBlocks,
+  ResponseAccumulator,
+  mapEvent,
   createAnthropicProvider
 };
-//# sourceMappingURL=chunk-CP6UCCND.js.map
+//# sourceMappingURL=chunk-TLAJ7PFC.js.map

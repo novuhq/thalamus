@@ -16,7 +16,7 @@ import {
 } from "./chunk-AX4L5BDL.js";
 
 // src/openai/openai.provider.ts
-import OpenAI, { APIError, APIUserAbortError } from "openai";
+import OpenAI, { APIError as APIError2, APIUserAbortError as APIUserAbortError2 } from "openai";
 
 // src/openai/openai.transformer.ts
 var openaiTransformer = {
@@ -54,66 +54,8 @@ var openaiTransformer = {
   }
 };
 
-// src/openai/sigv4-fetch.ts
-function createSigV4Fetch(options) {
-  const { region, credentials } = options;
-  return async (input, init) => {
-    let SignatureV4;
-    let Sha256;
-    try {
-      SignatureV4 = (await import(
-        /* webpackIgnore: true */
-        "@smithy/signature-v4"
-      )).SignatureV4;
-      Sha256 = (await import(
-        /* webpackIgnore: true */
-        "@aws-crypto/sha256-js"
-      )).Sha256;
-    } catch {
-      throw new Error(
-        "SigV4 auth requires @smithy/signature-v4 and @aws-crypto/sha256-js. Install them: pnpm add @smithy/signature-v4 @aws-crypto/sha256-js"
-      );
-    }
-    const signer = new SignatureV4({
-      service: "bedrock",
-      region,
-      credentials,
-      sha256: Sha256
-    });
-    const url = new URL(
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-    );
-    const body = init?.body ? String(init.body) : void 0;
-    const headers = {};
-    if (init?.headers) {
-      const h = init.headers;
-      if (h instanceof Headers) {
-        h.forEach((v, k) => {
-          headers[k] = v;
-        });
-      } else if (Array.isArray(h)) {
-        for (const [k, v] of h) headers[k] = v;
-      } else {
-        Object.assign(headers, h);
-      }
-    }
-    const signed = await signer.sign({
-      method: init?.method ?? "GET",
-      protocol: url.protocol,
-      hostname: url.hostname,
-      port: url.port ? Number(url.port) : void 0,
-      path: url.pathname + url.search,
-      headers: { ...headers, host: url.host },
-      body
-    });
-    return globalThis.fetch(input, {
-      ...init,
-      headers: signed.headers
-    });
-  };
-}
-
-// src/openai/openai.provider.ts
+// src/openai/openai-parser.ts
+import { APIError, APIUserAbortError } from "openai";
 function isResponseErrorEvent(e) {
   return typeof e === "object" && e !== null && "type" in e && e.type === "error" && "code" in e;
 }
@@ -134,42 +76,6 @@ function mapError(error, provider) {
   }
   return new ProviderResponseError(msg, { provider, cause: error });
 }
-function isTransientStreamError(err, signal) {
-  if (signal?.aborted) return false;
-  if (err instanceof APIUserAbortError) return false;
-  if (err instanceof ThalamusError) return false;
-  if (err instanceof APIError && err.status >= 400 && err.status < 500) {
-    return false;
-  }
-  return true;
-}
-function mapApprovalPolicy(policy) {
-  if (!policy || typeof policy === "string") return policy;
-  return { never: { tool_names: policy.except } };
-}
-function toMcpTools(servers, credentials) {
-  return servers.map((server) => {
-    const tool = {
-      type: "mcp",
-      server_label: server.name,
-      server_url: server.url
-    };
-    const cred = credentials?.get(server.name);
-    if (cred) {
-      tool.authorization = cred.type === "bearer" ? cred.token : cred.accessToken;
-    } else if (server.authorization) {
-      tool.authorization = server.authorization;
-    }
-    if (server.allowedTools) {
-      tool.allowed_tools = server.allowedTools;
-    }
-    if (server.approvalPolicy) {
-      tool.require_approval = mapApprovalPolicy(server.approvalPolicy);
-    }
-    return tool;
-  });
-}
-var MAX_RECONNECT_RETRIES = 3;
 var ResponseAccumulator = class {
   content = "";
   sessionId;
@@ -189,7 +95,6 @@ var ResponseAccumulator = class {
 };
 function* mapEvent(event, acc) {
   switch (event.type) {
-    // --- lifecycle ---
     case "response.created": {
       acc.sessionId = event.response.id;
       acc.conversationId = event.response.conversation?.id;
@@ -227,24 +132,20 @@ function* mapEvent(event, acc) {
       acc.finishReason = "length";
       break;
     }
-    // --- text streaming ---
     case "response.output_text.delta": {
       acc.content += event.delta;
       yield { type: "text-delta", text: event.delta };
       break;
     }
-    // --- refusal ---
     case "response.refusal.delta": {
       acc.finishReason = "refused";
       yield { type: "refusal", text: event.delta };
       break;
     }
-    // --- reasoning / thinking ---
     case "response.reasoning_summary_text.delta": {
       yield { type: "thinking", text: event.delta };
       break;
     }
-    // --- function / tool calls ---
     case "response.output_item.added": {
       const e = event;
       if (e.item.type === "function_call") {
@@ -331,11 +232,9 @@ function* mapEvent(event, acc) {
       }
       break;
     }
-    // --- error ---
     case "error": {
       throw mapError(event, OPENAI);
     }
-    // --- escape hatch for everything else ---
     default: {
       yield {
         type: "provider-event",
@@ -347,6 +246,103 @@ function* mapEvent(event, acc) {
     }
   }
 }
+
+// src/openai/sigv4-fetch.ts
+function createSigV4Fetch(options) {
+  const { region, credentials } = options;
+  return async (input, init) => {
+    let SignatureV4;
+    let Sha256;
+    try {
+      SignatureV4 = (await import(
+        /* webpackIgnore: true */
+        "@smithy/signature-v4"
+      )).SignatureV4;
+      Sha256 = (await import(
+        /* webpackIgnore: true */
+        "@aws-crypto/sha256-js"
+      )).Sha256;
+    } catch {
+      throw new Error(
+        "SigV4 auth requires @smithy/signature-v4 and @aws-crypto/sha256-js. Install them: pnpm add @smithy/signature-v4 @aws-crypto/sha256-js"
+      );
+    }
+    const signer = new SignatureV4({
+      service: "bedrock",
+      region,
+      credentials,
+      sha256: Sha256
+    });
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+    );
+    const body = init?.body ? String(init.body) : void 0;
+    const headers = {};
+    if (init?.headers) {
+      const h = init.headers;
+      if (h instanceof Headers) {
+        h.forEach((v, k) => {
+          headers[k] = v;
+        });
+      } else if (Array.isArray(h)) {
+        for (const [k, v] of h) headers[k] = v;
+      } else {
+        Object.assign(headers, h);
+      }
+    }
+    const signed = await signer.sign({
+      method: init?.method ?? "GET",
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port ? Number(url.port) : void 0,
+      path: url.pathname + url.search,
+      headers: { ...headers, host: url.host },
+      body
+    });
+    return globalThis.fetch(input, {
+      ...init,
+      headers: signed.headers
+    });
+  };
+}
+
+// src/openai/openai.provider.ts
+function isTransientStreamError(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof APIUserAbortError2) return false;
+  if (err instanceof ThalamusError) return false;
+  if (err instanceof APIError2 && err.status >= 400 && err.status < 500) {
+    return false;
+  }
+  return true;
+}
+function mapApprovalPolicy(policy) {
+  if (!policy || typeof policy === "string") return policy;
+  return { never: { tool_names: policy.except } };
+}
+function toMcpTools(servers, credentials) {
+  return servers.map((server) => {
+    const tool = {
+      type: "mcp",
+      server_label: server.name,
+      server_url: server.url
+    };
+    const cred = credentials?.get(server.name);
+    if (cred) {
+      tool.authorization = cred.type === "bearer" ? cred.token : cred.accessToken;
+    } else if (server.authorization) {
+      tool.authorization = server.authorization;
+    }
+    if (server.allowedTools) {
+      tool.allowed_tools = server.allowedTools;
+    }
+    if (server.approvalPolicy) {
+      tool.require_approval = mapApprovalPolicy(server.approvalPolicy);
+    }
+    return tool;
+  });
+}
+var MAX_RECONNECT_RETRIES = 3;
 function buildOpenAIClient(config) {
   if (!("awsRegion" in config) || !config.awsRegion) {
     return new OpenAI({ apiKey: config.apiKey });
@@ -832,6 +828,9 @@ function createOpenAIProvider(config) {
 
 export {
   openaiTransformer,
+  mapError,
+  ResponseAccumulator,
+  mapEvent,
   createOpenAIProvider
 };
-//# sourceMappingURL=chunk-75EWVV4W.js.map
+//# sourceMappingURL=chunk-2IUFEPVP.js.map

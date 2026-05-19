@@ -612,7 +612,7 @@ var AnthropicVault = class {
   }
 };
 
-// src/anthropic/anthropic.provider.ts
+// src/anthropic/anthropic-parser.ts
 function mapStopReason(reason) {
   switch (reason.type) {
     case "end_turn":
@@ -630,56 +630,6 @@ function mapSessionError(raw) {
   const msg = obj?.message ?? String(raw);
   const isAuth = obj?.type === "authentication_error";
   return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
-}
-function mapStreamError(err, sessionId) {
-  if (err instanceof import_sdk.APIUserAbortError) {
-    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
-  }
-  if (sessionId && err instanceof import_sdk.APIError) {
-    const status = err.status;
-    if (status === 404 || status === 410) {
-      return new SessionExpiredError(
-        `Session ${sessionId} has expired or been archived`,
-        { provider: ANTHROPIC, sessionId, cause: err }
-      );
-    }
-  }
-  if (err instanceof ThalamusError) return err;
-  return new ThalamusError(String(err), {
-    provider: ANTHROPIC,
-    isRetryable: false,
-    cause: err
-  });
-}
-function isTransientStreamError(err, signal) {
-  if (signal?.aborted) return false;
-  if (err instanceof import_sdk.APIUserAbortError) return false;
-  if (err instanceof ThalamusError) return false;
-  return true;
-}
-function buildSendEvents(params) {
-  if (params.toolResults?.length) {
-    return params.toolResults.map(toSessionEvent);
-  }
-  const event = {
-    type: "user.message",
-    content: params.messages.flatMap((msg) => toContentBlocks(msg.content))
-  };
-  return [event];
-}
-function toSessionEvent(tr) {
-  if (tr.approved !== void 0) {
-    return {
-      type: "user.tool_confirmation",
-      tool_use_id: tr.toolUseId,
-      result: tr.approved ? "allow" : "deny"
-    };
-  }
-  return {
-    type: "user.custom_tool_result",
-    custom_tool_use_id: tr.toolUseId,
-    content: [{ type: "text", text: tr.output ?? "" }]
-  };
 }
 var ResponseAccumulator = class {
   content = "";
@@ -699,7 +649,6 @@ var ResponseAccumulator = class {
 };
 function* mapEvent(event, acc) {
   switch (event.type) {
-    // --- text streaming ---
     case "agent.message": {
       const e = event;
       for (const block of e.content) {
@@ -710,12 +659,10 @@ function* mapEvent(event, acc) {
       }
       break;
     }
-    // --- reasoning / thinking ---
     case "agent.thinking": {
       yield { type: "thinking", text: "" };
       break;
     }
-    // --- tool calls ---
     case "agent.tool_use": {
       const e = event;
       yield {
@@ -777,7 +724,6 @@ function* mapEvent(event, acc) {
       acc.finishReason = "requires-action";
       break;
     }
-    // --- lifecycle ---
     case "session.status_running": {
       yield { type: "status-change", status: "running" };
       break;
@@ -799,12 +745,10 @@ function* mapEvent(event, acc) {
         isRetryable: false
       });
     }
-    // --- error ---
     case "session.error": {
       const e = event;
       throw mapSessionError(e.error);
     }
-    // --- usage ---
     case "span.model_request_end": {
       const e = event;
       if (e.model_usage) {
@@ -816,7 +760,6 @@ function* mapEvent(event, acc) {
       }
       break;
     }
-    // --- escape hatch for everything else ---
     default: {
       yield {
         type: "provider-event",
@@ -827,6 +770,58 @@ function* mapEvent(event, acc) {
       break;
     }
   }
+}
+
+// src/anthropic/anthropic.provider.ts
+function mapStreamError(err, sessionId) {
+  if (err instanceof import_sdk.APIUserAbortError) {
+    return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
+  }
+  if (sessionId && err instanceof import_sdk.APIError) {
+    const status = err.status;
+    if (status === 404 || status === 410) {
+      return new SessionExpiredError(
+        `Session ${sessionId} has expired or been archived`,
+        { provider: ANTHROPIC, sessionId, cause: err }
+      );
+    }
+  }
+  if (err instanceof ThalamusError) return err;
+  return new ThalamusError(String(err), {
+    provider: ANTHROPIC,
+    isRetryable: false,
+    cause: err
+  });
+}
+function isTransientStreamError(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof import_sdk.APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  return true;
+}
+function buildSendEvents(params) {
+  if (params.toolResults?.length) {
+    return params.toolResults.map(toSessionEvent);
+  }
+  const event = {
+    type: "user.message",
+    content: params.messages.flatMap((msg) => toContentBlocks(msg.content))
+  };
+  return [event];
+}
+function toSessionEvent(tr) {
+  if (tr.approved !== void 0) {
+    return {
+      type: "user.tool_confirmation",
+      tool_use_id: tr.toolUseId,
+      result: tr.approved ? "allow" : "deny"
+    };
+  }
+  return {
+    type: "user.custom_tool_result",
+    custom_tool_use_id: tr.toolUseId,
+    content: [{ type: "text", text: tr.output ?? "" }]
+  };
 }
 async function createClient(config) {
   if ("awsRegion" in config && config.awsRegion) {
@@ -1166,7 +1161,7 @@ function createAnthropicProvider(config) {
 }
 
 // src/openai/openai.provider.ts
-var import_openai = __toESM(require("openai"), 1);
+var import_openai2 = __toESM(require("openai"), 1);
 
 // src/openai/openai.transformer.ts
 var openaiTransformer = {
@@ -1204,66 +1199,8 @@ var openaiTransformer = {
   }
 };
 
-// src/openai/sigv4-fetch.ts
-function createSigV4Fetch(options) {
-  const { region, credentials } = options;
-  return async (input, init) => {
-    let SignatureV4;
-    let Sha256;
-    try {
-      SignatureV4 = (await import(
-        /* webpackIgnore: true */
-        "@smithy/signature-v4"
-      )).SignatureV4;
-      Sha256 = (await import(
-        /* webpackIgnore: true */
-        "@aws-crypto/sha256-js"
-      )).Sha256;
-    } catch {
-      throw new Error(
-        "SigV4 auth requires @smithy/signature-v4 and @aws-crypto/sha256-js. Install them: pnpm add @smithy/signature-v4 @aws-crypto/sha256-js"
-      );
-    }
-    const signer = new SignatureV4({
-      service: "bedrock",
-      region,
-      credentials,
-      sha256: Sha256
-    });
-    const url = new URL(
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-    );
-    const body = init?.body ? String(init.body) : void 0;
-    const headers = {};
-    if (init?.headers) {
-      const h = init.headers;
-      if (h instanceof Headers) {
-        h.forEach((v, k) => {
-          headers[k] = v;
-        });
-      } else if (Array.isArray(h)) {
-        for (const [k, v] of h) headers[k] = v;
-      } else {
-        Object.assign(headers, h);
-      }
-    }
-    const signed = await signer.sign({
-      method: init?.method ?? "GET",
-      protocol: url.protocol,
-      hostname: url.hostname,
-      port: url.port ? Number(url.port) : void 0,
-      path: url.pathname + url.search,
-      headers: { ...headers, host: url.host },
-      body
-    });
-    return globalThis.fetch(input, {
-      ...init,
-      headers: signed.headers
-    });
-  };
-}
-
-// src/openai/openai.provider.ts
+// src/openai/openai-parser.ts
+var import_openai = require("openai");
 function isResponseErrorEvent(e) {
   return typeof e === "object" && e !== null && "type" in e && e.type === "error" && "code" in e;
 }
@@ -1284,42 +1221,6 @@ function mapError(error, provider) {
   }
   return new ProviderResponseError(msg, { provider, cause: error });
 }
-function isTransientStreamError2(err, signal) {
-  if (signal?.aborted) return false;
-  if (err instanceof import_openai.APIUserAbortError) return false;
-  if (err instanceof ThalamusError) return false;
-  if (err instanceof import_openai.APIError && err.status >= 400 && err.status < 500) {
-    return false;
-  }
-  return true;
-}
-function mapApprovalPolicy(policy) {
-  if (!policy || typeof policy === "string") return policy;
-  return { never: { tool_names: policy.except } };
-}
-function toMcpTools(servers, credentials) {
-  return servers.map((server) => {
-    const tool = {
-      type: "mcp",
-      server_label: server.name,
-      server_url: server.url
-    };
-    const cred = credentials?.get(server.name);
-    if (cred) {
-      tool.authorization = cred.type === "bearer" ? cred.token : cred.accessToken;
-    } else if (server.authorization) {
-      tool.authorization = server.authorization;
-    }
-    if (server.allowedTools) {
-      tool.allowed_tools = server.allowedTools;
-    }
-    if (server.approvalPolicy) {
-      tool.require_approval = mapApprovalPolicy(server.approvalPolicy);
-    }
-    return tool;
-  });
-}
-var MAX_RECONNECT_RETRIES2 = 3;
 var ResponseAccumulator2 = class {
   content = "";
   sessionId;
@@ -1339,7 +1240,6 @@ var ResponseAccumulator2 = class {
 };
 function* mapEvent2(event, acc) {
   switch (event.type) {
-    // --- lifecycle ---
     case "response.created": {
       acc.sessionId = event.response.id;
       acc.conversationId = event.response.conversation?.id;
@@ -1377,24 +1277,20 @@ function* mapEvent2(event, acc) {
       acc.finishReason = "length";
       break;
     }
-    // --- text streaming ---
     case "response.output_text.delta": {
       acc.content += event.delta;
       yield { type: "text-delta", text: event.delta };
       break;
     }
-    // --- refusal ---
     case "response.refusal.delta": {
       acc.finishReason = "refused";
       yield { type: "refusal", text: event.delta };
       break;
     }
-    // --- reasoning / thinking ---
     case "response.reasoning_summary_text.delta": {
       yield { type: "thinking", text: event.delta };
       break;
     }
-    // --- function / tool calls ---
     case "response.output_item.added": {
       const e = event;
       if (e.item.type === "function_call") {
@@ -1481,11 +1377,9 @@ function* mapEvent2(event, acc) {
       }
       break;
     }
-    // --- error ---
     case "error": {
       throw mapError(event, OPENAI);
     }
-    // --- escape hatch for everything else ---
     default: {
       yield {
         type: "provider-event",
@@ -1497,16 +1391,113 @@ function* mapEvent2(event, acc) {
     }
   }
 }
+
+// src/openai/sigv4-fetch.ts
+function createSigV4Fetch(options) {
+  const { region, credentials } = options;
+  return async (input, init) => {
+    let SignatureV4;
+    let Sha256;
+    try {
+      SignatureV4 = (await import(
+        /* webpackIgnore: true */
+        "@smithy/signature-v4"
+      )).SignatureV4;
+      Sha256 = (await import(
+        /* webpackIgnore: true */
+        "@aws-crypto/sha256-js"
+      )).Sha256;
+    } catch {
+      throw new Error(
+        "SigV4 auth requires @smithy/signature-v4 and @aws-crypto/sha256-js. Install them: pnpm add @smithy/signature-v4 @aws-crypto/sha256-js"
+      );
+    }
+    const signer = new SignatureV4({
+      service: "bedrock",
+      region,
+      credentials,
+      sha256: Sha256
+    });
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+    );
+    const body = init?.body ? String(init.body) : void 0;
+    const headers = {};
+    if (init?.headers) {
+      const h = init.headers;
+      if (h instanceof Headers) {
+        h.forEach((v, k) => {
+          headers[k] = v;
+        });
+      } else if (Array.isArray(h)) {
+        for (const [k, v] of h) headers[k] = v;
+      } else {
+        Object.assign(headers, h);
+      }
+    }
+    const signed = await signer.sign({
+      method: init?.method ?? "GET",
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port ? Number(url.port) : void 0,
+      path: url.pathname + url.search,
+      headers: { ...headers, host: url.host },
+      body
+    });
+    return globalThis.fetch(input, {
+      ...init,
+      headers: signed.headers
+    });
+  };
+}
+
+// src/openai/openai.provider.ts
+function isTransientStreamError2(err, signal) {
+  if (signal?.aborted) return false;
+  if (err instanceof import_openai2.APIUserAbortError) return false;
+  if (err instanceof ThalamusError) return false;
+  if (err instanceof import_openai2.APIError && err.status >= 400 && err.status < 500) {
+    return false;
+  }
+  return true;
+}
+function mapApprovalPolicy(policy) {
+  if (!policy || typeof policy === "string") return policy;
+  return { never: { tool_names: policy.except } };
+}
+function toMcpTools(servers, credentials) {
+  return servers.map((server) => {
+    const tool = {
+      type: "mcp",
+      server_label: server.name,
+      server_url: server.url
+    };
+    const cred = credentials?.get(server.name);
+    if (cred) {
+      tool.authorization = cred.type === "bearer" ? cred.token : cred.accessToken;
+    } else if (server.authorization) {
+      tool.authorization = server.authorization;
+    }
+    if (server.allowedTools) {
+      tool.allowed_tools = server.allowedTools;
+    }
+    if (server.approvalPolicy) {
+      tool.require_approval = mapApprovalPolicy(server.approvalPolicy);
+    }
+    return tool;
+  });
+}
+var MAX_RECONNECT_RETRIES2 = 3;
 function buildOpenAIClient(config) {
   if (!("awsRegion" in config) || !config.awsRegion) {
-    return new import_openai.default({ apiKey: config.apiKey });
+    return new import_openai2.default({ apiKey: config.apiKey });
   }
   const baseURL = `https://bedrock-mantle.${config.awsRegion}.api.aws/v1`;
   if ("awsBedrockApiKey" in config && config.awsBedrockApiKey) {
-    return new import_openai.default({ baseURL, apiKey: config.awsBedrockApiKey });
+    return new import_openai2.default({ baseURL, apiKey: config.awsBedrockApiKey });
   }
   if ("awsCredentials" in config && config.awsCredentials) {
-    return new import_openai.default({
+    return new import_openai2.default({
       baseURL,
       apiKey: "bedrock-sigv4",
       fetch: createSigV4Fetch({
@@ -1515,7 +1506,7 @@ function buildOpenAIClient(config) {
       })
     });
   }
-  return new import_openai.default({ baseURL, apiKey: "bedrock" });
+  return new import_openai2.default({ baseURL, apiKey: "bedrock" });
 }
 var OpenAIProvider = class {
   provider = OPENAI;

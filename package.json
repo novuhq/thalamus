@@ -1,7 +1,10 @@
 {
   "name": "@novu/thalamus",
   "packageManager": "pnpm@8.15.8",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.2",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Provider-agnostic managed AI agent runtime for Novu",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -13,29 +16,29 @@
   ],
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     },
     "./anthropic": {
-      "import": "./dist/anthropic/index.mjs",
-      "require": "./dist/anthropic/index.cjs",
-      "types": "./dist/anthropic/index.d.ts"
+      "types": "./dist/anthropic/index.d.ts",
+      "import": "./dist/anthropic/index.js",
+      "require": "./dist/anthropic/index.cjs"
     },
     "./openai": {
-      "import": "./dist/openai/index.mjs",
-      "require": "./dist/openai/index.cjs",
-      "types": "./dist/openai/index.d.ts"
+      "types": "./dist/openai/index.d.ts",
+      "import": "./dist/openai/index.js",
+      "require": "./dist/openai/index.cjs"
     },
     "./vault": {
-      "import": "./dist/vault/index.mjs",
-      "require": "./dist/vault/index.cjs",
-      "types": "./dist/vault/index.d.ts"
+      "types": "./dist/vault/index.d.ts",
+      "import": "./dist/vault/index.js",
+      "require": "./dist/vault/index.cjs"
     },
     "./durable": {
-      "import": "./dist/durable/index.mjs",
-      "require": "./dist/durable/index.cjs",
-      "types": "./dist/durable/index.d.ts"
+      "types": "./dist/durable/index.d.ts",
+      "import": "./dist/durable/index.js",
+      "require": "./dist/durable/index.cjs"
     }
   },
   "scripts": {

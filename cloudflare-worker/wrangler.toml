@@ -20,10 +20,10 @@ required = ["API_KEY"]
 name = "SESSION_OBSERVER"
 class_name = "SessionObserver"
 
-[[durable_objects.bindings]]
-name = "SESSION_REGISTRY"
-class_name = "SessionRegistry"
-
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["SessionObserver", "SessionRegistry"]
+new_sqlite_classes = ["SessionObserver"]
+
+[[migrations]]
+tag = "v2"
+deleted_classes = ["SessionRegistry"]

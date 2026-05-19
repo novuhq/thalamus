@@ -1,7 +1,7 @@
 {
   "name": "@novu/thalamus-cloudflare",
   "version": "0.1.0",
-  "description": "Cloudflare Worker — durable session observer with SSE relay and checkpoint store",
+  "description": "Cloudflare Worker — durable session observer with webhook delivery",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -13,6 +13,7 @@
     "wrangler": "^4.14.0"
   },
   "dependencies": {
+    "@novu/thalamus": "^0.1.0-alpha.2",
     "agents": "^0.12.4",
     "eventsource-parser": "^3.0.8"
   }

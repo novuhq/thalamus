@@ -320,32 +320,67 @@ const backend = redis(redisClient, { key: 'myapp:sessions' }); // custom hash ke
 Instead of holding the SSE connection in your Node.js process, the edge observer offloads it to a Cloudflare Worker. The Worker maintains a Durable Object per session that:
 
 - Opens the SSE connection to the AI provider on behalf of your app
-- Buffers events when no consumer is connected (crash survival)
-- Relays events over WebSocket to your app in real-time
-- Survives DO eviction via `runFiber()` (Cloudflare Agents SDK)
+- Persists every event to SQLite (survives crashes and DO evictions)
+- Delivers events to your webhook endpoint with guaranteed at-least-once delivery
+- Retries with exponential backoff when your server is unavailable
+- Hibernates between retries (zero compute cost)
+- Reconstructs full response content for the `finish` event from stored deltas
 
-Your Node.js process connects via WebSocket to receive events. If it crashes, events keep buffering in the DO. When any node restarts, it discovers active sessions via a `SessionRegistry` DO and reconnects — your `onSessionEvents` callbacks fire for all missed events.
-
-**Multi-node safety:** each Durable Object enforces single-consumer — if a node is already connected and consuming events, other nodes that try to recover the same session are rejected. This prevents duplicate processing without locks, TTLs, or coordination logic.
+Your app just needs a webhook endpoint. If it crashes and restarts, the Worker keeps retrying delivery — no reconnection logic, no state to restore.
 
 ```typescript
 import { cloudflare } from '@novu/thalamus/durable';
+import { createWebhookHandler } from '@novu/thalamus/webhook';
 
-const provider = createOpenAIProvider({
-  apiKey: process.env.OPENAI_API_KEY,
-  model: 'gpt-4o',
+// --- Provider setup (sends message, returns sessionId) ---
+
+const provider = createAnthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  agentId: 'agent_01J...',
+  environmentId: 'env_01J...',
   durable: cloudflare({
     url: 'https://session-observer.your-domain.workers.dev',
     apiKey: process.env.OBSERVER_API_KEY,
+    webhook: {
+      url: 'https://your-app.com/webhook',
+      secret: process.env.WEBHOOK_SECRET,
+    },
   }),
-  onSessionEvents: (sessionId) => ({
-    onTextDelta: ({ text }) => pushToClient(sessionId, text),
-    onFinish: ({ response }) => saveResponse(sessionId, response),
-  }),
+});
+
+// In webhook mode, send() returns a sessionId (not a Response)
+const sessionId = await provider.send({
+  messages: [{ role: MessageRole.USER, content: 'Hello' }],
 });
 ```
 
-The companion Worker lives in `cloudflare-worker/`. Deploy it with `wrangler deploy`.
+```typescript
+// --- Webhook receiver (your Express/Node HTTP server) ---
+
+const handler = createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+  onSessionEvents: (sessionId, metadata) => ({
+    onPart(part) {
+      switch (part.type) {
+        case 'text-delta':
+          pushToClient(sessionId, part.text);
+          break;
+        case 'finish':
+          saveResponse(sessionId, part.response);
+          break;
+      }
+    },
+  }),
+});
+
+app.post('/webhook', (req, res) => handler.express(req, res));
+```
+
+**Type safety:** When `durable` is configured with a `webhook`, TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`). Without `durable`, it returns `SendResult` as before — no runtime checks needed.
+
+**Multi-node safe:** Your webhook handler is stateless — it receives events and processes them. No in-memory session state, no consumer locks, works behind any load balancer.
+
+The companion Worker lives in `cloudflare-worker/`. See its [README](cloudflare-worker/README.md) for deployment, lifecycle diagrams, and observability.
 
 ### Custom backend
 
@@ -400,6 +435,7 @@ try {
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
 | `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver |
 
 Tree-shakeable — install and import only the provider you use. Zero runtime dependencies; only peer deps for the provider SDKs.
 

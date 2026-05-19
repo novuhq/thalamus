@@ -1,11 +1,11 @@
-import type { StreamPart } from "@novu/thalamus";
+import type { StreamPart, Response as ThalamusResponse } from "@novu/thalamus";
 import {
-  AnthropicResponseAccumulator as AnthropicAccumulator,
+  AnthropicResponseAccumulator,
   mapAnthropicEvent,
 } from "@novu/thalamus/anthropic";
 import {
   mapOpenAIEvent,
-  OpenAIResponseAccumulator as OpenAIAccumulator,
+  OpenAIResponseAccumulator,
 } from "@novu/thalamus/openai";
 import {
   Agent,
@@ -17,6 +17,32 @@ import {
   type EventSourceMessage,
   EventSourceParserStream,
 } from "eventsource-parser/stream";
+
+/* ------------------------------------------------------------------ */
+/*  Provider registry                                                   */
+/* ------------------------------------------------------------------ */
+
+interface ProviderParser<TAcc = unknown> {
+  createAccumulator(): TAcc;
+  mapEvent(raw: unknown, acc: TAcc): Generator<StreamPart>;
+  buildFinish(acc: TAcc, sessionId: string): ThalamusResponse;
+}
+
+const providers: Record<string, ProviderParser> = {
+  anthropic: {
+    createAccumulator: () => new AnthropicResponseAccumulator(),
+    mapEvent: (raw, acc) =>
+      mapAnthropicEvent(raw as any, acc as AnthropicResponseAccumulator),
+    buildFinish: (acc, sessionId) =>
+      (acc as AnthropicResponseAccumulator).toResponse(sessionId),
+  },
+  openai: {
+    createAccumulator: () => new OpenAIResponseAccumulator(),
+    mapEvent: (raw, acc) =>
+      mapOpenAIEvent(raw as any, acc as OpenAIResponseAccumulator),
+    buildFinish: (acc) => (acc as OpenAIResponseAccumulator).toResponse(),
+  },
+};
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -32,7 +58,7 @@ export interface ObservationParams {
   streamUrl: string;
   headers: Record<string, string>;
   lastEventId?: string;
-  provider: "anthropic" | "openai";
+  provider: string;
   webhook: {
     url: string;
     secret: string;
@@ -50,6 +76,8 @@ type EventRow = {
   created_at: number;
   [key: string]: SqlStorageValue;
 };
+
+type DeliveryOutcome = "delivered" | "skipped" | "exhausted";
 
 type ObservationStatus = "active" | "completed" | "error";
 
@@ -144,6 +172,11 @@ export class SessionObserver extends Agent<Env, State> {
     fiberCtx: { stash(data: unknown): void },
     signal: AbortSignal,
   ): Promise<void> {
+    const parser = providers[params.provider];
+    if (!parser) {
+      throw new Error(`Unsupported provider: ${params.provider}`);
+    }
+
     const fetchHeaders: Record<string, string> = {
       ...params.headers,
       Accept: "text/event-stream",
@@ -159,9 +192,10 @@ export class SessionObserver extends Agent<Env, State> {
     });
 
     if (!response.ok || !response.body) {
-      if (this.state.observation) {
-        this.updateObservation({ ...this.state.observation, status: "error" });
-      }
+      this.updateObservation({
+        ...(this.state.observation ?? params),
+        status: "error",
+      });
       throw new Error(`SSE connection failed: ${response.status}`);
     }
 
@@ -169,7 +203,7 @@ export class SessionObserver extends Agent<Env, State> {
       .pipeThrough(new TextDecoderStream())
       .pipeThrough(new EventSourceParserStream());
 
-    const accumulator = this.createAccumulator(params.provider);
+    const accumulator = parser.createAccumulator();
     let sequence = this.getNextSequence(params.sessionId);
 
     for await (const sseEvent of eventStream) {
@@ -179,12 +213,8 @@ export class SessionObserver extends Agent<Env, State> {
         fiberCtx.stash({ ...params, lastEventId: sseEvent.id });
       }
 
-      const streamParts = this.parseSSEEvent(
-        sseEvent,
-        params.provider,
-        accumulator,
-      );
-      for (const part of streamParts) {
+      const parts = this.parseSSEEvent(sseEvent, parser, accumulator);
+      for (const part of parts) {
         this.persistEvent(params.sessionId, sequence++, part);
       }
 
@@ -192,8 +222,11 @@ export class SessionObserver extends Agent<Env, State> {
     }
 
     if (!signal.aborted) {
-      const finishEvent = this.buildFinishEvent(params, accumulator);
-      this.persistEvent(params.sessionId, sequence++, finishEvent);
+      const finish: StreamPart = {
+        type: "finish",
+        response: parser.buildFinish(accumulator, params.sessionId),
+      };
+      this.persistEvent(params.sessionId, sequence++, finish);
       this.triggerDelivery(params);
       this.updateObservation({
         ...this.state.observation!,
@@ -204,8 +237,8 @@ export class SessionObserver extends Agent<Env, State> {
 
   private parseSSEEvent(
     sseEvent: EventSourceMessage,
-    provider: "anthropic" | "openai",
-    accumulator: AnthropicAccumulator | OpenAIAccumulator,
+    parser: ProviderParser,
+    accumulator: unknown,
   ): StreamPart[] {
     if (!sseEvent.data) return [];
 
@@ -218,20 +251,8 @@ export class SessionObserver extends Agent<Env, State> {
 
     const parts: StreamPart[] = [];
     try {
-      if (provider === "anthropic") {
-        for (const part of mapAnthropicEvent(
-          parsed as any,
-          accumulator as AnthropicAccumulator,
-        )) {
-          parts.push(part);
-        }
-      } else {
-        for (const part of mapOpenAIEvent(
-          parsed as any,
-          accumulator as OpenAIAccumulator,
-        )) {
-          parts.push(part);
-        }
+      for (const part of parser.mapEvent(parsed, accumulator)) {
+        parts.push(part);
       }
     } catch (err) {
       parts.push({
@@ -240,22 +261,6 @@ export class SessionObserver extends Agent<Env, State> {
       });
     }
     return parts;
-  }
-
-  private buildFinishEvent(
-    params: ObservationParams,
-    accumulator: AnthropicAccumulator | OpenAIAccumulator,
-  ): StreamPart {
-    if (accumulator instanceof AnthropicAccumulator) {
-      return {
-        type: "finish",
-        response: accumulator.toResponse(params.sessionId),
-      };
-    }
-    return {
-      type: "finish",
-      response: (accumulator as OpenAIAccumulator).toResponse(),
-    };
   }
 
   /* ---------- SQLite event queue ---------- */
@@ -344,38 +349,36 @@ export class SessionObserver extends Agent<Env, State> {
   }
 
   private async deliverPending(params: ObservationParams): Promise<void> {
-    const { sessionId, webhook } = params;
+    const { sessionId } = params;
 
     while (true) {
       const pending = this.getPendingEvents(sessionId);
       if (pending.length === 0) break;
 
-      for (const row of pending) {
-        const event = JSON.parse(row.event_json) as StreamPart;
-        const delivered = await this.deliverWithRetry(row, event, params);
+      const row = pending[0];
+      const event = JSON.parse(row.event_json) as StreamPart;
+      const outcome = await this.deliverWithRetry(row, event, params);
 
-        if (delivered) {
+      switch (outcome) {
+        case "delivered":
+        case "skipped":
           this.deleteEvent(row.id);
-        } else {
-          // Max retries exhausted or permanent failure
+          if (
+            (event.type === "finish" || event.type === "error") &&
+            outcome === "delivered"
+          ) {
+            this.cleanupEvents(sessionId);
+            return;
+          }
           break;
-        }
 
-        const isTerminal = event.type === "finish" || event.type === "error";
-        if (isTerminal && delivered) {
-          this.cleanupEvents(sessionId);
-          return;
-        }
+        case "exhausted":
+          this.markDead(row.id);
+          console.error(
+            `Event delivery exhausted: session=${sessionId} seq=${row.sequence} type=${event.type}`,
+          );
+          break;
       }
-
-      // If we broke out of the for-loop (delivery failed), stop
-      const stillPending = this.getPendingEvents(sessionId);
-      if (stillPending.length > 0 && stillPending[0].attempts >= MAX_ATTEMPTS) {
-        this.markDead(stillPending[0].id);
-        // Skip dead event, continue with next
-        continue;
-      }
-      if (stillPending.length > 0) break;
     }
   }
 
@@ -383,7 +386,7 @@ export class SessionObserver extends Agent<Env, State> {
     row: EventRow,
     event: StreamPart,
     params: ObservationParams,
-  ): Promise<boolean> {
+  ): Promise<DeliveryOutcome> {
     const { sessionId, provider, webhook } = params;
 
     const body = JSON.stringify({
@@ -414,17 +417,21 @@ export class SessionObserver extends Agent<Env, State> {
         });
 
         if (res.status >= 200 && res.status < 300) {
-          return true;
+          return "delivered";
         }
 
         if (res.status >= 400 && res.status < 500) {
+          console.warn(
+            `Webhook 4xx (permanent failure): session=${sessionId} seq=${row.sequence} status=${res.status}`,
+          );
           this.markFailed(row.id);
-          return true; // Skip this event (permanent failure)
+          return "skipped";
         }
-
-        // 5xx — retry
-      } catch {
-        // Network error — retry
+      } catch (err) {
+        console.warn(
+          `Webhook network error: session=${sessionId} seq=${row.sequence} attempt=${attempt + 1}`,
+          err,
+        );
       }
 
       if (attempt < MAX_ATTEMPTS - 1) {
@@ -433,7 +440,7 @@ export class SessionObserver extends Agent<Env, State> {
       }
     }
 
-    return false; // Exhausted retries
+    return "exhausted";
   }
 
   /* ---------- HMAC signature ---------- */
@@ -460,12 +467,6 @@ export class SessionObserver extends Agent<Env, State> {
   }
 
   /* ---------- Helpers ---------- */
-
-  private createAccumulator(provider: "anthropic" | "openai") {
-    return provider === "anthropic"
-      ? new AnthropicAccumulator()
-      : new OpenAIAccumulator();
-  }
 
   private updateObservation(
     obs: (ObservationParams & { status: ObservationStatus }) | null,
@@ -515,7 +516,8 @@ function validateObservationParams(body: unknown): body is ObservationParams {
   for (const val of Object.values(headers)) {
     if (typeof val !== "string") return false;
   }
-  if (obj.provider !== "anthropic" && obj.provider !== "openai") return false;
+  if (typeof obj.provider !== "string" || !providers[obj.provider])
+    return false;
   if (typeof obj.webhook !== "object" || obj.webhook === null) return false;
   const webhook = obj.webhook as Record<string, unknown>;
   if (typeof webhook.url !== "string") return false;

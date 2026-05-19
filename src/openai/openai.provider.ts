@@ -46,7 +46,15 @@ import { createSigV4Fetch } from "./sigv4-fetch";
 type OpenAIModule = typeof import("openai");
 let _sdk: OpenAIModule | undefined;
 async function loadSDK(): Promise<OpenAIModule> {
-  if (!_sdk) _sdk = await import("openai");
+  if (!_sdk) {
+    try {
+      _sdk = await import("openai");
+    } catch {
+      throw new Error(
+        "openai is required — install it with: npm install openai",
+      );
+    }
+  }
   return _sdk;
 }
 

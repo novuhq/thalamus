@@ -37,7 +37,15 @@ import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
 type AnthropicModule = typeof import("@anthropic-ai/sdk");
 let _sdk: AnthropicModule | undefined;
 async function loadSDK(): Promise<AnthropicModule> {
-  if (!_sdk) _sdk = await import("@anthropic-ai/sdk");
+  if (!_sdk) {
+    try {
+      _sdk = await import("@anthropic-ai/sdk");
+    } catch {
+      throw new Error(
+        "@anthropic-ai/sdk is required — install it with: npm install @anthropic-ai/sdk",
+      );
+    }
+  }
   return _sdk;
 }
 
@@ -127,7 +135,14 @@ async function createClient(
   const sdk = await loadSDK();
 
   if ("awsRegion" in config && config.awsRegion) {
-    const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
+    let AnthropicAws: typeof import("@anthropic-ai/aws-sdk").AnthropicAws;
+    try {
+      ({ AnthropicAws } = await import("@anthropic-ai/aws-sdk"));
+    } catch {
+      throw new Error(
+        "@anthropic-ai/aws-sdk is required for AWS — install it with: npm install @anthropic-ai/aws-sdk",
+      );
+    }
     return new AnthropicAws({
       awsRegion: config.awsRegion,
       workspaceId: config.awsWorkspaceId,

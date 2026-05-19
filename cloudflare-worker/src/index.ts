@@ -3,8 +3,8 @@ import type {
   Response as ThalamusResponse,
   Usage,
 } from "@novu/thalamus";
-import { mapAnthropicEvent } from "@novu/thalamus/anthropic";
-import { mapOpenAIEvent } from "@novu/thalamus/openai";
+import { mapAnthropicEvent } from "@novu/thalamus/anthropic/parser";
+import { mapOpenAIEvent } from "@novu/thalamus/openai/parser";
 import {
   Agent,
   type Connection,

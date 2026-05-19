@@ -27,45 +27,16 @@ vi.mock("openai", async (importOriginal) => {
 afterEach(() => vi.clearAllMocks());
 
 describe("Bedrock API Key auth — client config", () => {
-  it("passes bedrock-mantle baseURL and awsBedrockApiKey to OpenAI client", async () => {
-    mockResponsesCreate.mockReturnValue(
-      makeStream([
-        {
-          type: "response.created",
-          response: { id: "r1", conversation: null },
-        },
-        {
-          type: "response.completed",
-          response: { id: "r1", output_text: "", usage: {} },
-        },
-      ]),
-    );
-    await createOpenAIProvider(bedrockConfig).send({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
+  it("passes bedrock-mantle baseURL and awsBedrockApiKey to OpenAI client", () => {
+    createOpenAIProvider(bedrockConfig);
     expect(lastOpenAIConfig).toMatchObject({
       baseURL: "https://bedrock-mantle.us-east-1.api.aws/v1",
       apiKey: "bedrock-api-key-abc123",
     });
   });
 
-  it("does NOT set baseURL for direct OpenAI config", async () => {
-    mockConversationsCreate.mockResolvedValue({ id: "conv_1" });
-    mockResponsesCreate.mockReturnValue(
-      makeStream([
-        {
-          type: "response.created",
-          response: { id: "r1", conversation: { id: "conv_1" } },
-        },
-        {
-          type: "response.completed",
-          response: { id: "r1", output_text: "", usage: {} },
-        },
-      ]),
-    );
-    await createOpenAIProvider(config).send({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
+  it("does NOT set baseURL for direct OpenAI config", () => {
+    createOpenAIProvider(config);
     expect(lastOpenAIConfig?.apiKey).toBe("sk-test");
     expect(lastOpenAIConfig?.baseURL).toBeUndefined();
   });
@@ -104,22 +75,8 @@ describe("Bedrock API Key auth — streaming", () => {
 });
 
 describe("Bedrock SigV4 auth — client config", () => {
-  it("passes bedrock-mantle baseURL and custom fetch to OpenAI client", async () => {
-    mockResponsesCreate.mockReturnValue(
-      makeStream([
-        {
-          type: "response.created",
-          response: { id: "r1", conversation: null },
-        },
-        {
-          type: "response.completed",
-          response: { id: "r1", output_text: "", usage: {} },
-        },
-      ]),
-    );
-    await createOpenAIProvider(sigv4Config).send({
-      messages: [{ role: MessageRole.USER, content: "x" }],
-    });
+  it("passes bedrock-mantle baseURL and custom fetch to OpenAI client", () => {
+    createOpenAIProvider(sigv4Config);
     expect(lastOpenAIConfig?.baseURL).toBe(
       "https://bedrock-mantle.us-west-2.api.aws/v1",
     );

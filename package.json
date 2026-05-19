@@ -1,7 +1,7 @@
 {
   "name": "@novu/thalamus",
   "packageManager": "pnpm@8.15.8",
-  "version": "0.1.0-alpha.5",
+  "version": "0.1.0-alpha.6",
   "publishConfig": {
     "access": "public"
   },
@@ -19,8 +19,14 @@
       "anthropic": [
         "./dist/anthropic/index.d.ts"
       ],
+      "anthropic/parser": [
+        "./dist/anthropic/parser.d.ts"
+      ],
       "openai": [
         "./dist/openai/index.d.ts"
+      ],
+      "openai/parser": [
+        "./dist/openai/parser.d.ts"
       ],
       "vault": [
         "./dist/vault/index.d.ts"
@@ -44,10 +50,20 @@
       "import": "./dist/anthropic/index.js",
       "require": "./dist/anthropic/index.cjs"
     },
+    "./anthropic/parser": {
+      "types": "./dist/anthropic/parser.d.ts",
+      "import": "./dist/anthropic/parser.js",
+      "require": "./dist/anthropic/parser.cjs"
+    },
     "./openai": {
       "types": "./dist/openai/index.d.ts",
       "import": "./dist/openai/index.js",
       "require": "./dist/openai/index.cjs"
+    },
+    "./openai/parser": {
+      "types": "./dist/openai/parser.d.ts",
+      "import": "./dist/openai/parser.js",
+      "require": "./dist/openai/parser.cjs"
     },
     "./vault": {
       "types": "./dist/vault/index.d.ts",

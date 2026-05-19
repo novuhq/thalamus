@@ -1,6 +1,6 @@
 ---
 name: thalamus
-description: "Build with @novu/thalamus, a provider-agnostic runtime for managed AI agents. Use when code imports @novu/thalamus, creates AI providers (OpenAI, Anthropic), streams agent responses, manages sessions, configures MCP servers, handles vaults/credentials, or implements approval flows."
+description: "Build with @novu/thalamus, a provider-agnostic runtime for managed AI agents. Use when code imports @novu/thalamus, creates AI providers (OpenAI, Anthropic), streams agent responses, manages sessions, configures MCP servers, handles vaults/credentials, implements approval flows, or sets up durable sessions with webhooks."
 ---
 
 # @novu/thalamus
@@ -32,8 +32,14 @@ import { createOpenAIProvider } from '@novu/thalamus/openai';
 import { createAnthropicProvider } from '@novu/thalamus/anthropic';
 import { createMemoryVaultStore } from '@novu/thalamus/vault';
 
+// Durable backends
+import { redis, cloudflare } from '@novu/thalamus/durable';
+
+// Webhook handler (for edge observer mode)
+import { createWebhookHandler } from '@novu/thalamus/webhook';
+
 // Errors
-import { ThalamusError, ProviderRateLimitError, ProviderAuthError } from '@novu/thalamus';
+import { ThalamusError, ProviderRateLimitError, ProviderAuthError, AbortedError } from '@novu/thalamus';
 ```
 
 ## Creating Providers
@@ -45,9 +51,11 @@ const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',             // optional, defaults to 'gpt-4o'
   instructions: '...',          // optional system instructions
-  promptId: '...',              // optional, sets runtimeId
+  promptId: '...',              // optional OpenAI prompt template ID, sets runtimeId
   mcpServers: [...],            // optional MCP server configs
   vaultStore: createMemoryVaultStore(), // optional, required for vault ops
+  onSessionEvents: (sessionId) => ({ ... }), // optional streaming callbacks
+  durable: redis(redisClient),  // optional durability backend
 });
 ```
 
@@ -62,6 +70,8 @@ const provider = createOpenAIProvider({
 ```
 
 ### OpenAI via AWS Bedrock (SigV4)
+
+Requires additional peer deps: `@smithy/signature-v4` and `@aws-crypto/sha256-js`.
 
 ```typescript
 const provider = createOpenAIProvider({
@@ -82,6 +92,8 @@ const provider = createAnthropicProvider({
   apiKey: process.env.ANTHROPIC_API_KEY,
   agentId: 'agent_01J...',
   environmentId: 'env_01J...',
+  onSessionEvents: (sessionId) => ({ ... }), // optional
+  durable: redis(redisClient),               // optional
 });
 ```
 
@@ -104,13 +116,15 @@ Every provider implements this. All downstream code is provider-agnostic.
 interface Provider {
   readonly provider: string;    // 'openai' | 'anthropic'
   readonly runtimeId: string;
-  stream(params: RequestParams, callbacks?: StreamCallbacks): StreamResult;
+  send(params: RequestParams): SendResult;  // or Promise<string> in webhook mode
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
   endSession(sessionId: string): Promise<void>;
 }
 ```
+
+When `durable` is configured with an edge observer (Cloudflare + webhook), TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`) instead of `SendResult`.
 
 ## Messages
 
@@ -129,23 +143,20 @@ interface Message {
 // { type: 'file', data: string, mediaType: string, name?: string }
 ```
 
-## Streaming
+## send() and SendResult
 
-`stream()` returns a `StreamResult` that is `PromiseLike<Response>`.
+`send()` returns a `SendResult` — a `PromiseLike<Response>` that you can consume in several ways:
 
 ```typescript
 // Await for final response
-const response = await provider.stream({ messages });
+const response = await provider.send({ messages });
 
-// Stream with callbacks
-const response = await provider.stream({ messages }, {
-  onTextDelta: ({ text }) => process.stdout.write(text),
-  onToolUseDone: ({ toolName, input }) => console.log(toolName, input),
-  onFinish: ({ response }) => console.log(response.usage),
-});
+// Just the text
+const text = await provider.send({ messages }).text();
 
-// Just get the text
-const text = await provider.stream({ messages }).text();
+// Get the sessionId early (resolves before the stream finishes)
+const result = provider.send({ messages });
+const sessionId = await result.sessionId;
 ```
 
 ### RequestParams
@@ -157,8 +168,47 @@ interface RequestParams {
   vaultIds?: string[];          // bind vault credentials
   toolResults?: ToolResult[];   // approval responses or tool outputs
   providerOptions?: Record<string, unknown>; // pass-through to provider SDK
+  abortSignal?: AbortSignal;    // cancel the request
+  webhookMetadata?: Record<string, string>; // forwarded in webhook payloads
 }
 ```
+
+### providerOptions Pass-Through
+
+Forward arbitrary options to the underlying SDK call:
+
+```typescript
+await provider.send({
+  messages,
+  providerOptions: {
+    temperature: 0.5,
+    max_output_tokens: 4096,
+    reasoning: { effort: 'high' },
+  },
+});
+```
+
+## Streaming with Callbacks
+
+Callbacks are attached at **provider creation time** via `onSessionEvents`, not on individual `send()` calls. This is intentional — the same factory is used to re-attach callbacks when recovering durable sessions after a restart.
+
+```typescript
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-4o',
+  onSessionEvents: (sessionId) => ({
+    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+    onToolUseDone: ({ toolName }) => console.log(`used ${toolName}`),
+    onFinish: ({ response }) => saveResponse(sessionId, response),
+  }),
+});
+
+// When onSessionEvents is set, send() starts consuming immediately —
+// callbacks fire even if you never await the result.
+provider.send({ messages });
+```
+
+The factory receives the `sessionId` so you can route events to the right client connection.
 
 ### StreamPart types
 
@@ -218,14 +268,37 @@ interface Response {
 Pass `sessionId` from a previous response to continue a conversation:
 
 ```typescript
-const first = await provider.stream({
+const first = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'Remember: my name is Alice' }],
 });
 
-const second = await provider.stream({
+const second = await provider.send({
   sessionId: first.sessionId,
   messages: [{ role: MessageRole.USER, content: 'What is my name?' }],
 });
+```
+
+## AbortSignal
+
+Pass an `AbortSignal` to cancel long-running agent turns:
+
+```typescript
+const controller = new AbortController();
+
+const result = provider.send({
+  messages,
+  abortSignal: controller.signal,
+});
+
+controller.abort();
+
+try {
+  await result;
+} catch (err) {
+  if (err instanceof AbortedError) {
+    // err.sessionId is available when known
+  }
+}
 ```
 
 ## MCP Servers
@@ -248,20 +321,24 @@ const provider = createOpenAIProvider({
 
 ### Anthropic — MCP servers are configured in the Anthropic console at the environment level.
 
-### Detecting MCP vs builtin tools
+### Detecting tool source
 
 ```typescript
-provider.stream({ messages }, {
+onSessionEvents: (sessionId) => ({
   onToolUseDone: (part) => {
     if (part.source?.type === 'mcp') {
       console.log(`MCP tool from ${part.source.serverName}`);
+    } else if (part.source?.type === 'custom') {
+      console.log('Custom tool — you handle execution');
     }
   },
   onMcpToolsDiscovered: ({ serverName, tools }) => {
     console.log(`${serverName} offers: ${tools.map(t => t.name)}`);
   },
-});
+}),
 ```
+
+`ToolSource` is `{ type: 'builtin' }`, `{ type: 'custom' }`, or `{ type: 'mcp', serverName }`.
 
 ## Vault & Credentials
 
@@ -282,7 +359,7 @@ const provider = createOpenAIProvider({
 // Create vault, add credential, use it
 const vault = await provider.createVault({ name: 'Alice' });
 await vault.add('github', { type: 'bearer', token: 'ghp_xxx' });
-const response = await provider.stream({
+const response = await provider.send({
   messages: [...],
   vaultIds: [vault.id],
 });
@@ -319,10 +396,10 @@ interface VaultStore {
 
 ## Approval Flow (Human-in-the-Loop)
 
-When a tool requires approval, the stream finishes with `finishReason: 'requires-action'`:
+When a tool requires approval, the response finishes with `finishReason: 'requires-action'`:
 
 ```typescript
-const response = await provider.stream({ messages });
+const response = await provider.send({ messages });
 
 if (response.finishReason === 'requires-action') {
   // ActionRequired = { type: 'tool-confirmation' | 'mcp-approval', toolUseId, toolName, input? }
@@ -331,7 +408,7 @@ if (response.finishReason === 'requires-action') {
   }
 
   // Resume with approval
-  const resumed = await provider.stream({
+  const resumed = await provider.send({
     messages: [],
     sessionId: response.sessionId,
     toolResults: response.actionsRequired!.map(a => ({
@@ -345,7 +422,7 @@ if (response.finishReason === 'requires-action') {
 ### Sending custom tool results
 
 ```typescript
-const response = await provider.stream({
+const response = await provider.send({
   messages: [],
   sessionId: previousResponse.sessionId,
   toolResults: [{
@@ -355,6 +432,147 @@ const response = await provider.stream({
   }],
 });
 ```
+
+## Durable Sessions
+
+Agent sessions can run for minutes. The `durable` option on provider config enables persistence and recovery across connection drops and process restarts.
+
+Two kinds of backends:
+
+### Checkpoint backends (Redis)
+
+The SDK holds the SSE connection in your Node.js process. Events are checkpointed to Redis. On connection drops, it reconnects from the last checkpoint with up to 3 retries. On process restart, active sessions resume automatically.
+
+Requires `onSessionEvents` to be set so callbacks can be re-attached on recovery.
+
+```typescript
+import { redis } from '@novu/thalamus/durable';
+import { createOpenAIProvider } from '@novu/thalamus';
+import Redis from 'ioredis';
+
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-4o',
+  durable: redis(new Redis()),
+  onSessionEvents: (sessionId) => ({
+    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+    onFinish: ({ response }) => saveResponse(sessionId, response),
+  }),
+});
+
+// Custom hash key
+const backend = redis(redisClient, { key: 'myapp:sessions' });
+```
+
+### Edge observer (Cloudflare)
+
+Instead of holding the SSE connection in your Node.js process, offload it to a Cloudflare Worker. Your app just needs a webhook endpoint — no SSE connections, no reconnection logic.
+
+```typescript
+import { cloudflare } from '@novu/thalamus/durable';
+import { createWebhookHandler } from '@novu/thalamus/webhook';
+
+// Provider setup — send() returns sessionId (not Response) in webhook mode
+const provider = createAnthropicProvider({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  agentId: 'agent_01J...',
+  environmentId: 'env_01J...',
+  durable: cloudflare({
+    url: 'https://session-observer.your-domain.workers.dev',
+    apiKey: process.env.OBSERVER_API_KEY,
+    webhook: {
+      url: 'https://your-app.com/webhook',
+      secret: process.env.WEBHOOK_SECRET,
+    },
+  }),
+});
+
+// In webhook mode, send() returns Promise<string> (sessionId)
+const sessionId = await provider.send({
+  messages: [{ role: MessageRole.USER, content: 'Hello' }],
+  webhookMetadata: { userId: 'u_123' }, // forwarded in webhook payloads
+});
+```
+
+### Webhook handler
+
+Receives events from the Cloudflare edge observer. HMAC-verified.
+
+```typescript
+const handler = createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+  onSessionEvents: (sessionId, metadata) => ({
+    onPart(part) {
+      switch (part.type) {
+        case 'text-delta':
+          pushToClient(sessionId, part.text);
+          break;
+        case 'finish':
+          saveResponse(sessionId, part.response);
+          break;
+      }
+    },
+  }),
+});
+
+// Express / Node http
+app.post('/webhook', (req, res) => handler.express(req, res));
+
+// Web standard Request/Response (Cloudflare Workers, Bun, Deno, Next.js)
+export default { fetch: (req) => handler.handle(req) };
+```
+
+Note: the webhook `onSessionEvents` factory takes `(sessionId, metadata)` — `metadata` contains the `webhookMetadata` you passed in `send()`.
+
+### Custom durability backend
+
+Implement `DurabilityBackend` for checkpoint-based durability with any storage:
+
+```typescript
+interface DurabilityBackend {
+  save(checkpoint: SessionCheckpoint): Promise<void>;
+  remove(sessionId: string): Promise<void>;
+  getActive(): Promise<SessionCheckpoint[]>;
+}
+```
+
+## Cloudflare Worker Deployment
+
+The companion edge observer worker lives in `cloudflare-worker/`. It uses the Cloudflare Agents SDK with a Durable Object per session that:
+
+- Opens the SSE connection to the AI provider
+- Persists every event to SQLite
+- Delivers events to your webhook with at-least-once delivery
+- Retries with exponential backoff, hibernates between retries
+
+### Deploy
+
+```bash
+cd cloudflare-worker
+pnpm install
+npx wrangler secret put API_KEY    # set the auth key
+npx wrangler deploy
+```
+
+### Local development
+
+```bash
+cd cloudflare-worker
+pnpm install
+npx wrangler dev
+```
+
+The worker depends on `@novu/thalamus` as a workspace package (linked via `pnpm-workspace.yaml`). Changes to the main package are immediately reflected without publishing.
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/observe` | Start observing a session |
+| `DELETE` | `/observe/:sessionId` | Stop observation (pending events still deliver) |
+| `GET` | `/health` | Health check |
+
+These endpoints are called automatically by the SDK when using `cloudflare()` as a durable backend — you don't call them directly.
 
 ## Error Handling
 
@@ -367,17 +585,20 @@ All errors extend `ThalamusError` with `provider` and `isRetryable` fields.
 | `ProviderUnavailableError` | Yes | Provider temporarily down |
 | `ProviderResponseError` | No | Invalid response from provider |
 | `SessionExpiredError` | Yes | Session expired (has `sessionId`) |
+| `AbortedError` | No | Request cancelled via `AbortSignal` (has `sessionId?`) |
 | `VaultNotFoundError` | No | Vault doesn't exist (has `vaultId`) |
 | `CredentialExpiredError` | No | Credential expired, no refresh config |
 | `McpServerError` | 5xx only | MCP server error (has `serverName`, `statusCode?`) |
 
 ```typescript
-import { ThalamusError, ProviderRateLimitError } from '@novu/thalamus';
+import { ThalamusError, ProviderRateLimitError, AbortedError } from '@novu/thalamus';
 
 try {
-  await provider.stream({ messages });
+  await provider.send({ messages });
 } catch (err) {
-  if (err instanceof ProviderRateLimitError) {
+  if (err instanceof AbortedError) {
+    console.log('Cancelled, session:', err.sessionId);
+  } else if (err instanceof ProviderRateLimitError) {
     await sleep(err.retryAfterMs ?? 5000);
   } else if (err instanceof ThalamusError && err.isRetryable) {
     // generic retry
@@ -385,25 +606,23 @@ try {
 }
 ```
 
-## providerOptions Pass-Through
+## Package Subpaths
 
-Forward arbitrary options to the underlying SDK call:
-
-```typescript
-await provider.stream({
-  messages,
-  providerOptions: {
-    temperature: 0.5,
-    max_output_tokens: 4096,
-    reasoning: { effort: 'high' },
-  },
-});
-```
+| Subpath | Contents |
+|---|---|
+| `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore`, both providers |
+| `@novu/thalamus/anthropic` | `createAnthropicProvider` |
+| `@novu/thalamus/openai` | `createOpenAIProvider` |
+| `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver |
 
 ## Key Design Notes
 
-- `StreamResult` is `PromiseLike<Response>` — you can `await` it directly or call `.text()`.
-- `collectStream()` is deprecated — just `await` the stream result instead.
+- `SendResult` is `PromiseLike<Response>` — you can `await` it directly or call `.text()` / `.sessionId`.
+- Callbacks are set at **provider creation** via `onSessionEvents`, not per `send()` call. This ensures consistent callback re-attachment for durable session recovery.
+- When `onSessionEvents` is set, `send()` auto-starts consumption — callbacks fire even without `await`.
 - OpenAI sessions use the Conversations API when available; falls back to `previous_response_id` for Bedrock.
 - Anthropic sessions are server-managed; `createSession()` creates a real session, `endSession()` is a no-op.
 - `ToolSource` on tool events tells you origin: `{ type: 'builtin' }`, `{ type: 'custom' }`, or `{ type: 'mcp', serverName }`.
+- Zero runtime dependencies; only optional peer deps for provider SDKs.

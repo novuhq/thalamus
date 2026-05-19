@@ -119,18 +119,26 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-[durable_objects]
-bindings = [
-  { name = "SESSION_OBSERVER", class_name = "SessionObserver" }
-]
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[secrets]
+required = ["API_KEY"]
+
+[[durable_objects.bindings]]
+name = "SESSION_OBSERVER"
+class_name = "SessionObserver"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionObserver"]
-
-[vars]
-# Optional: set API_KEY to require Bearer auth on all endpoints
-# API_KEY = "your-secret"
 ```
 
 ## Deployment

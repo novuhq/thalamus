@@ -98,7 +98,7 @@ type EventRow = {
   [key: string]: SqlStorageValue;
 };
 
-type DeliveryOutcome = "delivered" | "skipped" | "exhausted";
+type DeliveryOutcome = "delivered" | "skipped" | "retry-later" | "exhausted";
 
 type ObservationStatus = "active" | "completed" | "error";
 
@@ -114,8 +114,9 @@ type State = {
 /*  HMAC signatures and exponential backoff retries.                   */
 /* ------------------------------------------------------------------ */
 
-const RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 const MAX_ATTEMPTS = 10;
+const BASE_DELAY_MS = 1000;
+const MAX_DELAY_MS = 60_000;
 
 export class SessionObserver extends Agent<Env, State> {
   initialState: State = { observation: null };
@@ -140,6 +141,17 @@ export class SessionObserver extends Agent<Env, State> {
     });
   }
 
+  /* ---------- Lifecycle ---------- */
+
+  async onStart(): Promise<void> {
+    const obs = this.state.observation;
+    if (!obs) return;
+    const pending = this.getPendingEvents(obs.sessionId);
+    if (pending.length > 0) {
+      this.triggerDelivery(obs);
+    }
+  }
+
   /* ---------- RPC: observation control ---------- */
 
   async startObserving(params: ObservationParams): Promise<void> {
@@ -159,9 +171,7 @@ export class SessionObserver extends Agent<Env, State> {
   async stopObserving(): Promise<void> {
     this.abortController?.abort();
     this.abortController = null;
-    const sessionId = this.state.observation?.sessionId;
     this.setState({ observation: null });
-    this.cleanupEvents(sessionId);
   }
 
   async getStatus(): Promise<string> {
@@ -394,7 +404,7 @@ export class SessionObserver extends Agent<Env, State> {
 
       const row = pending[0];
       const event = JSON.parse(row.event_json) as StreamPart;
-      const outcome = await this.deliverWithRetry(row, event, params);
+      const outcome = await this.deliverOne(row, event, params);
 
       switch (outcome) {
         case "delivered":
@@ -405,9 +415,14 @@ export class SessionObserver extends Agent<Env, State> {
             outcome === "delivered"
           ) {
             this.cleanupEvents(sessionId);
+            this.setState({ observation: null });
             return;
           }
           break;
+
+        case "retry-later":
+          this.scheduleRetry(params);
+          return;
 
         case "exhausted":
           this.markDead(row.id);
@@ -419,12 +434,16 @@ export class SessionObserver extends Agent<Env, State> {
     }
   }
 
-  private async deliverWithRetry(
+  private async deliverOne(
     row: EventRow,
     event: StreamPart,
     params: ObservationParams,
   ): Promise<DeliveryOutcome> {
     const { sessionId, provider, webhook } = params;
+
+    if (row.attempts >= MAX_ATTEMPTS) return "exhausted";
+
+    this.incrementAttempts(row.id);
 
     const body = JSON.stringify({
       sessionId,
@@ -435,49 +454,77 @@ export class SessionObserver extends Agent<Env, State> {
       event,
     });
 
-    for (let attempt = row.attempts; attempt < MAX_ATTEMPTS; attempt++) {
-      this.incrementAttempts(row.id);
+    const signature = await this.sign(body, webhook.secret, row.created_at);
 
-      const signature = await this.sign(body, webhook.secret, row.created_at);
+    try {
+      const res = await this.retry(
+        async () => {
+          const r = await fetch(webhook.url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Thalamus-Signature": signature,
+              "X-Thalamus-Event-Type": event.type,
+              "X-Thalamus-Session-Id": sessionId,
+              "X-Thalamus-Sequence": String(row.sequence),
+            },
+            body,
+          });
 
-      try {
-        const res = await fetch(webhook.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Thalamus-Signature": signature,
-            "X-Thalamus-Event-Type": event.type,
-            "X-Thalamus-Session-Id": sessionId,
-            "X-Thalamus-Sequence": String(row.sequence),
+          if (r.status >= 200 && r.status < 300) return r;
+          if (r.status >= 400 && r.status < 500) {
+            const err = new Error(`HTTP ${r.status}`) as Error & {
+              permanent: boolean;
+            };
+            err.permanent = true;
+            throw err;
+          }
+          throw new Error(`HTTP ${r.status}`);
+        },
+        {
+          maxAttempts: 3,
+          baseDelayMs: BASE_DELAY_MS,
+          maxDelayMs: MAX_DELAY_MS,
+          shouldRetry: (err) => {
+            return !(err && typeof err === "object" && "permanent" in err);
           },
-          body,
-        });
+        },
+      );
 
-        if (res.status >= 200 && res.status < 300) {
-          return "delivered";
-        }
-
-        if (res.status >= 400 && res.status < 500) {
-          console.warn(
-            `Webhook 4xx (permanent failure): session=${sessionId} seq=${row.sequence} status=${res.status}`,
-          );
-          this.markFailed(row.id);
-          return "skipped";
-        }
-      } catch (err) {
+      return "delivered";
+    } catch (err) {
+      if (err && typeof err === "object" && "permanent" in err) {
         console.warn(
-          `Webhook network error: session=${sessionId} seq=${row.sequence} attempt=${attempt + 1}`,
-          err,
+          `Webhook 4xx (permanent failure): session=${sessionId} seq=${row.sequence}`,
         );
+        this.markFailed(row.id);
+        return "skipped";
       }
 
-      if (attempt < MAX_ATTEMPTS - 1) {
-        const delay = RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];
-        await sleep(delay);
-      }
+      console.warn(
+        `Webhook delivery failed: session=${sessionId} seq=${row.sequence} attempts=${row.attempts}`,
+      );
+      return "retry-later";
     }
+  }
 
-    return "exhausted";
+  private scheduleRetry(params: ObservationParams): void {
+    const pending = this.getPendingEvents(params.sessionId);
+    if (pending.length === 0) return;
+
+    const attempt = pending[0].attempts;
+    const delaySec = Math.min(
+      (BASE_DELAY_MS * 2 ** attempt) / 1000,
+      MAX_DELAY_MS / 1000,
+    );
+
+    this.schedule(delaySec, "retryDelivery", params);
+  }
+
+  async retryDelivery(params: ObservationParams): Promise<void> {
+    const pending = this.getPendingEvents(params.sessionId);
+    if (pending.length === 0) return;
+    await this.deliverPending(params);
   }
 
   /* ---------- HMAC signature ---------- */
@@ -515,10 +562,6 @@ export class SessionObserver extends Agent<Env, State> {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 const encoder = new TextEncoder();
 const subtle = crypto.subtle as unknown as {

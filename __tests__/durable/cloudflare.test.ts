@@ -3,6 +3,11 @@ import { cloudflare } from "../../src/durable/cloudflare.js";
 
 const mockFetch = vi.fn<typeof globalThis.fetch>();
 
+const defaultOptions = {
+  url: "https://worker.example.com",
+  webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
+};
+
 beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
 });
@@ -11,16 +16,16 @@ afterEach(() => {
 });
 
 describe("cloudflare() edge observer", () => {
-  /* ---------- observe ---------- */
-
   it("observe sends POST /observe with params", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await backend.observe({
       sessionId: "sess_1",
       streamUrl: "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
       headers: { "x-api-key": "key" },
+      provider: "anthropic",
+      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -32,6 +37,8 @@ describe("cloudflare() edge observer", () => {
           streamUrl:
             "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
           headers: { "x-api-key": "key" },
+          provider: "anthropic",
+          webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
         }),
       }),
     );
@@ -40,14 +47,13 @@ describe("cloudflare() edge observer", () => {
   it("observe includes Authorization header when apiKey is set", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const backend = cloudflare({
-      url: "https://worker.example.com",
-      apiKey: "secret",
-    });
+    const backend = cloudflare({ ...defaultOptions, apiKey: "secret" });
     await backend.observe({
       sessionId: "sess_1",
       streamUrl: "https://example.com/sse",
       headers: {},
+      provider: "anthropic",
+      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -63,22 +69,22 @@ describe("cloudflare() edge observer", () => {
   it("observe throws on non-ok response", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 502 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await expect(
       backend.observe({
         sessionId: "sess_1",
         streamUrl: "https://example.com/sse",
         headers: {},
+        provider: "anthropic",
+        webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
       }),
     ).rejects.toThrow("cloudflare observe failed: 502");
   });
 
-  /* ---------- stop ---------- */
-
   it("stop sends DELETE /observe/:sessionId", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await backend.stop("sess_1");
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -90,14 +96,14 @@ describe("cloudflare() edge observer", () => {
   it("stop tolerates 404", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await expect(backend.stop("gone")).resolves.toBeUndefined();
   });
 
   it("stop throws on non-ok, non-404 response", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 500 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await expect(backend.stop("sess_1")).rejects.toThrow(
       "cloudflare stop failed: 500",
     );
@@ -106,7 +112,7 @@ describe("cloudflare() edge observer", () => {
   it("stop encodes sessionId in URL", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com" });
+    const backend = cloudflare(defaultOptions);
     await backend.stop("sess/with spaces");
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -118,11 +124,16 @@ describe("cloudflare() edge observer", () => {
   it("strips trailing slashes from base URL", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const backend = cloudflare({ url: "https://worker.example.com///" });
+    const backend = cloudflare({
+      ...defaultOptions,
+      url: "https://worker.example.com///",
+    });
     await backend.observe({
       sessionId: "sess_1",
       streamUrl: "https://example.com/sse",
       headers: {},
+      provider: "anthropic",
+      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -131,153 +142,11 @@ describe("cloudflare() edge observer", () => {
     );
   });
 
-  /* ---------- events (WebSocket) ---------- */
-
-  it("events() opens WebSocket with correct URL", async () => {
-    let constructedUrl = "";
-
-    class MockWebSocket {
-      private handlers: Record<string, Array<(data?: unknown) => void>> = {};
-      close = vi.fn();
-
-      constructor(url: string) {
-        constructedUrl = url;
-        setTimeout(() => this.fire("open"), 0);
-        setTimeout(() => this.fire("close"), 10);
-      }
-
-      addEventListener(event: string, handler: (data?: unknown) => void) {
-        const list = this.handlers[event] ?? [];
-        this.handlers[event] = list;
-        list.push(handler);
-      }
-
-      private fire(event: string, data?: unknown) {
-        for (const h of this.handlers[event] ?? []) h(data);
-      }
-    }
-
-    vi.stubGlobal("WebSocket", MockWebSocket);
-
-    const backend = cloudflare({ url: "https://worker.example.com" });
-    const iter = backend.events("sess_1")[Symbol.asyncIterator]();
-
-    const result = await iter.next();
-    expect(result.done).toBe(true);
-    expect(constructedUrl).toBe("wss://worker.example.com?sessionId=sess_1");
-  });
-
-  it("events() includes token param when apiKey is set", async () => {
-    let constructedUrl = "";
-
-    class MockWebSocket {
-      private handlers: Record<string, Array<(data?: unknown) => void>> = {};
-      close = vi.fn();
-
-      constructor(url: string) {
-        constructedUrl = url;
-        setTimeout(() => this.fire("open"), 0);
-        setTimeout(() => this.fire("close"), 10);
-      }
-
-      addEventListener(event: string, handler: (data?: unknown) => void) {
-        const list = this.handlers[event] ?? [];
-        this.handlers[event] = list;
-        list.push(handler);
-      }
-
-      private fire(event: string, data?: unknown) {
-        for (const h of this.handlers[event] ?? []) h(data);
-      }
-    }
-
-    vi.stubGlobal("WebSocket", MockWebSocket);
-
-    const backend = cloudflare({
-      url: "https://worker.example.com",
-      apiKey: "secret",
+  it("exposes webhook config from options", () => {
+    const backend = cloudflare(defaultOptions);
+    expect(backend.webhook).toEqual({
+      url: "https://myapp.com/webhook",
+      secret: "whsec_test",
     });
-    const iter = backend.events("sess_1")[Symbol.asyncIterator]();
-    await iter.next();
-
-    expect(constructedUrl).toBe(
-      "wss://worker.example.com?sessionId=sess_1&token=secret",
-    );
-  });
-
-  it("events() throws when WebSocket connection fails", async () => {
-    class MockWebSocket {
-      private handlers: Record<string, Array<(data?: unknown) => void>> = {};
-      close = vi.fn();
-
-      constructor() {
-        setTimeout(() => this.fire("error", new Event("error")), 0);
-      }
-
-      addEventListener(event: string, handler: (data?: unknown) => void) {
-        const list = this.handlers[event] ?? [];
-        this.handlers[event] = list;
-        list.push(handler);
-      }
-
-      private fire(event: string, data?: unknown) {
-        for (const h of this.handlers[event] ?? []) h(data);
-      }
-    }
-
-    vi.stubGlobal("WebSocket", MockWebSocket);
-
-    const backend = cloudflare({ url: "https://worker.example.com" });
-    const iter = backend.events("sess_1")[Symbol.asyncIterator]();
-
-    await expect(iter.next()).rejects.toThrow("WebSocket connection failed");
-  });
-
-  it("events() yields SSE frames from WebSocket messages", async () => {
-    class MockWebSocket {
-      private handlers: Record<string, Array<(data?: unknown) => void>> = {};
-      close = vi.fn();
-
-      constructor() {
-        setTimeout(() => this.fire("open"), 0);
-        setTimeout(() => {
-          this.fire("message", {
-            data: JSON.stringify({
-              event: "message",
-              id: "1",
-              data: '{"text":"hi"}',
-            }),
-          });
-          this.fire("message", {
-            data: JSON.stringify({ event: "done", id: "2", data: "{}" }),
-          });
-          this.fire("close");
-        }, 5);
-      }
-
-      addEventListener(event: string, handler: (data?: unknown) => void) {
-        const list = this.handlers[event] ?? [];
-        this.handlers[event] = list;
-        list.push(handler);
-      }
-
-      private fire(event: string, data?: unknown) {
-        for (const h of this.handlers[event] ?? []) h(data);
-      }
-    }
-
-    vi.stubGlobal("WebSocket", MockWebSocket);
-
-    const backend = cloudflare({ url: "https://worker.example.com" });
-    const frames: unknown[] = [];
-
-    for await (const frame of backend.events("sess_1")) {
-      frames.push(frame);
-    }
-
-    expect(frames).toEqual([
-      { event: "message", id: "1", data: '{"text":"hi"}' },
-      { event: "done", id: "2", data: "{}" },
-    ]);
   });
 });

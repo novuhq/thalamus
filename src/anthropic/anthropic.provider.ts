@@ -1,15 +1,6 @@
 import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 import type {
-  BetaManagedAgentsAgentCustomToolUseEvent,
-  BetaManagedAgentsAgentMCPToolResultEvent,
-  BetaManagedAgentsAgentMCPToolUseEvent,
-  BetaManagedAgentsAgentMessageEvent,
-  BetaManagedAgentsAgentToolResultEvent,
-  BetaManagedAgentsAgentToolUseEvent,
   BetaManagedAgentsEventParams,
-  BetaManagedAgentsSessionErrorEvent,
-  BetaManagedAgentsSessionStatusIdleEvent,
-  BetaManagedAgentsSpanModelRequestEndEvent,
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsUserCustomToolResultEventParams,
   BetaManagedAgentsUserMessageEventParams,
@@ -27,7 +18,6 @@ import {
 import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
 import { createSendResult } from "../send-result";
 import {
-  type ActionRequired,
   ANTHROPIC,
   type Provider,
   type RequestParams,
@@ -37,33 +27,11 @@ import {
   type SessionOptions,
   type StreamPart,
   type ToolResult,
-  type Usage,
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
-
-type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
-
-function mapStopReason(reason: StopReason): Response["finishReason"] {
-  switch (reason.type) {
-    case "end_turn":
-      return "stop";
-    case "requires_action":
-      return "requires-action";
-    case "retries_exhausted":
-      return "error";
-    default:
-      return "other";
-  }
-}
-
-function mapSessionError(raw: unknown): ThalamusError {
-  const obj = raw as { message?: string; type?: string } | null;
-  const msg = obj?.message ?? String(raw);
-  const isAuth = obj?.type === "authentication_error";
-  return new ThalamusError(msg, { provider: ANTHROPIC, isRetryable: !isAuth });
-}
+import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   if (err instanceof APIUserAbortError) {
@@ -133,165 +101,6 @@ function toSessionEvent(
     custom_tool_use_id: tr.toolUseId,
     content: [{ type: "text" as const, text: tr.output ?? "" }],
   };
-}
-
-class ResponseAccumulator {
-  content = "";
-  finishReason: Response["finishReason"] = "stop";
-  usage: Usage | undefined;
-  actionsRequired: ActionRequired[] = [];
-  done = false;
-
-  toResponse(sessionId: string): Response {
-    return {
-      content: this.content,
-      sessionId,
-      finishReason: this.finishReason,
-      usage: this.usage,
-      actionsRequired:
-        this.actionsRequired.length > 0 ? this.actionsRequired : undefined,
-    };
-  }
-}
-
-function* mapEvent(
-  event: BetaManagedAgentsStreamSessionEvents,
-  acc: ResponseAccumulator,
-): Generator<StreamPart> {
-  switch (event.type) {
-    // --- text streaming ---
-    case "agent.message": {
-      const e = event as BetaManagedAgentsAgentMessageEvent;
-      for (const block of e.content) {
-        if (block.type === "text") {
-          acc.content += block.text;
-          yield { type: "text-delta", text: block.text };
-        }
-      }
-      break;
-    }
-
-    // --- reasoning / thinking ---
-    case "agent.thinking": {
-      yield { type: "thinking", text: "" };
-      break;
-    }
-
-    // --- tool calls ---
-    case "agent.tool_use": {
-      const e = event as BetaManagedAgentsAgentToolUseEvent;
-      yield {
-        type: "tool-use-done",
-        toolName: e.name,
-        toolUseId: e.id,
-        input: e.input,
-        source: { type: "builtin" },
-      };
-      break;
-    }
-    case "agent.tool_result": {
-      const e = event as BetaManagedAgentsAgentToolResultEvent;
-      const output = e.content?.find((b) => b.type === "text");
-      yield {
-        type: "tool-use-result",
-        toolUseId: e.tool_use_id,
-        output: output?.type === "text" ? output.text : undefined,
-        source: { type: "builtin" },
-      };
-      break;
-    }
-    case "agent.mcp_tool_use": {
-      const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
-      yield {
-        type: "tool-use-done",
-        toolName: e.name,
-        toolUseId: e.id,
-        input: e.input,
-        source: {
-          type: "mcp",
-          serverName: e.mcp_server_name ?? "",
-        },
-      };
-      break;
-    }
-    case "agent.mcp_tool_result": {
-      const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
-      const output = e.content?.find((b) => b.type === "text");
-      yield {
-        type: "tool-use-result",
-        toolUseId: e.mcp_tool_use_id,
-        output: output?.type === "text" ? output.text : undefined,
-        source: {
-          type: "mcp",
-          serverName: "",
-        },
-      };
-      break;
-    }
-    case "agent.custom_tool_use": {
-      const e = event as BetaManagedAgentsAgentCustomToolUseEvent;
-      acc.actionsRequired.push({
-        type: "tool-confirmation",
-        toolUseId: e.id,
-        toolName: e.name,
-        input: e.input as Record<string, unknown>,
-      });
-      acc.finishReason = "requires-action";
-      break;
-    }
-
-    // --- lifecycle ---
-    case "session.status_running": {
-      yield { type: "status-change", status: "running" };
-      break;
-    }
-    case "session.status_rescheduled": {
-      yield { type: "status-change", status: "retrying" };
-      break;
-    }
-    case "session.status_idle": {
-      const e = event as BetaManagedAgentsSessionStatusIdleEvent;
-      yield { type: "status-change", status: "idle" };
-      acc.finishReason = mapStopReason(e.stop_reason);
-      acc.done = true;
-      break;
-    }
-    case "session.status_terminated": {
-      throw new ThalamusError("Session terminated", {
-        provider: ANTHROPIC,
-        isRetryable: false,
-      });
-    }
-
-    // --- error ---
-    case "session.error": {
-      const e = event as BetaManagedAgentsSessionErrorEvent;
-      throw mapSessionError(e.error);
-    }
-    // --- usage ---
-    case "span.model_request_end": {
-      const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
-      if (e.model_usage) {
-        acc.usage = {
-          inputTokens: e.model_usage.input_tokens,
-          outputTokens: e.model_usage.output_tokens,
-          totalTokens: e.model_usage.input_tokens + e.model_usage.output_tokens,
-        };
-      }
-      break;
-    }
-
-    // --- escape hatch for everything else ---
-    default: {
-      yield {
-        type: "provider-event",
-        provider: ANTHROPIC,
-        event: event.type,
-        data: event as unknown as Record<string, unknown>,
-      };
-      break;
-    }
-  }
 }
 
 export type AnthropicProviderConfig = {

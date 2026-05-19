@@ -39,6 +39,8 @@ import { createOpenAIProvider } from '@novu/thalamus';
 const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
+  instructions: 'You are a helpful assistant.',  // optional system prompt
+  promptId: 'prompt_abc123',                      // optional OpenAI prompt template ID
 });
 ```
 
@@ -49,7 +51,9 @@ const provider = createOpenAIProvider({
 | Anthropic Managed Agents | `@novu/thalamus/anthropic` | `@anthropic-ai/sdk` |
 | Anthropic via AWS | `@novu/thalamus/anthropic` | `@anthropic-ai/aws-sdk` |
 | OpenAI Responses API | `@novu/thalamus/openai` | `openai` |
-| OpenAI via AWS Bedrock Mantle | `@novu/thalamus/openai` | `openai` (+ `@smithy/signature-v4` for SigV4) |
+| OpenAI via AWS Bedrock Mantle | `@novu/thalamus/openai` | `openai` (+ `@smithy/signature-v4` `@aws-crypto/sha256-js` for SigV4) |
+
+Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth, or `awsCredentials` (access key + secret + optional session token) for SigV4 signing. SigV4 requires the additional peer deps listed above.
 
 ## Core API
 
@@ -61,13 +65,15 @@ Every provider implements:
 interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): SendResult;
+  send(params: RequestParams): SendResult;  // or Promise<string> in webhook mode
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
   endSession(sessionId: string): Promise<void>;
 }
 ```
+
+When [`durable`](#durable-sessions) is configured with a webhook (edge observer), TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`) instead of `SendResult`.
 
 There's also a convenience namespace:
 
@@ -223,7 +229,7 @@ const provider = createOpenAIProvider({
 
 For Anthropic, MCP servers are configured in the Anthropic console at the environment level.
 
-Tool events include a `source` field (`{ type: 'builtin' }` or `{ type: 'mcp', serverName: '...' }`) so you can tell where each tool call originated.
+Tool events include a `source` field (`{ type: 'builtin' }`, `{ type: 'custom' }`, or `{ type: 'mcp', serverName: '...' }`) so you can tell where each tool call originated.
 
 ## Vault & Credentials
 
@@ -373,7 +379,11 @@ const handler = createWebhookHandler({
   }),
 });
 
+// Express / Node http
 app.post('/webhook', (req, res) => handler.express(req, res));
+
+// Web standard Request/Response (Cloudflare Workers, Bun, Deno, Next.js)
+export default { fetch: (req) => handler.handle(req) };
 ```
 
 **Type safety:** When `durable` is configured with a `webhook`, TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`). Without `durable`, it returns `SendResult` as before — no runtime checks needed.

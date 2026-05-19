@@ -6,8 +6,8 @@ settings:
 
 dependencies:
   '@novu/thalamus':
-    specifier: ^0.1.0-alpha.2
-    version: 0.1.0-alpha.2
+    specifier: file:..
+    version: file:..
   agents:
     specifier: ^0.12.4
     version: 0.12.4(@babel/core@7.29.0)(@cloudflare/workers-types@4.20260519.1)(ai@6.0.185)(react@19.2.6)(rolldown@1.0.1)(zod@4.4.3)
@@ -972,27 +972,6 @@ packages:
       '@tybys/wasm-util': 0.10.2
     dev: false
     optional: true
-
-  /@novu/thalamus@0.1.0-alpha.2:
-    resolution: {integrity: sha512-YcoBHJ1v25IhnaPYsgazTOgOoeKziN0iu1F3erS/r5skf9trs/qi6gIhO59W3A09e0nfzq4FF91zeyBuFGDxrA==}
-    peerDependencies:
-      '@anthropic-ai/aws-sdk': '>=0.86.0'
-      '@anthropic-ai/sdk': '>=0.86.0'
-      '@aws-crypto/sha256-js': '>=5.0.0'
-      '@smithy/signature-v4': '>=3.0.0'
-      openai: '>=4.87.0'
-    peerDependenciesMeta:
-      '@anthropic-ai/aws-sdk':
-        optional: true
-      '@anthropic-ai/sdk':
-        optional: true
-      '@aws-crypto/sha256-js':
-        optional: true
-      '@smithy/signature-v4':
-        optional: true
-      openai:
-        optional: true
-    dev: false
 
   /@opentelemetry/api@1.9.1:
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -2403,4 +2382,26 @@ packages:
 
   /zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+    dev: false
+
+  file:..:
+    resolution: {directory: .., type: directory}
+    name: '@novu/thalamus'
+    peerDependencies:
+      '@anthropic-ai/aws-sdk': '>=0.86.0'
+      '@anthropic-ai/sdk': '>=0.86.0'
+      '@aws-crypto/sha256-js': '>=5.0.0'
+      '@smithy/signature-v4': '>=3.0.0'
+      openai: '>=4.87.0'
+    peerDependenciesMeta:
+      '@anthropic-ai/aws-sdk':
+        optional: true
+      '@anthropic-ai/sdk':
+        optional: true
+      '@aws-crypto/sha256-js':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      openai:
+        optional: true
     dev: false

@@ -158,13 +158,28 @@ class AnthropicProvider implements Provider {
     return this.client;
   }
 
-  send(params: RequestParams): SendResult {
+  send(params: RequestParams): SendResult | Promise<string> {
+    if (this.edgeObserver) {
+      return this.sendViaWebhook(params);
+    }
     const callbacks = this.config.onSessionEvents
       ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>")
       : undefined;
     return createSendResult(this.runStream(params), callbacks, {
       autoStart: !!this.config.onSessionEvents,
     });
+  }
+
+  private async sendViaWebhook(params: RequestParams): Promise<string> {
+    const client = await this.getClient();
+    const sessionId =
+      params.sessionId ??
+      (await this.createSession({
+        vaultIds: params.vaultIds,
+        providerOptions: params.providerOptions,
+      }));
+    await this.edgeObserve(client, sessionId, params);
+    return sessionId;
   }
 
   private async dispatch(
@@ -388,7 +403,6 @@ class AnthropicProvider implements Provider {
     client: Anthropic,
     sessionId: string,
     params: RequestParams,
-    signal?: AbortSignal,
   ): Promise<void> {
     const observer = this.edgeObserver!;
 
@@ -407,7 +421,7 @@ class AnthropicProvider implements Provider {
       },
     });
 
-    await this.dispatch(client, sessionId, params, signal);
+    await this.dispatch(client, sessionId, params);
   }
 
   private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
@@ -423,14 +437,9 @@ class AnthropicProvider implements Provider {
       yield { type: "stream-start", sessionId };
 
       const signal = params.abortSignal ?? undefined;
-
-      if (this.edgeObserver) {
-        await this.edgeObserve(client, sessionId, params, signal);
-      } else {
-        yield* this.resilientObserve(client, sessionId, signal, () =>
-          this.dispatch(client, sessionId, params, signal),
-        );
-      }
+      yield* this.resilientObserve(client, sessionId, signal, () =>
+        this.dispatch(client, sessionId, params, signal),
+      );
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };

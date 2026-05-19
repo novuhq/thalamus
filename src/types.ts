@@ -188,7 +188,7 @@ export type SessionEventsFactory = (sessionId: string) => StreamCallbacks;
 export interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): SendResult;
+  send(params: RequestParams): SendResult | Promise<string>;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;

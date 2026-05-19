@@ -198,13 +198,28 @@ class OpenAIProvider implements Provider {
     }
   }
 
-  send(params: RequestParams): SendResult {
+  send(params: RequestParams): SendResult | Promise<string> {
+    if (this.edgeObserver) {
+      return this.sendViaWebhook(params);
+    }
     const callbacks = this.onSessionEvents
       ? this.onSessionEvents(params.sessionId ?? "<<pending>>")
       : undefined;
     return createSendResult(this.runStream(params), callbacks, {
       autoStart: !!this.onSessionEvents,
     });
+  }
+
+  private async sendViaWebhook(params: RequestParams): Promise<string> {
+    const sessionParams = await this.resolveSessionParams(params.sessionId);
+    const credentials = params.vaultIds?.length
+      ? await this.resolveCredentials(params.vaultIds)
+      : undefined;
+    const mcpTools =
+      this.mcpServers.length > 0
+        ? toMcpTools(this.mcpServers, credentials)
+        : undefined;
+    return this.edgeObserve(params, sessionParams, mcpTools);
   }
 
   private async resolveSessionParams(
@@ -502,24 +517,20 @@ class OpenAIProvider implements Provider {
     params: RequestParams,
     sessionParams: Record<string, unknown>,
     mcpTools: Record<string, unknown>[] | undefined,
-    signal?: AbortSignal,
   ): Promise<string> {
     const observer = this.edgeObserver!;
     const input = this.buildInput(params);
 
-    const initStream = await this.client.responses.create(
-      {
-        model: this.model,
-        input,
-        stream: true,
-        background: true,
-        ...(this.instructions ? { instructions: this.instructions } : {}),
-        ...(mcpTools ? { tools: mcpTools } : {}),
-        ...sessionParams,
-        ...params.providerOptions,
-      } as ResponseCreateParamsStreaming,
-      { signal },
-    );
+    const initStream = await this.client.responses.create({
+      model: this.model,
+      input,
+      stream: true,
+      background: true,
+      ...(this.instructions ? { instructions: this.instructions } : {}),
+      ...(mcpTools ? { tools: mcpTools } : {}),
+      ...sessionParams,
+      ...params.providerOptions,
+    } as ResponseCreateParamsStreaming);
 
     let responseId: string | undefined;
     let lastSeqNo = -1;
@@ -575,22 +586,12 @@ class OpenAIProvider implements Provider {
 
       const signal = params.abortSignal ?? undefined;
 
-      if (this.edgeObserver) {
-        const responseId = await this.edgeObserve(
-          params,
-          sessionParams,
-          mcpTools,
-          signal,
-        );
-        yield { type: "stream-start", sessionId: responseId };
-      } else {
-        yield* this.resilientDispatchAndObserve(
-          params,
-          sessionParams,
-          mcpTools,
-          signal,
-        );
-      }
+      yield* this.resilientDispatchAndObserve(
+        params,
+        sessionParams,
+        mcpTools,
+        signal,
+      );
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);

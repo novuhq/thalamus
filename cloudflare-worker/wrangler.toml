@@ -23,7 +23,3 @@ class_name = "SessionObserver"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionObserver"]
-
-[[migrations]]
-tag = "v2"
-deleted_classes = ["SessionRegistry"]

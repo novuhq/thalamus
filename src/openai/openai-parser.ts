@@ -73,6 +73,7 @@ export class ResponseAccumulator {
   finishReason: Response["finishReason"] = "stop";
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
+  done = false;
 
   toResponse(): Response {
     return {
@@ -115,6 +116,7 @@ export function* mapEvent(
       if (!acc.content) {
         acc.content = event.response.output_text;
       }
+      acc.done = true;
       break;
     }
     case "response.failed": {

@@ -1,12 +1,10 @@
-import type { StreamPart, Response as ThalamusResponse } from "@novu/thalamus";
-import {
-  AnthropicResponseAccumulator,
-  mapAnthropicEvent,
-} from "@novu/thalamus/anthropic";
-import {
-  mapOpenAIEvent,
-  OpenAIResponseAccumulator,
-} from "@novu/thalamus/openai";
+import type {
+  StreamPart,
+  Response as ThalamusResponse,
+  Usage,
+} from "@novu/thalamus";
+import { mapAnthropicEvent } from "@novu/thalamus/anthropic";
+import { mapOpenAIEvent } from "@novu/thalamus/openai";
 import {
   Agent,
   type Connection,
@@ -22,25 +20,48 @@ import {
 /*  Provider registry                                                   */
 /* ------------------------------------------------------------------ */
 
-interface ProviderParser<TAcc = unknown> {
-  createAccumulator(): TAcc;
-  mapEvent(raw: unknown, acc: TAcc): Generator<StreamPart>;
-  buildFinish(acc: TAcc, sessionId: string): ThalamusResponse;
+/**
+ * Lightweight accumulator for edge observation.
+ * Inherits the shape parsers expect but discards content/tool-call data
+ * since those are delivered as individual parts. Only metadata needed for
+ * the `finish` event is retained — keeps memory bounded for long sessions.
+ */
+class EdgeAccumulator {
+  done = false;
+  finishReason: ThalamusResponse["finishReason"] = "stop";
+  usage: Usage | undefined;
+  actionsRequired: never[] = [];
+  sessionId: string | undefined;
+  conversationId: string | undefined;
+
+  set content(_: string) {}
+  get content() {
+    return "";
+  }
+
+  toResponse(sessionId?: string): ThalamusResponse {
+    return {
+      content: "",
+      sessionId: sessionId ?? this.conversationId ?? this.sessionId,
+      finishReason: this.finishReason,
+      usage: this.usage,
+    };
+  }
+}
+
+interface ProviderParser {
+  createAccumulator(): EdgeAccumulator;
+  mapEvent(raw: unknown, acc: EdgeAccumulator): Generator<StreamPart>;
 }
 
 const providers: Record<string, ProviderParser> = {
   anthropic: {
-    createAccumulator: () => new AnthropicResponseAccumulator(),
-    mapEvent: (raw, acc) =>
-      mapAnthropicEvent(raw as any, acc as AnthropicResponseAccumulator),
-    buildFinish: (acc, sessionId) =>
-      (acc as AnthropicResponseAccumulator).toResponse(sessionId),
+    createAccumulator: () => new EdgeAccumulator(),
+    mapEvent: (raw, acc) => mapAnthropicEvent(raw as any, acc as any),
   },
   openai: {
-    createAccumulator: () => new OpenAIResponseAccumulator(),
-    mapEvent: (raw, acc) =>
-      mapOpenAIEvent(raw as any, acc as OpenAIResponseAccumulator),
-    buildFinish: (acc) => (acc as OpenAIResponseAccumulator).toResponse(),
+    createAccumulator: () => new EdgeAccumulator(),
+    mapEvent: (raw, acc) => mapOpenAIEvent(raw as any, acc as any),
   },
 };
 
@@ -203,7 +224,7 @@ export class SessionObserver extends Agent<Env, State> {
       .pipeThrough(new TextDecoderStream())
       .pipeThrough(new EventSourceParserStream());
 
-    const accumulator = parser.createAccumulator();
+    const acc = parser.createAccumulator();
     let sequence = this.getNextSequence(params.sessionId);
 
     for await (const sseEvent of eventStream) {
@@ -213,18 +234,20 @@ export class SessionObserver extends Agent<Env, State> {
         fiberCtx.stash({ ...params, lastEventId: sseEvent.id });
       }
 
-      const parts = this.parseSSEEvent(sseEvent, parser, accumulator);
+      const parts = this.parseSSEEvent(sseEvent, parser, acc);
       for (const part of parts) {
         this.persistEvent(params.sessionId, sequence++, part);
       }
 
       this.triggerDelivery(params);
+
+      if (acc.done) break;
     }
 
-    if (!signal.aborted) {
+    if (acc.done || !signal.aborted) {
       const finish: StreamPart = {
         type: "finish",
-        response: parser.buildFinish(accumulator, params.sessionId),
+        response: acc.toResponse(params.sessionId),
       };
       this.persistEvent(params.sessionId, sequence++, finish);
       this.triggerDelivery(params);
@@ -238,7 +261,7 @@ export class SessionObserver extends Agent<Env, State> {
   private parseSSEEvent(
     sseEvent: EventSourceMessage,
     parser: ProviderParser,
-    accumulator: unknown,
+    acc: EdgeAccumulator,
   ): StreamPart[] {
     if (!sseEvent.data) return [];
 
@@ -251,7 +274,7 @@ export class SessionObserver extends Agent<Env, State> {
 
     const parts: StreamPart[] = [];
     try {
-      for (const part of parser.mapEvent(parsed, accumulator)) {
+      for (const part of parser.mapEvent(parsed, acc)) {
         parts.push(part);
       }
     } catch (err) {

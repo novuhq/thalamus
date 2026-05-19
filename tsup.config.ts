@@ -7,6 +7,7 @@ export default defineConfig({
     "openai/index": "src/openai/index.ts",
     "vault/index": "src/vault/index.ts",
     "durable/index": "src/durable/index.ts",
+    "webhook/index": "src/webhook/index.ts",
   },
   format: ["cjs", "esm"],
   dts: true,

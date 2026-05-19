@@ -39,6 +39,11 @@
       "types": "./dist/durable/index.d.ts",
       "import": "./dist/durable/index.js",
       "require": "./dist/durable/index.cjs"
+    },
+    "./webhook": {
+      "types": "./dist/webhook/index.d.ts",
+      "import": "./dist/webhook/index.js",
+      "require": "./dist/webhook/index.cjs"
     }
   },
   "scripts": {

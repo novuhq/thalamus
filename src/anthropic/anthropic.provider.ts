@@ -12,6 +12,7 @@ import type { CloudflareEdgeObserver } from "../durable/cloudflare";
 import {
   type DurabilityBackend,
   type DurableBackend,
+  type EdgeObserver,
   isEdgeObserver,
   type SessionCheckpoint,
 } from "../durable/types";
@@ -25,8 +26,10 @@ import {
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
+  type StreamingProvider,
   type StreamPart,
   type ToolResult,
+  type WebhookProvider,
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
@@ -129,7 +132,7 @@ async function createClient(
 
 const MAX_RECONNECT_RETRIES = 3;
 
-class AnthropicProvider implements Provider {
+class AnthropicProvider {
   readonly provider = ANTHROPIC;
   readonly runtimeId: string;
 
@@ -479,7 +482,13 @@ class AnthropicProvider implements Provider {
 }
 
 export function createAnthropicProvider(
+  config: AnthropicProviderConfig & { durable: EdgeObserver },
+): WebhookProvider;
+export function createAnthropicProvider(
   config: AnthropicProviderConfig,
-): Provider {
-  return new AnthropicProvider(config);
+): StreamingProvider;
+export function createAnthropicProvider(
+  config: AnthropicProviderConfig,
+): StreamingProvider | WebhookProvider {
+  return new AnthropicProvider(config) as StreamingProvider | WebhookProvider;
 }

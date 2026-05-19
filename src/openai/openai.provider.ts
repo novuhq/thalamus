@@ -8,6 +8,7 @@ import type { CloudflareEdgeObserver } from "../durable/cloudflare";
 import {
   type DurabilityBackend,
   type DurableBackend,
+  type EdgeObserver,
   isEdgeObserver,
   type SessionCheckpoint,
 } from "../durable/types";
@@ -22,7 +23,9 @@ import {
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
+  type StreamingProvider,
   type StreamPart,
+  type WebhookProvider,
 } from "../types";
 import { LocalVault } from "../vault/local-vault";
 import type {
@@ -153,7 +156,7 @@ function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
   return new OpenAI({ baseURL, apiKey: "bedrock" });
 }
 
-class OpenAIProvider implements Provider {
+class OpenAIProvider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
 
@@ -663,6 +666,14 @@ class OpenAIProvider implements Provider {
   }
 }
 
-export function createOpenAIProvider(config: OpenAIProviderConfig): Provider {
-  return new OpenAIProvider(config);
+export function createOpenAIProvider(
+  config: OpenAIProviderConfig & { durable: EdgeObserver },
+): WebhookProvider;
+export function createOpenAIProvider(
+  config: OpenAIProviderConfig,
+): StreamingProvider;
+export function createOpenAIProvider(
+  config: OpenAIProviderConfig,
+): StreamingProvider | WebhookProvider {
+  return new OpenAIProvider(config) as StreamingProvider | WebhookProvider;
 }

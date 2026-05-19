@@ -185,15 +185,24 @@ export interface SendResult extends PromiseLike<Response> {
 
 export type SessionEventsFactory = (sessionId: string) => StreamCallbacks;
 
-export interface Provider {
+interface BaseProvider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): SendResult | Promise<string>;
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
   endSession(sessionId: string): Promise<void>;
 }
+
+export interface StreamingProvider extends BaseProvider {
+  send(params: RequestParams): SendResult;
+}
+
+export interface WebhookProvider extends BaseProvider {
+  send(params: RequestParams): Promise<string>;
+}
+
+export type Provider = StreamingProvider | WebhookProvider;
 
 export const ANTHROPIC = "anthropic" as const;
 export const OPENAI = "openai" as const;

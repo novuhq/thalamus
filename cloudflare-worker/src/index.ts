@@ -245,9 +245,10 @@ export class SessionObserver extends Agent<Env, State> {
     }
 
     if (acc.done || !signal.aborted) {
+      const content = this.reconstructContent(params.sessionId);
       const finish: StreamPart = {
         type: "finish",
-        response: acc.toResponse(params.sessionId),
+        response: { ...acc.toResponse(params.sessionId), content },
       };
       this.persistEvent(params.sessionId, sequence++, finish);
       this.triggerDelivery(params);
@@ -317,6 +318,19 @@ export class SessionObserver extends Agent<Env, State> {
       )
       .toArray()[0];
     return (row?.max_seq ?? 0) + 1;
+  }
+
+  private reconstructContent(sessionId: string): string {
+    const cursor = this.ctx.storage.sql.exec<{ text: string }>(
+      "SELECT json_extract(event_json, '$.text') as text FROM events WHERE session_id = ? AND json_extract(event_json, '$.type') = 'text-delta' ORDER BY sequence",
+      sessionId,
+    );
+
+    let content = "";
+    for (const row of cursor) {
+      content += row.text;
+    }
+    return content;
   }
 
   private getPendingEvents(sessionId: string): EventRow[] {

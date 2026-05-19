@@ -90,6 +90,7 @@
     "@biomejs/biome": "latest",
     "@smithy/signature-v4": "^5.4.1",
     "@types/node": "^25.7.0",
+    "dotenv": "^17.4.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.4",
     "openai": "latest",

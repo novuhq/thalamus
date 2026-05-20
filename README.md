@@ -390,7 +390,7 @@ export default { fetch: (req) => handler.handle(req) };
 
 **Multi-node safe:** Your webhook handler is stateless — it receives events and processes them. No in-memory session state, no consumer locks, works behind any load balancer.
 
-For a production reference implementation of the companion Cloudflare Worker, see the [Novu platform repository](https://github.com/novuhq/novu).
+For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 
 ### Custom backend
 

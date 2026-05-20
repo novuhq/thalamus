@@ -4,4 +4,3 @@ dist/
 scripts/
 .DS_Store
 docs/
-cloudflare-worker/.wrangler/

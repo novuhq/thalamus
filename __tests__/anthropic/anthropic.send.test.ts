@@ -113,7 +113,6 @@ describe("send() — onSessionEvents factory", () => {
     expect(factory).toHaveBeenCalledWith(
       "<<pending>>",
       expect.stringMatching(/^[0-9a-f-]{36}$/),
-      {},
     );
     expect(onTextDelta).toHaveBeenCalledWith(
       expect.objectContaining({ type: "text-delta", text: "Hello!" }),
@@ -156,7 +155,6 @@ describe("send() — onSessionEvents factory", () => {
     expect(factory).toHaveBeenCalledWith(
       "sess_existing",
       expect.stringMatching(/^[0-9a-f-]{36}$/),
-      {},
     );
   });
 
@@ -224,24 +222,5 @@ describe("send() — runId", () => {
 
     expect(r1.runId).not.toBe(r2.runId);
     await Promise.all([r1, r2]);
-  });
-
-  it("forwards webhookMetadata to onSessionEvents factory in streaming mode", async () => {
-    setupBasicStream();
-
-    const factory = vi.fn().mockReturnValue({});
-    const provider = createAnthropicProvider({
-      ...config,
-      onSessionEvents: factory,
-    });
-
-    const result = provider.send({
-      messages: [{ role: MessageRole.USER, content: "Hi" }],
-      webhookMetadata: { orgId: "org_42" },
-    });
-
-    expect(factory).toHaveBeenCalledWith("<<pending>>", result.runId, {
-      orgId: "org_42",
-    });
   });
 });

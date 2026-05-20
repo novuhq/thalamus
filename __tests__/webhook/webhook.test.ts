@@ -141,7 +141,7 @@ describe("createWebhookHandler", () => {
       });
     });
 
-    it("falls back to empty runId when payload omits it", async () => {
+    it("rejects payload without runId", async () => {
       const factory = vi.fn<
         (s: string, r: string, m: Record<string, string>) => StreamCallbacks
       >(() => ({}));
@@ -151,7 +151,7 @@ describe("createWebhookHandler", () => {
       });
 
       const body = JSON.stringify({
-        sessionId: "sess_legacy",
+        sessionId: "sess_no_run",
         sequence: 1,
         timestamp: Math.floor(Date.now() / 1000),
         provider: "anthropic",
@@ -163,8 +163,9 @@ describe("createWebhookHandler", () => {
 
       const result = await handler.handleRaw(body, sig);
 
-      expect(result.status).toBe(200);
-      expect(factory).toHaveBeenCalledWith("sess_legacy", "", {});
+      expect(result.status).toBe(400);
+      expect(JSON.parse(result.body as string).error).toMatch(/runId/);
+      expect(factory).not.toHaveBeenCalled();
     });
 
     it("forwards runId from payload to onSessionEvents factory", async () => {

@@ -243,11 +243,7 @@ class OpenAIProvider {
       return this.sendViaWebhook(params, runId);
     }
     const callbacks = this.onSessionEvents
-      ? this.onSessionEvents(
-          params.sessionId ?? "<<pending>>",
-          runId,
-          params.webhookMetadata ?? {},
-        )
+      ? this.onSessionEvents(params.sessionId ?? "<<pending>>", runId)
       : undefined;
     return createSendResult(this.runStream(params, runId), runId, callbacks, {
       autoStart: !!this.onSessionEvents,
@@ -489,8 +485,8 @@ class OpenAIProvider {
             return;
           }
 
-          const runId = checkpoint.runId ?? crypto.randomUUID();
-          const callbacks = onSessionEvents(checkpoint.sessionId, runId, {});
+          const { runId } = checkpoint;
+          const callbacks = onSessionEvents(checkpoint.sessionId, runId);
           const stream = this.recoverStream(checkpoint, runId, responseId);
           const result = createSendResult(stream, runId, callbacks, {
             autoStart: true,

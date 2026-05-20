@@ -194,7 +194,6 @@ export interface WebhookSendResult {
 export type SessionEventsFactory = (
   sessionId: string,
   runId: string,
-  metadata: Record<string, string>,
 ) => StreamCallbacks;
 
 interface BaseProvider {

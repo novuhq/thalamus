@@ -3,12 +3,7 @@ export interface SessionCheckpoint {
   provider: string;
   lastEventId: string;
   createdAt: number;
-  /**
-   * The runId of the original `send()` invocation. Optional for backward
-   * compatibility with checkpoints written before runId was introduced;
-   * recovered sessions without one get a fresh runId.
-   */
-  runId?: string;
+  runId: string;
   metadata?: Record<string, string>;
 }
 

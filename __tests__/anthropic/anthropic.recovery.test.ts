@@ -365,10 +365,6 @@ describe("durable recovery — Anthropic", () => {
       { timeout: 2000 },
     );
 
-    expect(factory).toHaveBeenCalledWith(
-      "sess_resume",
-      "run_persisted_123",
-      {},
-    );
+    expect(factory).toHaveBeenCalledWith("sess_resume", "run_persisted_123");
   });
 });

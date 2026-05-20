@@ -168,11 +168,7 @@ class AnthropicProvider {
       return this.sendViaWebhook(params, runId);
     }
     const callbacks = this.config.onSessionEvents
-      ? this.config.onSessionEvents(
-          params.sessionId ?? "<<pending>>",
-          runId,
-          params.webhookMetadata ?? {},
-        )
+      ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>", runId)
       : undefined;
     return createSendResult(this.runStream(params, runId), runId, callbacks, {
       autoStart: !!this.config.onSessionEvents,
@@ -323,8 +319,8 @@ class AnthropicProvider {
           const status = await this.getStatus(client, checkpoint.sessionId);
 
           if (status === "running" || status === "idle") {
-            const runId = checkpoint.runId ?? crypto.randomUUID();
-            const callbacks = onSessionEvents(checkpoint.sessionId, runId, {});
+            const { runId } = checkpoint;
+            const callbacks = onSessionEvents(checkpoint.sessionId, runId);
             const stream = this.recoverStream(
               client,
               checkpoint,

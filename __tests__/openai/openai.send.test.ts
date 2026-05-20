@@ -103,7 +103,6 @@ describe("send() — onSessionEvents factory", () => {
     expect(factory).toHaveBeenCalledWith(
       "<<pending>>",
       expect.stringMatching(/^[0-9a-f-]{36}$/),
-      {},
     );
     expect(onTextDelta).toHaveBeenCalledTimes(2);
     expect(onTextDelta).toHaveBeenCalledWith(
@@ -144,7 +143,6 @@ describe("send() — onSessionEvents factory", () => {
     expect(factory).toHaveBeenCalledWith(
       "conv_existing",
       expect.stringMatching(/^[0-9a-f-]{36}$/),
-      {},
     );
   });
 

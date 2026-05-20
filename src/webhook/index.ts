@@ -1,11 +1,11 @@
 import { CALLBACK_MAP } from "../send-result";
-import type {
-  SessionEventsFactory,
-  StreamCallbacks,
-  StreamPart,
-} from "../types";
+import type { StreamCallbacks, StreamPart } from "../types";
 
-export type { SessionEventsFactory };
+export type SessionEventsFactory = (
+  sessionId: string,
+  runId: string,
+  metadata: Record<string, string>,
+) => StreamCallbacks;
 
 export interface WebhookHandlerOptions {
   secret: string;
@@ -126,17 +126,16 @@ export function createWebhookHandler(
 
     const { sessionId, runId, metadata, event } = payload;
 
-    if (!sessionId || !event?.type) {
+    if (!sessionId || !runId || !event?.type) {
       return {
         status: 400,
-        body: JSON.stringify({ error: "Missing sessionId or event" }),
+        body: JSON.stringify({
+          error: "Missing sessionId, runId, or event",
+        }),
       };
     }
 
-    // runId is required by the SDK contract, but accept payloads without it
-    // during the rollout window when an older observer hasn't been updated yet.
-    // Consumers can detect this by checking for an empty string.
-    const callbacks = onSessionEvents(sessionId, runId ?? "", metadata ?? {});
+    const callbacks = onSessionEvents(sessionId, runId, metadata ?? {});
 
     try {
       dispatch(callbacks, event);

@@ -33,6 +33,7 @@ import {
   type StreamingProvider,
   type StreamPart,
   type WebhookProvider,
+  type WebhookSendResult,
 } from "../types";
 import { LocalVault } from "../vault/local-vault";
 import type {
@@ -236,19 +237,27 @@ class OpenAIProvider {
     }
   }
 
-  send(params: RequestParams): SendResult | Promise<string> {
+  send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
+    const runId = crypto.randomUUID();
     if (this.edgeObserver) {
-      return this.sendViaWebhook(params);
+      return this.sendViaWebhook(params, runId);
     }
     const callbacks = this.onSessionEvents
-      ? this.onSessionEvents(params.sessionId ?? "<<pending>>")
+      ? this.onSessionEvents(
+          params.sessionId ?? "<<pending>>",
+          runId,
+          params.webhookMetadata ?? {},
+        )
       : undefined;
-    return createSendResult(this.runStream(params), callbacks, {
+    return createSendResult(this.runStream(params, runId), runId, callbacks, {
       autoStart: !!this.onSessionEvents,
     });
   }
 
-  private async sendViaWebhook(params: RequestParams): Promise<string> {
+  private async sendViaWebhook(
+    params: RequestParams,
+    runId: string,
+  ): Promise<WebhookSendResult> {
     const sessionParams = await this.resolveSessionParams(params.sessionId);
     const credentials = params.vaultIds?.length
       ? await this.resolveCredentials(params.vaultIds)
@@ -257,7 +266,13 @@ class OpenAIProvider {
       this.mcpServers.length > 0
         ? toMcpTools(this.mcpServers, credentials)
         : undefined;
-    return this.edgeObserve(params, sessionParams, mcpTools);
+    const sessionId = await this.edgeObserve(
+      params,
+      runId,
+      sessionParams,
+      mcpTools,
+    );
+    return { sessionId, runId };
   }
 
   private async resolveSessionParams(
@@ -361,6 +376,7 @@ class OpenAIProvider {
    */
   private async *resilientDispatchAndObserve(
     params: RequestParams,
+    runId: string,
     sessionParams: Record<string, unknown>,
     mcpTools: Record<string, unknown>[] | undefined,
     signal?: AbortSignal,
@@ -420,6 +436,7 @@ class OpenAIProvider {
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
               createdAt: Date.now(),
+              runId,
               metadata: { responseId },
             });
           }
@@ -472,9 +489,10 @@ class OpenAIProvider {
             return;
           }
 
-          const callbacks = onSessionEvents(checkpoint.sessionId);
-          const stream = this.recoverStream(checkpoint, responseId);
-          const result = createSendResult(stream, callbacks, {
+          const runId = checkpoint.runId ?? crypto.randomUUID();
+          const callbacks = onSessionEvents(checkpoint.sessionId, runId, {});
+          const stream = this.recoverStream(checkpoint, runId, responseId);
+          const result = createSendResult(stream, runId, callbacks, {
             autoStart: true,
           });
           result.response.catch(async (err) => {
@@ -502,6 +520,7 @@ class OpenAIProvider {
    */
   private async *recoverStream(
     checkpoint: SessionCheckpoint,
+    runId: string,
     responseId: string,
   ): AsyncIterable<StreamPart> {
     const { sessionId } = checkpoint;
@@ -534,6 +553,7 @@ class OpenAIProvider {
               provider: "openai",
               lastEventId: String(lastSequenceNumber),
               createdAt: Date.now(),
+              runId,
               metadata: { responseId },
             });
           }
@@ -553,6 +573,7 @@ class OpenAIProvider {
 
   private async edgeObserve(
     params: RequestParams,
+    runId: string,
     sessionParams: Record<string, unknown>,
     mcpTools: Record<string, unknown>[] | undefined,
   ): Promise<string> {
@@ -595,6 +616,7 @@ class OpenAIProvider {
     const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
     await observer.observe({
       sessionId: responseId,
+      runId,
       streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
       headers: {
         Authorization: `Bearer ${this.client.apiKey}`,
@@ -609,7 +631,10 @@ class OpenAIProvider {
     return responseId;
   }
 
-  private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
+  private async *runStream(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
 
@@ -626,6 +651,7 @@ class OpenAIProvider {
 
       yield* this.resilientDispatchAndObserve(
         params,
+        runId,
         sessionParams,
         mcpTools,
         signal,

@@ -178,12 +178,24 @@ export interface StreamCallbacks {
 }
 
 export interface SendResult extends PromiseLike<Response> {
+  /** Unique identifier for this `send()` invocation. Known synchronously. */
+  readonly runId: string;
   readonly sessionId: Promise<string>;
   readonly response: Promise<Response>;
   text(): Promise<string>;
 }
 
-export type SessionEventsFactory = (sessionId: string) => StreamCallbacks;
+export interface WebhookSendResult {
+  sessionId: string;
+  /** Unique identifier for this `send()` invocation, also present in every webhook event. */
+  runId: string;
+}
+
+export type SessionEventsFactory = (
+  sessionId: string,
+  runId: string,
+  metadata: Record<string, string>,
+) => StreamCallbacks;
 
 interface BaseProvider {
   readonly provider: string;
@@ -199,7 +211,7 @@ export interface StreamingProvider extends BaseProvider {
 }
 
 export interface WebhookProvider extends BaseProvider {
-  send(params: RequestParams): Promise<string>;
+  send(params: RequestParams): Promise<WebhookSendResult>;
 }
 
 export type Provider = StreamingProvider | WebhookProvider;

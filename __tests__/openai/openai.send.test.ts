@@ -100,7 +100,11 @@ describe("send() — onSessionEvents factory", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(factory).toHaveBeenCalledWith("<<pending>>");
+    expect(factory).toHaveBeenCalledWith(
+      "<<pending>>",
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      {},
+    );
     expect(onTextDelta).toHaveBeenCalledTimes(2);
     expect(onTextDelta).toHaveBeenCalledWith(
       expect.objectContaining({ type: "text-delta", text: "Hello" }),
@@ -137,7 +141,11 @@ describe("send() — onSessionEvents factory", () => {
       sessionId: "conv_existing",
     });
 
-    expect(factory).toHaveBeenCalledWith("conv_existing");
+    expect(factory).toHaveBeenCalledWith(
+      "conv_existing",
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      {},
+    );
   });
 
   it("auto-starts: callbacks fire even without await (fire-and-forget)", async () => {

@@ -3,6 +3,12 @@ export interface SessionCheckpoint {
   provider: string;
   lastEventId: string;
   createdAt: number;
+  /**
+   * The runId of the original `send()` invocation. Optional for backward
+   * compatibility with checkpoints written before runId was introduced;
+   * recovered sessions without one get a fresh runId.
+   */
+  runId?: string;
   metadata?: Record<string, string>;
 }
 
@@ -20,6 +26,8 @@ export interface DurabilityBackend {
 
 export interface EdgeObserveParams {
   sessionId: string;
+  /** Unique identifier for this `send()` invocation. Forwarded in every webhook event. */
+  runId: string;
   streamUrl: string;
   headers: Record<string, string>;
   provider: string;

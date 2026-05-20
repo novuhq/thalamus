@@ -31,6 +31,7 @@ async function sign(
 function makePayload(event: StreamPart, overrides?: Record<string, unknown>) {
   return JSON.stringify({
     sessionId: "sess_123",
+    runId: "run_test_1",
     sequence: 1,
     timestamp: Math.floor(Date.now() / 1000),
     provider: "anthropic",
@@ -120,9 +121,9 @@ describe("createWebhookHandler", () => {
   });
 
   describe("event dispatch", () => {
-    it("calls onSessionEvents with sessionId and metadata", async () => {
+    it("calls onSessionEvents with sessionId, runId, and metadata", async () => {
       const factory = vi.fn<
-        (s: string, m: Record<string, string>) => StreamCallbacks
+        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
       >(() => ({}));
       const handler = createWebhookHandler({
         secret: SECRET,
@@ -135,7 +136,60 @@ describe("createWebhookHandler", () => {
 
       await handler.handleRaw(body, sig);
 
-      expect(factory).toHaveBeenCalledWith("sess_123", { orgId: "org_1" });
+      expect(factory).toHaveBeenCalledWith("sess_123", "run_test_1", {
+        orgId: "org_1",
+      });
+    });
+
+    it("falls back to empty runId when payload omits it", async () => {
+      const factory = vi.fn<
+        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
+      >(() => ({}));
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: factory,
+      });
+
+      const body = JSON.stringify({
+        sessionId: "sess_legacy",
+        sequence: 1,
+        timestamp: Math.floor(Date.now() / 1000),
+        provider: "anthropic",
+        metadata: {},
+        event: { type: "text-delta", text: "hi" },
+      });
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      const result = await handler.handleRaw(body, sig);
+
+      expect(result.status).toBe(200);
+      expect(factory).toHaveBeenCalledWith("sess_legacy", "", {});
+    });
+
+    it("forwards runId from payload to onSessionEvents factory", async () => {
+      const factory = vi.fn<
+        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
+      >(() => ({}));
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: factory,
+      });
+
+      const body = makePayload(
+        { type: "text-delta", text: "hi" },
+        { runId: "run_42" },
+      );
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      await handler.handleRaw(body, sig);
+
+      expect(factory).toHaveBeenCalledWith(
+        "sess_123",
+        "run_42",
+        expect.any(Object),
+      );
     });
 
     it("dispatches text-delta to onTextDelta", async () => {

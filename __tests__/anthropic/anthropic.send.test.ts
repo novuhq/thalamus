@@ -110,7 +110,11 @@ describe("send() — onSessionEvents factory", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(factory).toHaveBeenCalledWith("<<pending>>");
+    expect(factory).toHaveBeenCalledWith(
+      "<<pending>>",
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      {},
+    );
     expect(onTextDelta).toHaveBeenCalledWith(
       expect.objectContaining({ type: "text-delta", text: "Hello!" }),
     );
@@ -149,7 +153,11 @@ describe("send() — onSessionEvents factory", () => {
       sessionId: "sess_existing",
     });
 
-    expect(factory).toHaveBeenCalledWith("sess_existing");
+    expect(factory).toHaveBeenCalledWith(
+      "sess_existing",
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      {},
+    );
   });
 
   it("auto-starts: callbacks fire even without await (fire-and-forget)", async () => {
@@ -187,5 +195,53 @@ describe("send() — lazy without onSessionEvents", () => {
     // (we can't directly assert this, but we can verify it works when awaited)
     const response = await result;
     expect(response.content).toBe("Hello!");
+  });
+});
+
+describe("send() — runId", () => {
+  it("exposes a UUID synchronously on SendResult", () => {
+    setupBasicStream();
+
+    const provider = createAnthropicProvider(config);
+    const result = provider.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(result.runId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("generates a distinct runId per send() call", async () => {
+    setupBasicStream();
+
+    const provider = createAnthropicProvider(config);
+    const r1 = provider.send({
+      messages: [{ role: MessageRole.USER, content: "first" }],
+    });
+    setupBasicStream();
+    const r2 = provider.send({
+      messages: [{ role: MessageRole.USER, content: "second" }],
+    });
+
+    expect(r1.runId).not.toBe(r2.runId);
+    await Promise.all([r1, r2]);
+  });
+
+  it("forwards webhookMetadata to onSessionEvents factory in streaming mode", async () => {
+    setupBasicStream();
+
+    const factory = vi.fn().mockReturnValue({});
+    const provider = createAnthropicProvider({
+      ...config,
+      onSessionEvents: factory,
+    });
+
+    const result = provider.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+      webhookMetadata: { orgId: "org_42" },
+    });
+
+    expect(factory).toHaveBeenCalledWith("<<pending>>", result.runId, {
+      orgId: "org_42",
+    });
   });
 });

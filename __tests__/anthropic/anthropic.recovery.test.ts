@@ -289,4 +289,86 @@ describe("durable recovery — Anthropic", () => {
 
     expect(durable.getActive).not.toHaveBeenCalled();
   });
+
+  it("persists runId on every checkpoint and replays it on recovery", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_run" });
+    mockSend.mockResolvedValue({});
+    mockSseStream.mockResolvedValueOnce(
+      asyncIter([
+        {
+          type: "agent.message",
+          id: "evt_1",
+          content: [{ type: "text", text: "hi" }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+
+    const durable = mockBackend();
+    const provider = createAnthropicProvider({ ...config, durable });
+
+    const result = provider.send({
+      messages: [{ role: "user", content: "Hi" }],
+    });
+    await result;
+
+    const saves = (durable.save as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as SessionCheckpoint,
+    );
+    expect(saves.length).toBeGreaterThan(0);
+    for (const cp of saves) {
+      expect(cp.runId).toBe(result.runId);
+    }
+  });
+
+  it("reuses runId from checkpoint when recovering a session", async () => {
+    const durable = mockBackend();
+    await durable.save({
+      sessionId: "sess_resume",
+      provider: "anthropic",
+      lastEventId: "evt_1",
+      createdAt: 1000,
+      runId: "run_persisted_123",
+    });
+
+    mockRetrieve.mockResolvedValue({ status: "idle" });
+    mockList.mockResolvedValueOnce(
+      asyncIter([
+        {
+          type: "agent.message",
+          id: "evt_1",
+          content: [{ type: "text", text: "A" }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+
+    const factory = vi.fn().mockReturnValue({});
+    createAnthropicProvider({
+      ...config,
+      durable,
+      onSessionEvents: factory,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(factory).toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
+
+    expect(factory).toHaveBeenCalledWith(
+      "sess_resume",
+      "run_persisted_123",
+      {},
+    );
+  });
 });

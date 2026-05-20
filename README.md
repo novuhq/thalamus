@@ -65,15 +65,20 @@ Every provider implements:
 interface Provider {
   readonly provider: string;
   readonly runtimeId: string;
-  send(params: RequestParams): SendResult;  // or Promise<string> in webhook mode
+  send(params: RequestParams): SendResult;  // or Promise<WebhookSendResult> in webhook mode
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
   endSession(sessionId: string): Promise<void>;
 }
+
+interface WebhookSendResult {
+  sessionId: string;
+  runId: string;
+}
 ```
 
-When [`durable`](#durable-sessions) is configured with a webhook (edge observer), TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`) instead of `SendResult`.
+When [`durable`](#durable-sessions) is configured with a webhook (edge observer), TypeScript narrows `send()` to return `Promise<WebhookSendResult>` (the `sessionId` and `runId`) instead of `SendResult`.
 
 There's also a convenience namespace:
 
@@ -98,7 +103,13 @@ const text = await provider.send({ messages }).text();
 // Get the sessionId early (resolves before the stream finishes)
 const result = provider.send({ messages });
 const sessionId = await result.sessionId;
+
+// runId is known synchronously — unique UUID for this send() invocation
+const result = provider.send({ messages });
+console.log(result.runId);
 ```
+
+Every `send()` invocation gets a fresh `runId` so you can correlate callbacks, logs, traces, and webhook events back to a specific turn even when a session has many. The same `runId` is passed to `onSessionEvents(sessionId, runId)` and — in webhook mode — echoed in every webhook payload (body field `runId`, header `X-Thalamus-Run-Id`).
 
 You can also forward provider-specific options (temperature, max tokens, etc.) directly to the underlying SDK via `providerOptions`:
 
@@ -117,9 +128,9 @@ Callbacks are attached at **provider creation time** via `onSessionEvents`, not 
 const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
-  onSessionEvents: (sessionId) => ({
+  onSessionEvents: (sessionId, runId) => ({
     onTextDelta: ({ text }) => pushToClient(sessionId, text),
-    onToolUseDone: ({ toolName }) => console.log(`used ${toolName}`),
+    onToolUseDone: ({ toolName }) => console.log(`[${runId}] used ${toolName}`),
     onFinish: ({ response }) => saveResponse(sessionId, response),
   }),
 });
@@ -129,7 +140,7 @@ const provider = createOpenAIProvider({
 provider.send({ messages });
 ```
 
-The factory receives the `sessionId` so you can route events to the right client connection, database row, or WebSocket.
+The factory receives the `sessionId` (so you can route events to the right client connection, database row, or WebSocket) and the `runId` (so you can correlate callbacks back to a specific `send()` invocation — useful for tracing and per-turn state).
 
 <details>
 <summary>All available callbacks</summary>
@@ -307,7 +318,7 @@ const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
   durable: redis(new Redis()),
-  onSessionEvents: (sessionId) => ({
+  onSessionEvents: (sessionId, runId) => ({
     onTextDelta: ({ text }) => pushToClient(sessionId, text),
     onFinish: ({ response }) => saveResponse(sessionId, response),
   }),
@@ -354,8 +365,8 @@ const provider = createAnthropicProvider({
   }),
 });
 
-// In webhook mode, send() returns a sessionId (not a Response)
-const sessionId = await provider.send({
+// In webhook mode, send() returns Promise<WebhookSendResult>
+const { sessionId, runId } = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'Hello' }],
 });
 ```
@@ -365,7 +376,7 @@ const sessionId = await provider.send({
 
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
-  onSessionEvents: (sessionId, metadata) => ({
+  onSessionEvents: (sessionId, runId, metadata) => ({
     onPart(part) {
       switch (part.type) {
         case 'text-delta':
@@ -386,7 +397,9 @@ app.post('/webhook', (req, res) => handler.express(req, res));
 export default { fetch: (req) => handler.handle(req) };
 ```
 
-**Type safety:** When `durable` is configured with a `webhook`, TypeScript narrows `send()` to return `Promise<string>` (the `sessionId`). Without `durable`, it returns `SendResult` as before — no runtime checks needed.
+The factory receives `runId` (the unique ID of the `send()` invocation that produced this event) and `metadata` (the `webhookMetadata` you passed to `send()`). Both are also exposed in request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
+
+**Type safety:** When `durable` is configured with a `webhook`, TypeScript narrows `send()` to return `Promise<WebhookSendResult>` (the `sessionId` and `runId`). Without `durable`, it returns `SendResult` as before — no runtime checks needed.
 
 **Multi-node safe:** Your webhook handler is stateless — it receives events and processes them. No in-memory session state, no consumer locks, works behind any load balancer.
 

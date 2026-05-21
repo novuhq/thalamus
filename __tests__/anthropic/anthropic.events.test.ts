@@ -62,7 +62,7 @@ describe("stream — event mapping", () => {
     });
   });
 
-  it("emits tool-use-done on agent.tool_use event", async () => {
+  it("emits tool-use-start then tool-use-done on agent.tool_use event", async () => {
     mockCreate.mockResolvedValue({ id: "sess_tool" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -87,7 +87,19 @@ describe("stream — event mapping", () => {
       onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
     }).send({ messages: [{ role: MessageRole.USER, content: "run ls" }] });
 
+    const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
+    expect(toolStart).toMatchObject({
+      type: "tool-use-start",
+      toolName: "bash",
+      toolUseId: "tu_1",
+    });
+    expect(toolStart.source).toEqual({ type: "builtin" });
+
+    const startIdx = parts.indexOf(toolStart);
     const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    const doneIdx = parts.indexOf(toolDone);
+    expect(doneIdx).toBeGreaterThan(startIdx);
+
     expect(toolDone).toMatchObject({
       type: "tool-use-done",
       toolName: "bash",
@@ -131,7 +143,7 @@ describe("stream — event mapping", () => {
     expect(toolResult.source).toEqual({ type: "builtin" });
   });
 
-  it("emits tool-use-done on agent.mcp_tool_use event", async () => {
+  it("emits tool-use-start then tool-use-done on agent.mcp_tool_use event", async () => {
     mockCreate.mockResolvedValue({ id: "sess_mcp" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -157,7 +169,19 @@ describe("stream — event mapping", () => {
       onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
     }).send({ messages: [{ role: MessageRole.USER, content: "list repos" }] });
 
+    const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
+    expect(toolStart).toMatchObject({
+      type: "tool-use-start",
+      toolName: "list_repos",
+      toolUseId: "mcp_1",
+    });
+    expect(toolStart.source).toEqual({ type: "mcp", serverName: "github" });
+
+    const startIdx = parts.indexOf(toolStart);
     const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
+    const doneIdx = parts.indexOf(toolDone);
+    expect(doneIdx).toBeGreaterThan(startIdx);
+
     expect(toolDone).toMatchObject({
       type: "tool-use-done",
       toolName: "list_repos",

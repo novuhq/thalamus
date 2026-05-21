@@ -84,6 +84,12 @@ export function* mapEvent(
     case "agent.tool_use": {
       const e = event as BetaManagedAgentsAgentToolUseEvent;
       yield {
+        type: "tool-use-start",
+        toolName: e.name,
+        toolUseId: e.id,
+        source: { type: "builtin" },
+      };
+      yield {
         type: "tool-use-done",
         toolName: e.name,
         toolUseId: e.id,
@@ -105,6 +111,15 @@ export function* mapEvent(
     }
     case "agent.mcp_tool_use": {
       const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
+      yield {
+        type: "tool-use-start",
+        toolName: e.name,
+        toolUseId: e.id,
+        source: {
+          type: "mcp",
+          serverName: e.mcp_server_name ?? "",
+        },
+      };
       yield {
         type: "tool-use-done",
         toolName: e.name,

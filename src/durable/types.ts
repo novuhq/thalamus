@@ -3,6 +3,7 @@ export interface SessionCheckpoint {
   provider: string;
   lastEventId: string;
   createdAt: number;
+  runId: string;
   metadata?: Record<string, string>;
 }
 
@@ -20,6 +21,8 @@ export interface DurabilityBackend {
 
 export interface EdgeObserveParams {
   sessionId: string;
+  /** Unique identifier for this `send()` invocation. Forwarded in every webhook event. */
+  runId: string;
   streamUrl: string;
   headers: Record<string, string>;
   provider: string;

@@ -3,6 +3,7 @@ import type { StreamCallbacks, StreamPart } from "../types";
 
 export type SessionEventsFactory = (
   sessionId: string,
+  runId: string,
   metadata: Record<string, string>,
 ) => StreamCallbacks;
 
@@ -35,6 +36,8 @@ export interface WebhookHandler {
 
 interface WebhookPayload {
   sessionId: string;
+  /** Unique identifier for the originating `send()` invocation. */
+  runId: string;
   sequence: number;
   timestamp: number;
   provider: string;
@@ -121,16 +124,18 @@ export function createWebhookHandler(
       };
     }
 
-    const { sessionId, metadata, event } = payload;
+    const { sessionId, runId, metadata, event } = payload;
 
-    if (!sessionId || !event?.type) {
+    if (!sessionId || !runId || !event?.type) {
       return {
         status: 400,
-        body: JSON.stringify({ error: "Missing sessionId or event" }),
+        body: JSON.stringify({
+          error: "Missing sessionId, runId, or event",
+        }),
       };
     }
 
-    const callbacks = onSessionEvents(sessionId, metadata ?? {});
+    const callbacks = onSessionEvents(sessionId, runId, metadata ?? {});
 
     try {
       dispatch(callbacks, event);

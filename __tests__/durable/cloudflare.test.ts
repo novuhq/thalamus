@@ -16,12 +16,13 @@ afterEach(() => {
 });
 
 describe("cloudflare() edge observer", () => {
-  it("observe sends POST /observe with params", async () => {
+  it("observe sends POST /observe with params including runId", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
     const backend = cloudflare(defaultOptions);
     await backend.observe({
       sessionId: "sess_1",
+      runId: "run_1",
       streamUrl: "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
       headers: { "x-api-key": "key" },
       provider: "anthropic",
@@ -34,6 +35,7 @@ describe("cloudflare() edge observer", () => {
         method: "POST",
         body: JSON.stringify({
           sessionId: "sess_1",
+          runId: "run_1",
           streamUrl:
             "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
           headers: { "x-api-key": "key" },
@@ -50,6 +52,7 @@ describe("cloudflare() edge observer", () => {
     const backend = cloudflare({ ...defaultOptions, apiKey: "secret" });
     await backend.observe({
       sessionId: "sess_1",
+      runId: "run_1",
       streamUrl: "https://example.com/sse",
       headers: {},
       provider: "anthropic",
@@ -73,6 +76,7 @@ describe("cloudflare() edge observer", () => {
     await expect(
       backend.observe({
         sessionId: "sess_1",
+        runId: "run_1",
         streamUrl: "https://example.com/sse",
         headers: {},
         provider: "anthropic",
@@ -130,6 +134,7 @@ describe("cloudflare() edge observer", () => {
     });
     await backend.observe({
       sessionId: "sess_1",
+      runId: "run_1",
       streamUrl: "https://example.com/sse",
       headers: {},
       provider: "anthropic",

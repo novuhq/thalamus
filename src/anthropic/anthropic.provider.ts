@@ -30,6 +30,7 @@ import {
   type StreamPart,
   type ToolResult,
   type WebhookProvider,
+  type WebhookSendResult,
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
@@ -161,19 +162,23 @@ class AnthropicProvider {
     return this.client;
   }
 
-  send(params: RequestParams): SendResult | Promise<string> {
+  send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
+    const runId = crypto.randomUUID();
     if (this.edgeObserver) {
-      return this.sendViaWebhook(params);
+      return this.sendViaWebhook(params, runId);
     }
     const callbacks = this.config.onSessionEvents
-      ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>")
+      ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>", runId)
       : undefined;
-    return createSendResult(this.runStream(params), callbacks, {
+    return createSendResult(this.runStream(params, runId), runId, callbacks, {
       autoStart: !!this.config.onSessionEvents,
     });
   }
 
-  private async sendViaWebhook(params: RequestParams): Promise<string> {
+  private async sendViaWebhook(
+    params: RequestParams,
+    runId: string,
+  ): Promise<WebhookSendResult> {
     const client = await this.getClient();
     const sessionId =
       params.sessionId ??
@@ -181,8 +186,8 @@ class AnthropicProvider {
         vaultIds: params.vaultIds,
         providerOptions: params.providerOptions,
       }));
-    await this.edgeObserve(client, sessionId, params);
-    return sessionId;
+    await this.edgeObserve(client, sessionId, runId, params);
+    return { sessionId, runId };
   }
 
   private async dispatch(
@@ -236,6 +241,7 @@ class AnthropicProvider {
   private async *resilientObserve(
     client: Anthropic,
     sessionId: string,
+    runId: string,
     signal?: AbortSignal,
     onConnected?: () => Promise<void>,
     initialSeenIds?: Set<string>,
@@ -250,6 +256,7 @@ class AnthropicProvider {
             provider: "anthropic",
             lastEventId: eventId,
             createdAt: Date.now(),
+            runId,
           })
       : undefined;
     let retries = 0;
@@ -312,13 +319,15 @@ class AnthropicProvider {
           const status = await this.getStatus(client, checkpoint.sessionId);
 
           if (status === "running" || status === "idle") {
-            const callbacks = onSessionEvents(checkpoint.sessionId);
+            const { runId } = checkpoint;
+            const callbacks = onSessionEvents(checkpoint.sessionId, runId);
             const stream = this.recoverStream(
               client,
               checkpoint,
+              runId,
               status === "running",
             );
-            const result = createSendResult(stream, callbacks, {
+            const result = createSendResult(stream, runId, callbacks, {
               autoStart: true,
             });
             result.response.catch(async (err) => {
@@ -346,6 +355,7 @@ class AnthropicProvider {
   private async *recoverStream(
     client: Anthropic,
     checkpoint: SessionCheckpoint,
+    runId: string,
     stillRunning: boolean,
   ): AsyncIterable<StreamPart> {
     const { sessionId, lastEventId } = checkpoint;
@@ -359,6 +369,7 @@ class AnthropicProvider {
             provider: "anthropic",
             lastEventId: eventId,
             createdAt: Date.now(),
+            runId,
           })
       : undefined;
 
@@ -405,12 +416,14 @@ class AnthropicProvider {
   private async edgeObserve(
     client: Anthropic,
     sessionId: string,
+    runId: string,
     params: RequestParams,
   ): Promise<void> {
     const observer = this.edgeObserver!;
 
     await observer.observe({
       sessionId,
+      runId,
       streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
       headers: {
         "x-api-key": client.apiKey ?? "",
@@ -427,7 +440,10 @@ class AnthropicProvider {
     await this.dispatch(client, sessionId, params);
   }
 
-  private async *runStream(params: RequestParams): AsyncIterable<StreamPart> {
+  private async *runStream(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
       const sessionId =
@@ -440,7 +456,7 @@ class AnthropicProvider {
       yield { type: "stream-start", sessionId };
 
       const signal = params.abortSignal ?? undefined;
-      yield* this.resilientObserve(client, sessionId, signal, () =>
+      yield* this.resilientObserve(client, sessionId, runId, signal, () =>
         this.dispatch(client, sessionId, params, signal),
       );
     } catch (err) {

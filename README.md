@@ -91,38 +91,40 @@ const provider = thalamus.openai({ /* config */ });
 
 ### send() and SendResult
 
-`send()` returns a `SendResult` — a `PromiseLike<Response>` that you can consume in several ways:
+`send()` returns a `SendResult` — a `PromiseLike<Response>` you can use in different ways depending on what you need.
+
+#### Pattern 1: Await the full response
+
+The simplest approach. Blocks until the agent finishes its turn.
 
 ```typescript
-// Wait for the complete response
 const response = await provider.send({ messages });
-
-// Just the text
-const text = await provider.send({ messages }).text();
-
-// Get the sessionId early (resolves before the stream finishes)
-const result = provider.send({ messages });
-const sessionId = await result.sessionId;
-
-// runId is known synchronously — unique UUID for this send() invocation
-const result = provider.send({ messages });
-console.log(result.runId);
+console.log(response.content);
+console.log(response.finishReason); // 'stop', 'requires-action', etc.
 ```
 
-Every `send()` invocation gets a fresh `runId` so you can correlate callbacks, logs, traces, and webhook events back to a specific turn even when a session has many. The same `runId` is passed to `onSessionEvents(sessionId, runId)` and — in webhook mode — echoed in every webhook payload (body field `runId`, header `X-Thalamus-Run-Id`).
+#### Pattern 2: Just get the text
 
-You can also forward provider-specific options (temperature, max tokens, etc.) directly to the underlying SDK via `providerOptions`:
+Convenience shorthand when you only care about the output string.
 
 ```typescript
-await provider.send({
-  messages,
-  providerOptions: { temperature: 0.7, max_output_tokens: 4096 },
-});
+const text = await provider.send({ messages }).text();
 ```
 
-### Streaming with Callbacks
+#### Pattern 3: Access metadata without waiting
 
-Callbacks are attached at **provider creation time** via `onSessionEvents`, not on individual `send()` calls. This is intentional — the same factory is used to re-attach callbacks when [recovering durable sessions](#durable-sessions) after a restart, so the pattern is consistent for both live and recovered streams.
+`runId` is available immediately (no await). `sessionId` resolves early — as soon as the stream opens, before the agent finishes. Useful when you need to store references or start parallel work.
+
+```typescript
+const result = provider.send({ messages });
+console.log(result.runId);              // available instantly
+const sid = await result.sessionId;     // resolves early
+await result.response;                  // wait for the full response later
+```
+
+#### Pattern 4: Fire-and-forget with callbacks
+
+When `onSessionEvents` is set, `send()` starts consuming events immediately — callbacks fire even if you never await the result. Use this when callbacks do all the work and you don't need the return value.
 
 ```typescript
 const provider = createOpenAIProvider({
@@ -135,12 +137,74 @@ const provider = createOpenAIProvider({
   }),
 });
 
-// When onSessionEvents is set, send() starts consuming immediately —
-// callbacks fire even if you never await the result.
-provider.send({ messages });
+provider.send({ messages }); // no await needed — callbacks handle everything
 ```
 
-The factory receives the `sessionId` (so you can route events to the right client connection, database row, or WebSocket) and the `runId` (so you can correlate callbacks back to a specific `send()` invocation — useful for tracing and per-turn state).
+You can still `await` if you want to catch errors or check the `finishReason`:
+
+```typescript
+const response = await provider.send({ messages });
+if (response.finishReason === 'requires-action') { /* handle approval */ }
+```
+
+Without `onSessionEvents`, consumption is **lazy** — nothing happens until you access `.sessionId`, `.response`, or `await` the result.
+
+---
+
+Every `send()` gets a fresh `runId` for correlating callbacks, logs, and webhook events back to a specific turn. The same `runId` is passed to `onSessionEvents(sessionId, runId)` and echoed in webhook payloads.
+
+Provider-specific options (temperature, max tokens, etc.) pass through via `providerOptions`:
+
+```typescript
+await provider.send({
+  messages,
+  providerOptions: { temperature: 0.7, max_output_tokens: 4096 },
+});
+```
+
+### Streaming with Callbacks
+
+Callbacks are set at **provider creation time** via `onSessionEvents` — not per `send()` call. This lets the same factory re-attach callbacks when [recovering durable sessions](#durable-sessions) after a restart.
+
+The factory receives `sessionId` (route events to the right client) and `runId` (correlate back to a specific `send()` invocation).
+
+#### Async callbacks and ordering
+
+Callbacks can be sync or async. When a callback is async (returns a `Promise`), the SDK **waits for it to finish before processing the next event**. This guarantees events are handled one at a time, in order:
+
+```typescript
+onSessionEvents: (sessionId, runId) => ({
+  // Sync callback — returns immediately.
+  // Great for pushing to a WebSocket or appending to a string.
+  onTextDelta: ({ text }) => socket.emit('delta', text),
+
+  // Async callback — the SDK waits for it to complete.
+  // The next event won't be processed until this DB write finishes.
+  // This prevents race conditions without needing locks.
+  onToolUseDone: async ({ toolName, input }) => {
+    const existing = await db.planCards.findOne({ sessionId });
+    if (existing) {
+      await db.planCards.updateOne(existing._id, { $push: { tools: toolName } });
+    } else {
+      await db.planCards.insertOne({ sessionId, toolName });
+    }
+  },
+}),
+```
+
+Why this matters: without sequential processing, two rapid `onToolUseDone` events could both read an empty DB, both insert, and create duplicates. With async callbacks, the second event always sees the first event's writes.
+
+This works identically in streaming mode and [webhook mode](#durable-sessions--webhook-delivery) — same callbacks, same guarantee.
+
+**Rule of thumb:** Keep `onTextDelta` sync for fast streaming. Use `async` for `onToolUseDone`/`onFinish` where correctness matters more than speed.
+
+If you have async work that shouldn't block the next event (like analytics), just don't return the promise:
+
+```typescript
+onToolUseDone: ({ toolName }) => {
+  void analytics.track('tool_used', { toolName }); // fire-and-forget
+},
+```
 
 <details>
 <summary>All available callbacks</summary>
@@ -377,15 +441,17 @@ const { sessionId, runId } = await provider.send({
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   onSessionEvents: (sessionId, runId, metadata) => ({
-    onPart(part) {
-      switch (part.type) {
-        case 'text-delta':
-          pushToClient(sessionId, part.text);
-          break;
-        case 'finish':
-          saveResponse(sessionId, part.response);
-          break;
-      }
+    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+
+    // Async callbacks are awaited — the webhook handler only responds 200
+    // after this completes, so the Observer won't send the next event until
+    // your DB writes finish. No locks needed.
+    onToolUseDone: async ({ toolName, input }) => {
+      await db.activities.insertOne({ sessionId, runId, toolName, input });
+    },
+
+    onFinish: async ({ response }) => {
+      await saveResponse(sessionId, response);
     },
   }),
 });
@@ -397,11 +463,18 @@ app.post('/webhook', (req, res) => handler.express(req, res));
 export default { fetch: (req) => handler.handle(req) };
 ```
 
-The factory receives `runId` (the unique ID of the `send()` invocation that produced this event) and `metadata` (the `webhookMetadata` you passed to `send()`). Both are also exposed in request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
+The factory receives `runId` and `metadata` (from `webhookMetadata` on `send()`). Both are also in headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
 
-**Type safety:** When `durable` is configured with a `webhook`, TypeScript narrows `send()` to return `Promise<WebhookSendResult>` (the `sessionId` and `runId`). Without `durable`, it returns `SendResult` as before — no runtime checks needed.
+**No race conditions:** The Observer delivers events one at a time. It sends an event to your webhook and waits — it won't send the next event until your handler responds with 200. Since `createWebhookHandler` only responds 200 **after** your async callback completes, this means:
 
-**Multi-node safe:** Your webhook handler is stateless — it receives events and processes them. No in-memory session state, no consumer locks, works behind any load balancer.
+1. Observer sends event A → your `onToolUseDone` runs, does its DB write → handler responds 200
+2. Observer sends event B → your `onToolUseDone` runs, reads A's data from DB → handler responds 200
+
+Events never overlap. Your callbacks always see the previous callback's side effects. No distributed locks, no in-memory queues, no retry coordination on your side.
+
+**Type safety:** With `durable` + webhook configured, TypeScript narrows `send()` to `Promise<WebhookSendResult>`.
+
+**Multi-node safe:** No in-memory state, works behind any load balancer. The Observer guarantees ordering regardless of which node receives the request.
 
 For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 

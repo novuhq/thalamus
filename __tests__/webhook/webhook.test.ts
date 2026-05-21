@@ -269,6 +269,49 @@ describe("createWebhookHandler", () => {
       expect(result.status).toBe(500);
       expect(JSON.parse(result.body!).error).toMatch(/Callback/);
     });
+
+    it("returns 500 when async callback rejects", async () => {
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: () => ({
+          onTextDelta: async () => {
+            throw new Error("async boom");
+          },
+        }),
+      });
+
+      const body = makePayload({ type: "text-delta", text: "hi" });
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      const result = await handler.handleRaw(body, sig);
+      expect(result.status).toBe(500);
+      expect(JSON.parse(result.body!).error).toMatch(/Callback/);
+    });
+
+    it("awaits async callbacks before returning 200", async () => {
+      const order: string[] = [];
+
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: () => ({
+          onTextDelta: async () => {
+            await new Promise((r) => setTimeout(r, 50));
+            order.push("callback-done");
+          },
+        }),
+      });
+
+      const body = makePayload({ type: "text-delta", text: "hi" });
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      const result = await handler.handleRaw(body, sig);
+      order.push("response");
+
+      expect(result.status).toBe(200);
+      expect(order).toEqual(["callback-done", "response"]);
+    });
   });
 
   describe("payload validation", () => {

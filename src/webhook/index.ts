@@ -88,11 +88,16 @@ export function createWebhookHandler(
     return timingSafeEqual(signature, expectedHex);
   }
 
-  function dispatch(callbacks: StreamCallbacks, event: StreamPart): void {
-    callbacks.onPart?.(event);
+  async function dispatch(
+    callbacks: StreamCallbacks,
+    event: StreamPart,
+  ): Promise<void> {
+    await callbacks.onPart?.(event);
     const key = CALLBACK_MAP[event.type];
-    const cb = callbacks[key] as ((part: unknown) => void) | undefined;
-    if (cb) cb(event);
+    const cb = callbacks[key] as
+      | ((part: unknown) => void | Promise<void>)
+      | undefined;
+    if (cb) await cb(event);
   }
 
   async function processRequest(
@@ -138,7 +143,7 @@ export function createWebhookHandler(
     const callbacks = onSessionEvents(sessionId, runId, metadata ?? {});
 
     try {
-      dispatch(callbacks, event);
+      await dispatch(callbacks, event);
     } catch {
       return { status: 500, body: JSON.stringify({ error: "Callback error" }) };
     }

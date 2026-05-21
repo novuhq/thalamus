@@ -74,19 +74,21 @@ class SendResultImpl implements SendResult {
       if (part.type === "stream-start" && part.sessionId) {
         this._sessionIdResolve(part.sessionId);
       }
-      this.dispatch(part);
+      await this.dispatch(part);
       if (part.type === "finish") return part.response;
       if (part.type === "error") throw part.error;
     }
     throw new Error("Stream ended without a finish event");
   }
 
-  private dispatch(part: StreamPart): void {
+  private async dispatch(part: StreamPart): Promise<void> {
     if (!this.callbacks) return;
-    this.callbacks.onPart?.(part);
+    await this.callbacks.onPart?.(part);
     const key = CALLBACK_MAP[part.type];
-    const cb = this.callbacks[key] as ((part: StreamPart) => void) | undefined;
-    if (cb) cb(part);
+    const cb = this.callbacks[key] as
+      | ((part: StreamPart) => void | Promise<void>)
+      | undefined;
+    if (cb) await cb(part);
   }
 }
 

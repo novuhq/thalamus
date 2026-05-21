@@ -226,6 +226,24 @@ provider.send({ messages });
 
 The factory receives the `sessionId` (so you can route events to the right client connection) and the `runId` (so you can correlate callbacks back to a specific `send()` invocation — useful for tracing and per-turn state).
 
+### Async callbacks and sequential dispatch
+
+Callbacks may return `void` or `Promise<void>`. When a callback returns a promise, the SDK **awaits it before dispatching the next event**:
+
+```typescript
+onSessionEvents: (sessionId, runId) => ({
+  // Sync — instant, no backpressure (ideal for streaming text to a socket)
+  onTextDelta: ({ text }) => socket.emit('delta', text),
+
+  // Async — awaited before the next event dispatches (ideal for DB writes)
+  onToolUseDone: async ({ toolName, input }) => {
+    await db.activities.insertOne({ sessionId, runId, toolName, input });
+  },
+}),
+```
+
+This applies to both streaming mode and webhook mode — same callbacks, same ordering guarantee. Sync callbacks add zero overhead (`await undefined` = one microtick). To fire-and-forget inside a callback, use `void asyncFn()` without returning the promise.
+
 ### StreamPart types
 
 | Type | Key fields |

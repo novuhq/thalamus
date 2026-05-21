@@ -147,34 +147,46 @@ export type StreamPart =
 
 export interface StreamCallbacks {
   /** Fires for every stream part, before type-specific callbacks. */
-  onPart?: (part: StreamPart) => void;
-  onTextDelta?: (part: Extract<StreamPart, { type: "text-delta" }>) => void;
-  onThinking?: (part: Extract<StreamPart, { type: "thinking" }>) => void;
-  onRefusal?: (part: Extract<StreamPart, { type: "refusal" }>) => void;
+  onPart?: (part: StreamPart) => void | Promise<void>;
+  onTextDelta?: (
+    part: Extract<StreamPart, { type: "text-delta" }>,
+  ) => void | Promise<void>;
+  onThinking?: (
+    part: Extract<StreamPart, { type: "thinking" }>,
+  ) => void | Promise<void>;
+  onRefusal?: (
+    part: Extract<StreamPart, { type: "refusal" }>,
+  ) => void | Promise<void>;
   onToolUseStart?: (
     part: Extract<StreamPart, { type: "tool-use-start" }>,
-  ) => void;
+  ) => void | Promise<void>;
   onToolUseDelta?: (
     part: Extract<StreamPart, { type: "tool-use-delta" }>,
-  ) => void;
+  ) => void | Promise<void>;
   onToolUseDone?: (
     part: Extract<StreamPart, { type: "tool-use-done" }>,
-  ) => void;
+  ) => void | Promise<void>;
   onToolUseResult?: (
     part: Extract<StreamPart, { type: "tool-use-result" }>,
-  ) => void;
+  ) => void | Promise<void>;
   onMcpToolsDiscovered?: (
     part: Extract<StreamPart, { type: "mcp-tools-discovered" }>,
-  ) => void;
+  ) => void | Promise<void>;
   onStatusChange?: (
     part: Extract<StreamPart, { type: "status-change" }>,
-  ) => void;
-  onStreamStart?: (part: Extract<StreamPart, { type: "stream-start" }>) => void;
-  onFinish?: (part: Extract<StreamPart, { type: "finish" }>) => void;
-  onError?: (part: Extract<StreamPart, { type: "error" }>) => void;
+  ) => void | Promise<void>;
+  onStreamStart?: (
+    part: Extract<StreamPart, { type: "stream-start" }>,
+  ) => void | Promise<void>;
+  onFinish?: (
+    part: Extract<StreamPart, { type: "finish" }>,
+  ) => void | Promise<void>;
+  onError?: (
+    part: Extract<StreamPart, { type: "error" }>,
+  ) => void | Promise<void>;
   onProviderEvent?: (
     part: Extract<StreamPart, { type: "provider-event" }>,
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 export interface SendResult extends PromiseLike<Response> {

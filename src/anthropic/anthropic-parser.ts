@@ -51,6 +51,7 @@ export class ResponseAccumulator {
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
   done = false;
+  stepIndex = 0;
   /** `agent.mcp_tool_use.id` → `mcp_server_name` for later `agent.mcp_tool_result`. */
   mcpServerByToolUseId = new Map<string, string>();
 
@@ -192,15 +193,26 @@ export function* mapEvent(
       throw mapSessionError(e.error);
     }
 
+    case "span.model_request_start": {
+      yield { type: "step-start", stepIndex: acc.stepIndex };
+      break;
+    }
     case "span.model_request_end": {
       const e = event as BetaManagedAgentsSpanModelRequestEndEvent;
       if (e.model_usage) {
         acc.usage = {
-          inputTokens: e.model_usage.input_tokens,
-          outputTokens: e.model_usage.output_tokens,
-          totalTokens: e.model_usage.input_tokens + e.model_usage.output_tokens,
+          inputTokens:
+            (acc.usage?.inputTokens ?? 0) + e.model_usage.input_tokens,
+          outputTokens:
+            (acc.usage?.outputTokens ?? 0) + e.model_usage.output_tokens,
+          totalTokens:
+            (acc.usage?.totalTokens ?? 0) +
+            e.model_usage.input_tokens +
+            e.model_usage.output_tokens,
         };
       }
+      yield { type: "step-done", stepIndex: acc.stepIndex };
+      acc.stepIndex++;
       break;
     }
 

@@ -59,6 +59,7 @@ export class ResponseAccumulator {
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
   done = false;
+  stepIndex = 0;
 
   toResponse(): Response {
     return {
@@ -88,6 +89,7 @@ export function* mapEvent(
     }
     case "response.in_progress": {
       yield { type: "status-change", status: "running" };
+      yield { type: "step-start", stepIndex: acc.stepIndex };
       break;
     }
     case "response.completed": {
@@ -101,6 +103,8 @@ export function* mapEvent(
       if (!acc.content) {
         acc.content = event.response.output_text;
       }
+      yield { type: "step-done", stepIndex: acc.stepIndex };
+      acc.stepIndex++;
       acc.done = true;
       break;
     }

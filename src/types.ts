@@ -157,6 +157,8 @@ export type StreamPart =
       serverName: string;
       tools: McpToolDef[];
     }
+  | { type: "step-start"; stepIndex: number }
+  | { type: "step-done"; stepIndex: number }
   | { type: "status-change"; status: AgentStatus }
   | { type: "stream-start"; sessionId?: string }
   | { type: "finish"; response: Response }
@@ -194,6 +196,12 @@ export interface StreamCallbacks {
   ) => void | Promise<void>;
   onMcpToolsDiscovered?: (
     part: Extract<StreamPart, { type: "mcp-tools-discovered" }>,
+  ) => void | Promise<void>;
+  onStepStart?: (
+    part: Extract<StreamPart, { type: "step-start" }>,
+  ) => void | Promise<void>;
+  onStepDone?: (
+    part: Extract<StreamPart, { type: "step-done" }>,
   ) => void | Promise<void>;
   onStatusChange?: (
     part: Extract<StreamPart, { type: "status-change" }>,

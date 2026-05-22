@@ -254,7 +254,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `tool-use-start` | `toolName`, `toolUseId`, `source?` |
 | `tool-use-delta` | `toolUseId`, `argumentsDelta` |
 | `tool-use-done` | `toolName`, `toolUseId`, `input?`, `source?` |
-| `tool-use-result` | `toolUseId`, `output?`, `source?` |
+| `tool-use-result` | `toolUseId`, `content` (`ToolResultContent[]`), `isError?`, `source?` |
 | `mcp-tools-discovered` | `serverName`, `tools: McpToolDef[]` |
 | `status-change` | `status: 'running' \| 'queued' \| 'retrying' \| 'idle'` |
 | `stream-start` | `sessionId?` |

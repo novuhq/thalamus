@@ -218,7 +218,7 @@ onToolUseDone: ({ toolName }) => {
 | `onToolUseStart` | `tool-use-start` | Tool call initiated |
 | `onToolUseDelta` | `tool-use-delta` | Streaming tool call arguments |
 | `onToolUseDone` | `tool-use-done` | Tool call completed with parsed input |
-| `onToolUseResult` | `tool-use-result` | Tool execution result |
+| `onToolUseResult` | `tool-use-result` | Tool execution result (`content` blocks) |
 | `onMcpToolsDiscovered` | `mcp-tools-discovered` | MCP server tools discovered |
 | `onStatusChange` | `status-change` | Agent status changed |
 | `onStreamStart` | `stream-start` | Stream opened, includes `sessionId` |

@@ -310,7 +310,7 @@ describe("MCP stream events", () => {
 
     const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
     expect(toolResult).toMatchObject({
-      output: "Created #456",
+      content: [{ type: "text", text: "Created #456" }],
       source: { type: "mcp", serverName: "github" },
     });
   });

@@ -19,6 +19,7 @@ import {
   type StreamPart,
   type Usage,
 } from "../types";
+import { parseOpenAIToolResultOutput } from "./tool-result";
 
 function mapStreamErrorEvent(event: {
   code?: string | null;
@@ -202,7 +203,7 @@ export function* mapEvent(
         yield {
           type: "tool-use-result",
           toolUseId: item.id,
-          output: item.output ?? undefined,
+          content: parseOpenAIToolResultOutput(item.output),
           source: { type: "mcp", serverName: item.server_label },
         };
       } else if (e.item.type === "mcp_approval_request") {

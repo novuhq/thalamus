@@ -18,6 +18,10 @@ import {
   type StreamPart,
   type Usage,
 } from "../types";
+import {
+  toolResultFromAgentToolResultEvent,
+  toolResultFromMcpToolResultEvent,
+} from "./tool-result";
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
 
@@ -100,11 +104,12 @@ export function* mapEvent(
     }
     case "agent.tool_result": {
       const e = event as BetaManagedAgentsAgentToolResultEvent;
-      const output = e.content?.find((b) => b.type === "text");
+      const result = toolResultFromAgentToolResultEvent(e);
       yield {
         type: "tool-use-result",
         toolUseId: e.tool_use_id,
-        output: output?.type === "text" ? output.text : undefined,
+        content: result.content,
+        isError: result.isError,
         source: { type: "builtin" },
       };
       break;
@@ -134,15 +139,13 @@ export function* mapEvent(
     }
     case "agent.mcp_tool_result": {
       const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
-      const output = e.content?.find((b) => b.type === "text");
+      const result = toolResultFromMcpToolResultEvent(e);
       yield {
         type: "tool-use-result",
         toolUseId: e.mcp_tool_use_id,
-        output: output?.type === "text" ? output.text : undefined,
-        source: {
-          type: "mcp",
-          serverName: "",
-        },
+        content: result.content,
+        isError: result.isError,
+        source: { type: "mcp", serverName: "" },
       };
       break;
     }

@@ -178,7 +178,12 @@ describe("tool results / approval flow", () => {
     await provider.send({
       messages: [{ role: MessageRole.USER, content: "" }],
       sessionId: "conv_prev",
-      toolResults: [{ toolUseId: "call_abc", output: '{"result": 42}' }],
+      toolResults: [
+        {
+          toolUseId: "call_abc",
+          content: [{ type: "text", text: '{"result": 42}' }],
+        },
+      ],
     });
 
     const callArgs = mockResponsesCreate.mock.calls[0][0];

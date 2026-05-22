@@ -45,6 +45,7 @@ import type {
 import { openaiTransformer } from "./openai.transformer";
 import { mapEvent, ResponseAccumulator } from "./openai-parser";
 import { createSigV4Fetch } from "./sigv4-fetch";
+import { toOpenAIToolResultOutput } from "./tool-result";
 
 export function mapError(error: unknown, provider: string): Error {
   if (error instanceof APIUserAbortError) {
@@ -298,7 +299,7 @@ class OpenAIProvider {
         return {
           type: "function_call_output" as const,
           call_id: tr.toolUseId,
-          output: tr.output ?? "",
+          output: toOpenAIToolResultOutput(tr.content),
         };
       });
       input = [...toolInputs, ...input];

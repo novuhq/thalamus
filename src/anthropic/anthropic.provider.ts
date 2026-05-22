@@ -36,6 +36,7 @@ import type { Vault, VaultOptions } from "../vault/vault.interface";
 import { toContentBlocks } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
+import { toAnthropicToolResultContent } from "./tool-result";
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   if (err instanceof APIUserAbortError) {
@@ -103,7 +104,7 @@ function toSessionEvent(
   return {
     type: "user.custom_tool_result" as const,
     custom_tool_use_id: tr.toolUseId,
-    content: [{ type: "text" as const, text: tr.output ?? "" }],
+    content: toAnthropicToolResultContent(tr.content),
   };
 }
 

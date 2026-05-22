@@ -138,9 +138,53 @@ describe("stream — event mapping", () => {
     expect(toolResult).toMatchObject({
       type: "tool-use-result",
       toolUseId: "tu_1",
-      output: "file1.ts\nfile2.ts",
+      content: [{ type: "text", text: "file1.ts\nfile2.ts" }],
     });
     expect(toolResult.source).toEqual({ type: "builtin" });
+  });
+
+  it("maps agent.tool_result search_result blocks to citation content", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_search" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.tool_result",
+          id: "evt_1",
+          tool_use_id: "tu_search",
+          is_error: false,
+          content: [
+            {
+              type: "search_result",
+              title: "Mariana Trench - Wikipedia",
+              source: "https://en.wikipedia.org/wiki/Mariana_Trench",
+              content: [{ type: "text", text: "The deepest oceanic trench." }],
+            },
+          ],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "search" }] });
+
+    const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
+    expect(toolResult.content).toEqual([
+      {
+        type: "citation",
+        url: "https://en.wikipedia.org/wiki/Mariana_Trench",
+        title: "Mariana Trench - Wikipedia",
+        excerpts: ["The deepest oceanic trench."],
+      },
+    ]);
   });
 
   it("emits tool-use-start then tool-use-done on agent.mcp_tool_use event", async () => {
@@ -220,7 +264,7 @@ describe("stream — event mapping", () => {
     expect(toolResult).toMatchObject({
       type: "tool-use-result",
       toolUseId: "mcp_1",
-      output: "repo-a, repo-b",
+      content: [{ type: "text", text: "repo-a, repo-b" }],
     });
     expect(toolResult.source).toEqual({ type: "mcp", serverName: "" });
   });

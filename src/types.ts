@@ -17,9 +17,31 @@ export interface Message {
   content: string | ContentPart[];
 }
 
+/** Normalized tool output; provider parsers map into this shape. */
+export type ToolResultContent =
+  | { type: "text"; text: string }
+  | {
+      type: "citation";
+      url: string;
+      title?: string;
+      excerpts?: string[];
+    }
+  | { type: "json"; value: unknown }
+  | {
+      type: "media";
+      mediaType: string;
+      data: string;
+      name?: string;
+    }
+  | {
+      type: "unknown";
+      providerType: string;
+      data: Record<string, unknown>;
+    };
+
 export interface ToolResult {
   toolUseId: string;
-  output?: string;
+  content: ToolResultContent[];
   isError?: boolean;
   approved?: boolean;
 }
@@ -126,7 +148,8 @@ export type StreamPart =
   | {
       type: "tool-use-result";
       toolUseId: string;
-      output?: string;
+      content: ToolResultContent[];
+      isError?: boolean;
       source?: ToolSource;
     }
   | {

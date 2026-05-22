@@ -12,8 +12,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       '@anthropic-ai/sdk':
-        specifier: latest
-        version: 0.95.1
+        specifier: ^0.98.0
+        version: 0.98.0
       '@aws-crypto/sha256-js':
         specifier: ^5.2.0
         version: 5.2.0
@@ -109,7 +109,7 @@ packages:
   /@anthropic-ai/aws-sdk@0.3.0:
     resolution: {integrity: sha512-g8fD+UeDpciT4tAyGUFHihVzje1U6gFwipilrU9yVZ7uVYza5ydd/3SchmJBS9ai4CN0FELAuITL+jZi8y4UaQ==}
     dependencies:
-      '@anthropic-ai/sdk': 0.95.2
+      '@anthropic-ai/sdk': 0.98.0
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/credential-providers': 3.1045.0
       '@smithy/config-resolver': 4.4.17
@@ -123,21 +123,8 @@ packages:
       - zod
     dev: true
 
-  /@anthropic-ai/sdk@0.95.1:
-    resolution: {integrity: sha512-OO9AF7hmAoU492c/mD7Q2cPqI2WNAj7rAPHlawgBeUgpwiboLRiDs+grsErGWeHHP9ZRWfzq2OVrODTt8aITVg==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
-    dependencies:
-      json-schema-to-ts: 3.1.1
-      standardwebhooks: 1.0.0
-    dev: true
-
-  /@anthropic-ai/sdk@0.95.2:
-    resolution: {integrity: sha512-Egddwo3sheo1PzUrMkZnH6VkQYwS0h/b/i8vSK8Ta9M45UQipAMeDFH57dYuDAfXMEUUGeKw6CMlremgMZgrSQ==}
+  /@anthropic-ai/sdk@0.98.0:
+    resolution: {integrity: sha512-N7aXtCvC5g6T1Y4V29lJjceu/zTkVkIZF0jdBvagr0TRFHuKeImffalGWEfqZKrvjH+IQbzJWw6TmSmUzrlMgg==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0

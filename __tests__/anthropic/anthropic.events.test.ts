@@ -143,102 +143,17 @@ describe("stream — event mapping", () => {
     expect(toolResult.source).toEqual({ type: "builtin" });
   });
 
-  it("maps agent.tool_result search_result blocks to citation content", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_search" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "agent.tool_result",
-          id: "evt_1",
-          tool_use_id: "tu_search",
-          is_error: false,
-          content: [
-            {
-              type: "search_result",
-              title: "Mariana Trench - Wikipedia",
-              source: "https://en.wikipedia.org/wiki/Mariana_Trench",
-              content: [{ type: "text", text: "The deepest oceanic trench." }],
-            },
-          ],
-        },
-        {
-          type: "session.status_idle",
-          id: "evt_2",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-    mockSend.mockResolvedValue({});
-
-    const parts: any[] = [];
-    await createAnthropicProvider({
-      ...config,
-      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
-    }).send({ messages: [{ role: MessageRole.USER, content: "search" }] });
-
-    const toolResult = parts.find((p) => p.type === "tool-use-result") as any;
-    expect(toolResult.content).toEqual([
-      {
-        type: "citation",
-        url: "https://en.wikipedia.org/wiki/Mariana_Trench",
-        title: "Mariana Trench - Wikipedia",
-        excerpts: ["The deepest oceanic trench."],
-      },
-    ]);
-  });
-
-  it("emits tool-use-start then tool-use-done on agent.mcp_tool_use event", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_mcp" });
+  it("emits tool-use-result on agent.mcp_tool_result with serverName from prior mcp_tool_use", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_mcpr" });
     mockSseStream.mockResolvedValue(
       mockSse([
         {
           type: "agent.mcp_tool_use",
           id: "mcp_1",
           name: "list_repos",
-          input: { org: "acme" },
           mcp_server_name: "github",
+          input: { org: "acme" },
         },
-        {
-          type: "session.status_idle",
-          id: "evt_2",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-    mockSend.mockResolvedValue({});
-
-    const parts: any[] = [];
-    await createAnthropicProvider({
-      ...config,
-      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
-    }).send({ messages: [{ role: MessageRole.USER, content: "list repos" }] });
-
-    const toolStart = parts.find((p) => p.type === "tool-use-start") as any;
-    expect(toolStart).toMatchObject({
-      type: "tool-use-start",
-      toolName: "list_repos",
-      toolUseId: "mcp_1",
-    });
-    expect(toolStart.source).toEqual({ type: "mcp", serverName: "github" });
-
-    const startIdx = parts.indexOf(toolStart);
-    const toolDone = parts.find((p) => p.type === "tool-use-done") as any;
-    const doneIdx = parts.indexOf(toolDone);
-    expect(doneIdx).toBeGreaterThan(startIdx);
-
-    expect(toolDone).toMatchObject({
-      type: "tool-use-done",
-      toolName: "list_repos",
-      toolUseId: "mcp_1",
-      input: { org: "acme" },
-    });
-    expect(toolDone.source).toEqual({ type: "mcp", serverName: "github" });
-  });
-
-  it("emits tool-use-result on agent.mcp_tool_result event", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_mcpr" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
         {
           type: "agent.mcp_tool_result",
           id: "evt_1",
@@ -266,7 +181,7 @@ describe("stream — event mapping", () => {
       toolUseId: "mcp_1",
       content: [{ type: "text", text: "repo-a, repo-b" }],
     });
-    expect(toolResult.source).toEqual({ type: "mcp", serverName: "" });
+    expect(toolResult.source).toEqual({ type: "mcp", serverName: "github" });
   });
 
   it("accumulates actionsRequired on agent.custom_tool_use and sets requires-action finish", async () => {

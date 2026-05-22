@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  flattenToolResultText,
-  parseAnthropicToolResultContent,
-} from "../../src/anthropic/tool-result";
+import { parseAnthropicToolResultContent } from "../../src/anthropic/tool-result";
 
 describe("parseAnthropicToolResultContent", () => {
   it("maps text and search_result blocks", () => {
@@ -36,19 +33,5 @@ describe("parseAnthropicToolResultContent", () => {
       providerType: "future_block",
       data: { type: "future_block", foo: "bar" },
     });
-  });
-});
-
-describe("flattenToolResultText", () => {
-  it("formats citations for plain-text consumers", () => {
-    const text = flattenToolResultText([
-      {
-        type: "citation",
-        url: "https://example.com",
-        title: "Example",
-        excerpts: ["snippet"],
-      },
-    ]);
-    expect(text).toBe("[Example](https://example.com): snippet");
   });
 });

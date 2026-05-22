@@ -51,6 +51,8 @@ export class ResponseAccumulator {
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
   done = false;
+  /** `agent.mcp_tool_use.id` → `mcp_server_name` for later `agent.mcp_tool_result`. */
+  mcpServerByToolUseId = new Map<string, string>();
 
   toResponse(sessionId: string): Response {
     return {
@@ -116,6 +118,7 @@ export function* mapEvent(
     }
     case "agent.mcp_tool_use": {
       const e = event as BetaManagedAgentsAgentMCPToolUseEvent;
+      acc.mcpServerByToolUseId.set(e.id, e.mcp_server_name ?? "");
       yield {
         type: "tool-use-start",
         toolName: e.name,
@@ -140,12 +143,13 @@ export function* mapEvent(
     case "agent.mcp_tool_result": {
       const e = event as BetaManagedAgentsAgentMCPToolResultEvent;
       const result = toolResultFromMcpToolResultEvent(e);
+      const serverName = acc.mcpServerByToolUseId.get(e.mcp_tool_use_id) ?? "";
       yield {
         type: "tool-use-result",
         toolUseId: e.mcp_tool_use_id,
         content: result.content,
         isError: result.isError,
-        source: { type: "mcp", serverName: "" },
+        source: { type: "mcp", serverName },
       };
       break;
     }

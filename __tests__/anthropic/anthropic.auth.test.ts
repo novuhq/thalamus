@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig, awsSigV4Config, config, mockSse } from "./_helpers.js";
+import { awsConfig, config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -142,71 +142,8 @@ describe("AWS API key auth — streaming", () => {
   });
 });
 
-describe("AWS SigV4 auth — client config", () => {
-  it("passes explicit AWS credentials to AnthropicAws", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_sigv4" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "session.status_idle",
-          id: "evt_1",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-    mockSend.mockResolvedValue({});
-
-    const rt = createAnthropicProvider({
-      ...awsSigV4Config,
-      awsCredentials: {
-        ...awsSigV4Config.awsCredentials,
-        sessionToken: "session-token-xyz",
-      },
-    });
-    await rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
-
-    expect(mockAnthropicAws).toHaveBeenCalledWith({
-      awsRegion: "us-west-2",
-      workspaceId: undefined,
-      awsAccessKey: "AKIAIOSFODNN7EXAMPLE",
-      awsSecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-      awsSessionToken: "session-token-xyz",
-    });
-  });
-});
-
-describe("AWS SigV4 auth — streaming", () => {
-  it("streams successfully via SigV4 credentials", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_sv4" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "agent.message",
-          id: "evt_1",
-          content: [{ type: "text", text: "Signed!" }],
-        },
-        {
-          type: "session.status_idle",
-          id: "evt_2",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-    mockSend.mockResolvedValue({});
-
-    const parts: any[] = [];
-    const response = await createAnthropicProvider({
-      ...awsSigV4Config,
-      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
-    }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
-
-    expect(response.content).toBe("Signed!");
-    expect(response.sessionId).toBe("sess_sv4");
-  });
-});
-
 describe("AWS auth validation", () => {
-  it("throws when awsRegion is set without credentials", async () => {
+  it("throws when awsRegion is set without apiKey", async () => {
     const rt = createAnthropicProvider({
       agentId: "agent_abc",
       environmentId: "env_xyz",
@@ -216,7 +153,7 @@ describe("AWS auth validation", () => {
     await expect(
       rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] }),
     ).rejects.toThrow(
-      "AWS Anthropic provider requires either apiKey or awsCredentials when awsRegion is set",
+      "AWS Anthropic provider requires apiKey when awsRegion is set",
     );
     expect(mockAnthropicAws).not.toHaveBeenCalled();
   });
@@ -233,20 +170,5 @@ describe("AWS auth validation", () => {
       rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] }),
     ).rejects.toThrow("AWS Anthropic provider requires a non-empty awsRegion");
     expect(mockAnthropicAws).not.toHaveBeenCalled();
-  });
-
-  it("throws when SigV4 credentials are used with EdgeObserver", () => {
-    expect(() =>
-      createAnthropicProvider({
-        ...awsSigV4Config,
-        durable: {
-          webhook: { url: "https://app.example/webhook", secret: "secret" },
-          observe: vi.fn(),
-          stop: vi.fn(),
-        },
-      }),
-    ).toThrow(
-      "AWS SigV4 credentials are not supported with EdgeObserver webhook mode",
-    );
   });
 });

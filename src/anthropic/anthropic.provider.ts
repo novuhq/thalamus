@@ -112,25 +112,12 @@ type AnthropicDirectConfig = {
   apiKey: string;
   awsRegion?: never;
   awsWorkspaceId?: never;
-  awsCredentials?: never;
 };
 
 type AnthropicAwsApiKeyConfig = {
   awsRegion: string;
   awsWorkspaceId?: string;
   apiKey: string;
-  awsCredentials?: never;
-};
-
-type AnthropicAwsSigV4Config = {
-  awsRegion: string;
-  awsWorkspaceId?: string;
-  awsCredentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
-    sessionToken?: string;
-  };
-  apiKey?: never;
 };
 
 type AnthropicBaseConfig = {
@@ -141,7 +128,7 @@ type AnthropicBaseConfig = {
 };
 
 export type AnthropicProviderConfig = AnthropicBaseConfig &
-  (AnthropicDirectConfig | AnthropicAwsApiKeyConfig | AnthropicAwsSigV4Config);
+  (AnthropicDirectConfig | AnthropicAwsApiKeyConfig);
 
 async function createClient(
   config: AnthropicProviderConfig,
@@ -151,29 +138,19 @@ async function createClient(
       throw new Error("AWS Anthropic provider requires a non-empty awsRegion");
     }
 
+    if (!config.apiKey?.trim()) {
+      throw new Error(
+        "AWS Anthropic provider requires apiKey when awsRegion is set",
+      );
+    }
+
     const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
 
-    if ("apiKey" in config && config.apiKey) {
-      return new AnthropicAws({
-        awsRegion: config.awsRegion,
-        workspaceId: config.awsWorkspaceId,
-        apiKey: config.apiKey,
-      }) as unknown as Anthropic;
-    }
-
-    if ("awsCredentials" in config && config.awsCredentials) {
-      return new AnthropicAws({
-        awsRegion: config.awsRegion,
-        workspaceId: config.awsWorkspaceId,
-        awsAccessKey: config.awsCredentials.accessKeyId,
-        awsSecretAccessKey: config.awsCredentials.secretAccessKey,
-        awsSessionToken: config.awsCredentials.sessionToken,
-      }) as unknown as Anthropic;
-    }
-
-    throw new Error(
-      "AWS Anthropic provider requires either apiKey or awsCredentials when awsRegion is set",
-    );
+    return new AnthropicAws({
+      awsRegion: config.awsRegion,
+      workspaceId: config.awsWorkspaceId,
+      apiKey: config.apiKey,
+    }) as unknown as Anthropic;
   }
 
   return new Anthropic({ apiKey: config.apiKey });
@@ -191,17 +168,6 @@ class AnthropicProvider {
   private readonly environmentId: string;
 
   constructor(config: AnthropicProviderConfig) {
-    if (
-      "awsCredentials" in config &&
-      config.awsCredentials &&
-      config.durable &&
-      isEdgeObserver(config.durable)
-    ) {
-      throw new Error(
-        "AWS SigV4 credentials are not supported with EdgeObserver webhook mode",
-      );
-    }
-
     this.config = config;
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;

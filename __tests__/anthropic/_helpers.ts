@@ -18,13 +18,3 @@ export const awsConfig = {
   awsRegion: "us-east-1",
   apiKey: "aws-api-key-abc123",
 };
-
-export const awsSigV4Config = {
-  agentId: "agent_abc",
-  environmentId: "env_xyz",
-  awsRegion: "us-west-2",
-  awsCredentials: {
-    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-  },
-};

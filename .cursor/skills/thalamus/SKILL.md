@@ -97,7 +97,7 @@ const provider = createAnthropicProvider({
 });
 ```
 
-### Anthropic via AWS (API key)
+### Anthropic via AWS
 
 Requires peer dependency `@anthropic-ai/aws-sdk` (`npm install @anthropic-ai/aws-sdk`).
 
@@ -108,24 +108,7 @@ const provider = createAnthropicProvider({
   apiKey: process.env.ANTHROPIC_AWS_API_KEY,
   agentId: 'agent_01J...',
   environmentId: 'env_01J...',
-});
-```
-
-### Anthropic via AWS (SigV4)
-
-Requires peer dependency `@anthropic-ai/aws-sdk`. SigV4 is not supported with EdgeObserver webhook mode — use AWS API key auth for `durable: cloudflare(...)`.
-
-```typescript
-const provider = createAnthropicProvider({
-  awsRegion: 'us-east-1',
-  awsWorkspaceId: 'wrkspc_...', // optional
-  awsCredentials: {
-    accessKeyId: '...',
-    secretAccessKey: '...',
-    sessionToken: '...',       // optional
-  },
-  agentId: 'agent_01J...',
-  environmentId: 'env_01J...',
+  durable: cloudflare({ ... }), // optional — API key auth works with EdgeObserver
 });
 ```
 

@@ -220,4 +220,33 @@ describe("AWS auth validation", () => {
     );
     expect(mockAnthropicAws).not.toHaveBeenCalled();
   });
+
+  it("throws when awsRegion is empty", async () => {
+    const rt = createAnthropicProvider({
+      agentId: "agent_abc",
+      environmentId: "env_xyz",
+      awsRegion: "",
+      apiKey: "aws-api-key-abc123",
+    } as Parameters<typeof createAnthropicProvider>[0]);
+
+    await expect(
+      rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] }),
+    ).rejects.toThrow("AWS Anthropic provider requires a non-empty awsRegion");
+    expect(mockAnthropicAws).not.toHaveBeenCalled();
+  });
+
+  it("throws when SigV4 credentials are used with EdgeObserver", () => {
+    expect(() =>
+      createAnthropicProvider({
+        ...awsSigV4Config,
+        durable: {
+          webhook: { url: "https://app.example/webhook", secret: "secret" },
+          observe: vi.fn(),
+          stop: vi.fn(),
+        },
+      }),
+    ).toThrow(
+      "AWS SigV4 credentials are not supported with EdgeObserver webhook mode",
+    );
+  });
 });

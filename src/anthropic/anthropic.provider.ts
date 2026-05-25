@@ -146,7 +146,11 @@ export type AnthropicProviderConfig = AnthropicBaseConfig &
 async function createClient(
   config: AnthropicProviderConfig,
 ): Promise<Anthropic> {
-  if ("awsRegion" in config && config.awsRegion) {
+  if ("awsRegion" in config) {
+    if (!config.awsRegion?.trim()) {
+      throw new Error("AWS Anthropic provider requires a non-empty awsRegion");
+    }
+
     const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
 
     if ("apiKey" in config && config.apiKey) {
@@ -187,6 +191,17 @@ class AnthropicProvider {
   private readonly environmentId: string;
 
   constructor(config: AnthropicProviderConfig) {
+    if (
+      "awsCredentials" in config &&
+      config.awsCredentials &&
+      config.durable &&
+      isEdgeObserver(config.durable)
+    ) {
+      throw new Error(
+        "AWS SigV4 credentials are not supported with EdgeObserver webhook mode",
+      );
+    }
+
     this.config = config;
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
@@ -473,6 +488,9 @@ class AnthropicProvider {
         "x-api-key": client.apiKey ?? "",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "managed-agents-2026-04-01",
+        ...("awsRegion" in this.config && this.config.awsWorkspaceId
+          ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
+          : {}),
       },
       provider: "anthropic",
       webhook: {

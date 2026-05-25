@@ -1,11 +1,9 @@
 import { CALLBACK_MAP } from "../send-result";
-import type { StreamCallbacks, StreamPart } from "../types";
-
-export type SessionEventsFactory = (
-  sessionId: string,
-  runId: string,
-  metadata: Record<string, string>,
-) => StreamCallbacks;
+import type {
+  SessionEventsFactory,
+  StreamCallbacks,
+  StreamPart,
+} from "../types";
 
 export interface WebhookHandlerOptions {
   secret: string;
@@ -38,6 +36,8 @@ interface WebhookPayload {
   sessionId: string;
   /** Unique identifier for the originating `send()` invocation. */
   runId: string;
+  /** Stable turn identifier — groups multiple send() calls within one user interaction. */
+  turnId?: string;
   sequence: number;
   timestamp: number;
   provider: string;
@@ -129,7 +129,7 @@ export function createWebhookHandler(
       };
     }
 
-    const { sessionId, runId, metadata, event } = payload;
+    const { sessionId, runId, turnId, metadata, event } = payload;
 
     if (!sessionId || !runId || !event?.type) {
       return {
@@ -140,7 +140,12 @@ export function createWebhookHandler(
       };
     }
 
-    const callbacks = onSessionEvents(sessionId, runId, metadata ?? {});
+    const callbacks = onSessionEvents({
+      sessionId,
+      turnId: turnId ?? crypto.randomUUID(),
+      runId,
+      metadata: metadata ?? {},
+    });
 
     try {
       await dispatch(callbacks, event);

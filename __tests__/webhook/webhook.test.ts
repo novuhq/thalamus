@@ -121,10 +121,8 @@ describe("createWebhookHandler", () => {
   });
 
   describe("event dispatch", () => {
-    it("calls onSessionEvents with sessionId, runId, and metadata", async () => {
-      const factory = vi.fn<
-        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
-      >(() => ({}));
+    it("calls onSessionEvents with context object containing sessionId, runId, and metadata", async () => {
+      const factory = vi.fn(() => ({}));
       const handler = createWebhookHandler({
         secret: SECRET,
         onSessionEvents: factory,
@@ -136,15 +134,18 @@ describe("createWebhookHandler", () => {
 
       await handler.handleRaw(body, sig);
 
-      expect(factory).toHaveBeenCalledWith("sess_123", "run_test_1", {
-        orgId: "org_1",
-      });
+      expect(factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "sess_123",
+          runId: "run_test_1",
+          turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+          metadata: { orgId: "org_1" },
+        }),
+      );
     });
 
     it("rejects payload without runId", async () => {
-      const factory = vi.fn<
-        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
-      >(() => ({}));
+      const factory = vi.fn(() => ({}));
       const handler = createWebhookHandler({
         secret: SECRET,
         onSessionEvents: factory,
@@ -169,9 +170,7 @@ describe("createWebhookHandler", () => {
     });
 
     it("forwards runId from payload to onSessionEvents factory", async () => {
-      const factory = vi.fn<
-        (s: string, r: string, m: Record<string, string>) => StreamCallbacks
-      >(() => ({}));
+      const factory = vi.fn(() => ({}));
       const handler = createWebhookHandler({
         secret: SECRET,
         onSessionEvents: factory,
@@ -187,9 +186,10 @@ describe("createWebhookHandler", () => {
       await handler.handleRaw(body, sig);
 
       expect(factory).toHaveBeenCalledWith(
-        "sess_123",
-        "run_42",
-        expect.any(Object),
+        expect.objectContaining({
+          sessionId: "sess_123",
+          runId: "run_42",
+        }),
       );
     });
 

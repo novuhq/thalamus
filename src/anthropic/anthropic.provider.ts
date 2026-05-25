@@ -189,20 +189,31 @@ class AnthropicProvider {
 
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
     const runId = crypto.randomUUID();
+    const turnId = params.turnId ?? crypto.randomUUID();
     if (this.edgeObserver) {
-      return this.sendViaWebhook(params, runId);
+      return this.sendViaWebhook(params, runId, turnId);
     }
     const callbacks = this.config.onSessionEvents
-      ? this.config.onSessionEvents(params.sessionId ?? "<<pending>>", runId)
+      ? this.config.onSessionEvents({
+          sessionId: params.sessionId ?? "<<pending>>",
+          turnId,
+          runId,
+          metadata: {},
+        })
       : undefined;
-    return createSendResult(this.runStream(params, runId), runId, callbacks, {
-      autoStart: !!this.config.onSessionEvents,
-    });
+    return createSendResult(
+      this.runStream(params, runId),
+      runId,
+      turnId,
+      callbacks,
+      { autoStart: !!this.config.onSessionEvents },
+    );
   }
 
   private async sendViaWebhook(
     params: RequestParams,
     runId: string,
+    turnId: string,
   ): Promise<WebhookSendResult> {
     const client = await this.getClient();
     const sessionId =
@@ -211,8 +222,8 @@ class AnthropicProvider {
         vaultIds: params.vaultIds,
         providerOptions: params.providerOptions,
       }));
-    await this.edgeObserve(client, sessionId, runId, params);
-    return { sessionId, runId };
+    await this.edgeObserve(client, sessionId, runId, turnId, params);
+    return { sessionId, runId, turnId };
   }
 
   private async dispatch(
@@ -345,16 +356,26 @@ class AnthropicProvider {
 
           if (status === "running" || status === "idle") {
             const { runId } = checkpoint;
-            const callbacks = onSessionEvents(checkpoint.sessionId, runId);
+            const recoveryTurnId = crypto.randomUUID();
+            const callbacks = onSessionEvents({
+              sessionId: checkpoint.sessionId,
+              turnId: recoveryTurnId,
+              runId,
+              metadata: {},
+            });
             const stream = this.recoverStream(
               client,
               checkpoint,
               runId,
               status === "running",
             );
-            const result = createSendResult(stream, runId, callbacks, {
-              autoStart: true,
-            });
+            const result = createSendResult(
+              stream,
+              runId,
+              recoveryTurnId,
+              callbacks,
+              { autoStart: true },
+            );
             result.response.catch(async (err) => {
               console.error(
                 `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
@@ -442,6 +463,7 @@ class AnthropicProvider {
     client: Anthropic,
     sessionId: string,
     runId: string,
+    turnId: string,
     params: RequestParams,
   ): Promise<void> {
     const observer = this.edgeObserver!;
@@ -449,6 +471,7 @@ class AnthropicProvider {
     await observer.observe({
       sessionId,
       runId,
+      turnId,
       streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
       headers: {
         "x-api-key": client.apiKey ?? "",

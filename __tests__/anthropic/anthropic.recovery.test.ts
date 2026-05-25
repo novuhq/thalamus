@@ -167,8 +167,8 @@ describe("durable recovery — Anthropic", () => {
     createAnthropicProvider({
       ...config,
       durable,
-      onSessionEvents: (sid) => {
-        expect(sid).toBe("sess_crash");
+      onSessionEvents: (ctx) => {
+        expect(ctx.sessionId).toBe("sess_crash");
         return { onPart: (p) => parts.push(p) };
       },
     });
@@ -224,7 +224,7 @@ describe("durable recovery — Anthropic", () => {
     createAnthropicProvider({
       ...config,
       durable,
-      onSessionEvents: () => ({
+      onSessionEvents: (_ctx) => ({
         onPart: (p) => parts.push(p),
       }),
     });
@@ -365,6 +365,13 @@ describe("durable recovery — Anthropic", () => {
       { timeout: 2000 },
     );
 
-    expect(factory).toHaveBeenCalledWith("sess_resume", "run_persisted_123");
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess_resume",
+        runId: "run_persisted_123",
+        turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        metadata: {},
+      }),
+    );
   });
 });

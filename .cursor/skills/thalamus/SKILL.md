@@ -54,7 +54,7 @@ const provider = createOpenAIProvider({
   promptId: '...',              // optional OpenAI prompt template ID, sets runtimeId
   mcpServers: [...],            // optional MCP server configs
   vaultStore: createMemoryVaultStore(), // optional, required for vault ops
-  onSessionEvents: (sessionId, runId) => ({ ... }), // optional streaming callbacks
+  onSessionEvents: ({ sessionId, turnId, runId }) => ({ ... }), // optional streaming callbacks
   durable: redis(redisClient),  // optional durability backend
 });
 ```
@@ -92,7 +92,7 @@ const provider = createAnthropicProvider({
   apiKey: process.env.ANTHROPIC_API_KEY,
   agentId: 'agent_01J...',
   environmentId: 'env_01J...',
-  onSessionEvents: (sessionId, runId) => ({ ... }), // optional
+  onSessionEvents: ({ sessionId, turnId, runId }) => ({ ... }), // optional
   durable: redis(redisClient),                       // optional
 });
 ```
@@ -130,6 +130,7 @@ interface Provider {
 interface WebhookSendResult {
   sessionId: string;
   runId: string;
+  turnId: string;
 }
 ```
 
@@ -170,14 +171,23 @@ const sessionId = await result.sessionId;
 // runId is known synchronously — unique per send() invocation
 const result = provider.send({ messages });
 console.log(result.runId); // e.g. 'a1b2c3d4-...'
+
+// turnId groups sends within one logical user interaction (e.g. message + tool approvals)
+console.log(result.turnId); // e.g. 'e5f6g7h8-...'
+// Carry it forward on approval resumes:
+await provider.send({ sessionId, toolResults, turnId: result.turnId, messages: [] });
 ```
 
-### runId
+### IDs
 
-Every `send()` invocation gets a fresh `runId` (UUID). It identifies one turn — useful for correlating callbacks, logs, traces, and webhook events back to a specific `send()` call when a session has multiple turns.
+| ID | Scope | Lifecycle | Purpose |
+|---|---|---|---|
+| `sessionId` | Conversation | Many turns | Provider session identity |
+| `turnId` | User interaction | One user message -> final answer (may span multiple `send()` calls for tool approvals) | Business grouping |
+| `runId` | Webhook delivery | One `send()` call | Transport dedup/observability |
 
-- **Streaming mode:** `result.runId` is available synchronously on the `SendResult`. The same `runId` is passed to your `onSessionEvents(sessionId, runId)` factory.
-- **Webhook mode:** `runId` is returned in `WebhookSendResult` and echoed in every webhook payload (body field `runId`, header `X-Thalamus-Run-Id`). Your handler's `onSessionEvents(sessionId, runId, metadata)` receives it.
+- **`runId`** — fresh UUID per `send()`. Available synchronously on `SendResult` and in `WebhookSendResult`. Passed in the `onSessionEvents` context object. Echoed in every webhook payload.
+- **`turnId`** — stable across approval resumes. Generated automatically on fresh sends, carried forward when you pass `turnId` from a previous `SendResult` in `RequestParams`. Groups a logical user interaction (initial message + subsequent tool approvals) under one ID.
 
 ### RequestParams
 
@@ -190,6 +200,7 @@ interface RequestParams {
   providerOptions?: Record<string, unknown>; // pass-through to provider SDK
   abortSignal?: AbortSignal;    // cancel the request
   webhookMetadata?: Record<string, string>; // forwarded in webhook payloads
+  turnId?: string;              // carry forward from previous SendResult for turn grouping
 }
 ```
 
@@ -216,7 +227,7 @@ Callbacks are attached at **provider creation time** via `onSessionEvents`, not 
 const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
-  onSessionEvents: (sessionId, runId) => ({
+  onSessionEvents: ({ sessionId, turnId, runId }) => ({
     onTextDelta: ({ text }) => pushToClient(sessionId, text),
     onToolUseDone: ({ toolName }) => console.log(`[${runId}] used ${toolName}`),
     onFinish: ({ response }) => saveResponse(sessionId, response),
@@ -228,14 +239,18 @@ const provider = createOpenAIProvider({
 provider.send({ messages });
 ```
 
-The factory receives the `sessionId` (so you can route events to the right client connection) and the `runId` (so you can correlate callbacks back to a specific `send()` invocation — useful for tracing and per-turn state).
+The factory receives a `SessionEventContext` object containing:
+- `sessionId` — route events to the right client connection
+- `turnId` — group events from the same logical user interaction (stable across approval resumes)
+- `runId` — correlate callbacks to a specific `send()` invocation (unique per call)
+- `metadata` — webhook metadata from the originating `send()` (empty object in streaming mode)
 
 ### Async callbacks and sequential dispatch
 
 Callbacks may return `void` or `Promise<void>`. When a callback returns a promise, the SDK **awaits it before dispatching the next event**:
 
 ```typescript
-onSessionEvents: (sessionId, runId) => ({
+onSessionEvents: ({ sessionId, runId }) => ({
   // Sync — instant, no backpressure (ideal for streaming text to a socket)
   onTextDelta: ({ text }) => socket.emit('delta', text),
 
@@ -362,7 +377,7 @@ const provider = createOpenAIProvider({
 ### Detecting tool source
 
 ```typescript
-onSessionEvents: (sessionId, runId) => ({
+onSessionEvents: ({ sessionId }) => ({
   onToolUseDone: (part) => {
     if (part.source?.type === 'mcp') {
       console.log(`MCP tool from ${part.source.serverName}`);
@@ -437,7 +452,8 @@ interface VaultStore {
 When a tool requires approval, the response finishes with `finishReason: 'requires-action'`:
 
 ```typescript
-const response = await provider.send({ messages });
+const result = provider.send({ messages });
+const response = await result;
 
 if (response.finishReason === 'requires-action') {
   // ActionRequired = { type: 'tool-confirmation' | 'mcp-approval', toolUseId, toolName, input? }
@@ -445,10 +461,11 @@ if (response.finishReason === 'requires-action') {
     console.log(`${action.toolName} wants to run with`, action.input);
   }
 
-  // Resume with approval
+  // Resume with approval — carry turnId to group under the same logical turn
   const resumed = await provider.send({
     messages: [],
     sessionId: response.sessionId,
+    turnId: result.turnId,
     toolResults: response.actionsRequired!.map(a => ({
       toolUseId: a.toolUseId,
       approved: true,  // or false to deny
@@ -492,7 +509,7 @@ const provider = createOpenAIProvider({
   apiKey: process.env.OPENAI_API_KEY,
   model: 'gpt-4o',
   durable: redis(new Redis()),
-  onSessionEvents: (sessionId, runId) => ({
+  onSessionEvents: ({ sessionId, runId }) => ({
     onTextDelta: ({ text }) => pushToClient(sessionId, text),
     onFinish: ({ response }) => saveResponse(sessionId, response),
   }),
@@ -526,7 +543,7 @@ const provider = createAnthropicProvider({
 });
 
 // In webhook mode, send() returns Promise<WebhookSendResult>
-const { sessionId, runId } = await provider.send({
+const { sessionId, runId, turnId } = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'Hello' }],
   webhookMetadata: { userId: 'u_123' }, // forwarded in webhook payloads
 });
@@ -539,7 +556,7 @@ Receives events from the Cloudflare edge observer. HMAC-verified.
 ```typescript
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
-  onSessionEvents: (sessionId, runId, metadata) => ({
+  onSessionEvents: ({ sessionId, turnId, runId, metadata }) => ({
     onPart(part) {
       switch (part.type) {
         case 'text-delta':
@@ -560,7 +577,7 @@ app.post('/webhook', (req, res) => handler.express(req, res));
 export default { fetch: (req) => handler.handle(req) };
 ```
 
-Note: the webhook `onSessionEvents` factory takes `(sessionId, runId, metadata)` — `runId` is the unique ID of the `send()` invocation that produced this event, `metadata` contains the `webhookMetadata` you passed in `send()`. Both are also exposed in the request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
+Note: the webhook `onSessionEvents` factory receives a `SessionEventContext` object with `sessionId`, `turnId`, `runId`, and `metadata`. The `metadata` contains the `webhookMetadata` you passed in `send()`. Session and run IDs are also exposed in the request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
 
 ### Custom durability backend
 
@@ -657,8 +674,10 @@ try {
 
 ## Key Design Notes
 
-- `SendResult` is `PromiseLike<Response>` — you can `await` it directly or call `.text()` / `.sessionId` / `.runId`.
-- `runId` is generated synchronously per `send()` call (UUID). Available on `SendResult.runId`, in `WebhookSendResult`, passed to `onSessionEvents` factories, and echoed in every webhook payload + header (`X-Thalamus-Run-Id`).
+- `SendResult` is `PromiseLike<Response>` — you can `await` it directly or call `.text()` / `.sessionId` / `.runId` / `.turnId`.
+- `runId` is generated synchronously per `send()` call (UUID). Available on `SendResult.runId`, in `WebhookSendResult`, passed in the `onSessionEvents` context, and echoed in every webhook payload + header (`X-Thalamus-Run-Id`).
+- `turnId` groups multiple `send()` calls within one logical user interaction (e.g. initial message + tool approval resumes). Generated automatically on fresh sends; carried forward when you pass `turnId` from a previous result in `RequestParams`.
+- `onSessionEvents` factory receives a `SessionEventContext` object (`{ sessionId, turnId, runId, metadata }`) — extensible without breaking changes.
 - Callbacks are set at **provider creation** via `onSessionEvents`, not per `send()` call. This ensures consistent callback re-attachment for durable session recovery.
 - When `onSessionEvents` is set, `send()` auto-starts consumption — callbacks fire even without `await`.
 - OpenAI sessions use the Conversations API when available; falls back to `previous_response_id` for Bedrock.

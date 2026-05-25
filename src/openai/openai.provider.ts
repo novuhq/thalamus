@@ -240,20 +240,31 @@ class OpenAIProvider {
 
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
     const runId = crypto.randomUUID();
+    const turnId = params.turnId ?? crypto.randomUUID();
     if (this.edgeObserver) {
-      return this.sendViaWebhook(params, runId);
+      return this.sendViaWebhook(params, runId, turnId);
     }
     const callbacks = this.onSessionEvents
-      ? this.onSessionEvents(params.sessionId ?? "<<pending>>", runId)
+      ? this.onSessionEvents({
+          sessionId: params.sessionId ?? "<<pending>>",
+          turnId,
+          runId,
+          metadata: {},
+        })
       : undefined;
-    return createSendResult(this.runStream(params, runId), runId, callbacks, {
-      autoStart: !!this.onSessionEvents,
-    });
+    return createSendResult(
+      this.runStream(params, runId),
+      runId,
+      turnId,
+      callbacks,
+      { autoStart: !!this.onSessionEvents },
+    );
   }
 
   private async sendViaWebhook(
     params: RequestParams,
     runId: string,
+    turnId: string,
   ): Promise<WebhookSendResult> {
     const sessionParams = await this.resolveSessionParams(params.sessionId);
     const credentials = params.vaultIds?.length
@@ -266,10 +277,11 @@ class OpenAIProvider {
     const sessionId = await this.edgeObserve(
       params,
       runId,
+      turnId,
       sessionParams,
       mcpTools,
     );
-    return { sessionId, runId };
+    return { sessionId, runId, turnId };
   }
 
   private async resolveSessionParams(
@@ -487,11 +499,21 @@ class OpenAIProvider {
           }
 
           const { runId } = checkpoint;
-          const callbacks = onSessionEvents(checkpoint.sessionId, runId);
-          const stream = this.recoverStream(checkpoint, runId, responseId);
-          const result = createSendResult(stream, runId, callbacks, {
-            autoStart: true,
+          const recoveryTurnId = crypto.randomUUID();
+          const callbacks = onSessionEvents({
+            sessionId: checkpoint.sessionId,
+            turnId: recoveryTurnId,
+            runId,
+            metadata: {},
           });
+          const stream = this.recoverStream(checkpoint, runId, responseId);
+          const result = createSendResult(
+            stream,
+            runId,
+            recoveryTurnId,
+            callbacks,
+            { autoStart: true },
+          );
           result.response.catch(async (err) => {
             console.error(
               `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
@@ -571,6 +593,7 @@ class OpenAIProvider {
   private async edgeObserve(
     params: RequestParams,
     runId: string,
+    turnId: string,
     sessionParams: Record<string, unknown>,
     mcpTools: Record<string, unknown>[] | undefined,
   ): Promise<string> {
@@ -614,6 +637,7 @@ class OpenAIProvider {
     await observer.observe({
       sessionId: responseId,
       runId,
+      turnId,
       streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
       headers: {
         Authorization: `Bearer ${this.client.apiKey}`,

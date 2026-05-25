@@ -23,6 +23,8 @@ export interface EdgeObserveParams {
   sessionId: string;
   /** Unique identifier for this `send()` invocation. Forwarded in every webhook event. */
   runId: string;
+  /** Stable turn identifier — groups multiple send() calls within one user interaction. */
+  turnId: string;
   streamUrl: string;
   headers: Record<string, string>;
   provider: string;

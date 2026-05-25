@@ -97,12 +97,29 @@ const provider = createAnthropicProvider({
 });
 ```
 
-### Anthropic via AWS
+### Anthropic via AWS (API key)
 
 ```typescript
 const provider = createAnthropicProvider({
   awsRegion: 'us-east-1',
-  awsWorkspaceId: '...',       // optional
+  awsWorkspaceId: 'wrkspc_...', // optional
+  apiKey: process.env.ANTHROPIC_AWS_API_KEY,
+  agentId: 'agent_01J...',
+  environmentId: 'env_01J...',
+});
+```
+
+### Anthropic via AWS (SigV4)
+
+```typescript
+const provider = createAnthropicProvider({
+  awsRegion: 'us-east-1',
+  awsWorkspaceId: 'wrkspc_...', // optional
+  awsCredentials: {
+    accessKeyId: '...',
+    secretAccessKey: '...',
+    sessionToken: '...',       // optional
+  },
   agentId: 'agent_01J...',
   environmentId: 'env_01J...',
 });

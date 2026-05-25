@@ -108,25 +108,68 @@ function toSessionEvent(
   };
 }
 
-export type AnthropicProviderConfig = {
+type AnthropicDirectConfig = {
+  apiKey: string;
+  awsRegion?: never;
+  awsWorkspaceId?: never;
+  awsCredentials?: never;
+};
+
+type AnthropicAwsApiKeyConfig = {
+  awsRegion: string;
+  awsWorkspaceId?: string;
+  apiKey: string;
+  awsCredentials?: never;
+};
+
+type AnthropicAwsSigV4Config = {
+  awsRegion: string;
+  awsWorkspaceId?: string;
+  awsCredentials: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken?: string;
+  };
+  apiKey?: never;
+};
+
+type AnthropicBaseConfig = {
   agentId: string;
   environmentId: string;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurableBackend;
-} & (
-  | { apiKey: string; awsRegion?: never; awsWorkspaceId?: never }
-  | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
-);
+};
+
+export type AnthropicProviderConfig = AnthropicBaseConfig &
+  (AnthropicDirectConfig | AnthropicAwsApiKeyConfig | AnthropicAwsSigV4Config);
 
 async function createClient(
   config: AnthropicProviderConfig,
 ): Promise<Anthropic> {
   if ("awsRegion" in config && config.awsRegion) {
     const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
-    return new AnthropicAws({
-      awsRegion: config.awsRegion,
-      workspaceId: config.awsWorkspaceId,
-    }) as unknown as Anthropic;
+
+    if ("apiKey" in config && config.apiKey) {
+      return new AnthropicAws({
+        awsRegion: config.awsRegion,
+        workspaceId: config.awsWorkspaceId,
+        apiKey: config.apiKey,
+      }) as unknown as Anthropic;
+    }
+
+    if ("awsCredentials" in config && config.awsCredentials) {
+      return new AnthropicAws({
+        awsRegion: config.awsRegion,
+        workspaceId: config.awsWorkspaceId,
+        awsAccessKey: config.awsCredentials.accessKeyId,
+        awsSecretAccessKey: config.awsCredentials.secretAccessKey,
+        awsSessionToken: config.awsCredentials.sessionToken,
+      }) as unknown as Anthropic;
+    }
+
+    throw new Error(
+      "AWS Anthropic provider requires either apiKey or awsCredentials when awsRegion is set",
+    );
   }
 
   return new Anthropic({ apiKey: config.apiKey });

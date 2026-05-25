@@ -55,6 +55,8 @@ const provider = createOpenAIProvider({
 
 Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth, or `awsCredentials` (access key + secret + optional session token) for SigV4 signing. SigV4 requires the additional peer deps listed above.
 
+Anthropic via AWS supports the same per-request credential pattern: pass `apiKey` for AWS Console API key auth, or `awsCredentials` for IAM SigV4. When `awsRegion` is set, credentials must be provided explicitly — Thalamus does not fall back to the host default AWS credential chain.
+
 ## Core API
 
 ### Provider

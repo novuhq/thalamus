@@ -35,6 +35,7 @@ class SendResultImpl implements SendResult {
   constructor(
     private readonly source: AsyncIterable<StreamPart>,
     readonly runId: string,
+    readonly turnId: string,
     private readonly callbacks?: StreamCallbacks,
     options?: SendResultOptions,
   ) {
@@ -97,8 +98,9 @@ class SendResultImpl implements SendResult {
 export function createSendResult(
   source: AsyncIterable<StreamPart>,
   runId: string,
+  turnId: string,
   callbacks?: StreamCallbacks,
   options?: SendResultOptions,
 ): SendResult {
-  return new SendResultImpl(source, runId, callbacks, options);
+  return new SendResultImpl(source, runId, turnId, callbacks, options);
 }

@@ -61,6 +61,8 @@ export interface RequestParams {
   abortSignal?: AbortSignal;
   /** Metadata forwarded in the webhook payload for routing/context on the receiving end. */
   webhookMetadata?: Record<string, string>;
+  /** Carry forward from a previous SendResult to group approval resumes into one logical turn. */
+  turnId?: string;
 }
 
 export interface SessionOptions {
@@ -223,6 +225,8 @@ export interface StreamCallbacks {
 export interface SendResult extends PromiseLike<Response> {
   /** Unique identifier for this `send()` invocation. Known synchronously. */
   readonly runId: string;
+  /** Stable turn identifier — carry this to subsequent send() calls for grouping. */
+  readonly turnId: string;
   readonly sessionId: Promise<string>;
   readonly response: Promise<Response>;
   text(): Promise<string>;
@@ -232,11 +236,23 @@ export interface WebhookSendResult {
   sessionId: string;
   /** Unique identifier for this `send()` invocation, also present in every webhook event. */
   runId: string;
+  /** Stable turn identifier — carry this to subsequent send() calls for grouping. */
+  turnId: string;
+}
+
+export interface SessionEventContext {
+  /** Provider session identity. */
+  sessionId: string;
+  /** Stable across approval resumes — groups sends within one user interaction. */
+  turnId: string;
+  /** Unique per send() invocation — identifies one webhook delivery / stream run. */
+  runId: string;
+  /** Webhook metadata from the originating send(). Empty object in streaming mode. */
+  metadata: Record<string, string>;
 }
 
 export type SessionEventsFactory = (
-  sessionId: string,
-  runId: string,
+  context: SessionEventContext,
 ) => StreamCallbacks;
 
 interface BaseProvider {

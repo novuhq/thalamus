@@ -111,8 +111,12 @@ describe("send() — onSessionEvents factory", () => {
     });
 
     expect(factory).toHaveBeenCalledWith(
-      "<<pending>>",
-      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expect.objectContaining({
+        sessionId: "<<pending>>",
+        runId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        metadata: {},
+      }),
     );
     expect(onTextDelta).toHaveBeenCalledWith(
       expect.objectContaining({ type: "text-delta", text: "Hello!" }),
@@ -153,8 +157,12 @@ describe("send() — onSessionEvents factory", () => {
     });
 
     expect(factory).toHaveBeenCalledWith(
-      "sess_existing",
-      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expect.objectContaining({
+        sessionId: "sess_existing",
+        runId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        metadata: {},
+      }),
     );
   });
 

@@ -28,9 +28,15 @@ describe("SendResult — async callback dispatch", () => {
       },
     };
 
-    const result = createSendResult(partsFrom(events), "run_1", callbacks, {
-      autoStart: true,
-    });
+    const result = createSendResult(
+      partsFrom(events),
+      "run_1",
+      "turn_1",
+      callbacks,
+      {
+        autoStart: true,
+      },
+    );
 
     await result.response;
     expect(order).toEqual(["delta-a", "delta-b"]);
@@ -57,9 +63,15 @@ describe("SendResult — async callback dispatch", () => {
       },
     };
 
-    const result = createSendResult(partsFrom(events), "run_2", callbacks, {
-      autoStart: true,
-    });
+    const result = createSendResult(
+      partsFrom(events),
+      "run_2",
+      "turn_2",
+      callbacks,
+      {
+        autoStart: true,
+      },
+    );
 
     await result.response;
     expect(order).toEqual(["onPart", "onTextDelta", "onPart"]);
@@ -80,9 +92,15 @@ describe("SendResult — async callback dispatch", () => {
       },
     };
 
-    const result = createSendResult(partsFrom(events), "run_3", callbacks, {
-      autoStart: true,
-    });
+    const result = createSendResult(
+      partsFrom(events),
+      "run_3",
+      "turn_3",
+      callbacks,
+      {
+        autoStart: true,
+      },
+    );
 
     await expect(result.response).rejects.toThrow("async boom");
   });
@@ -105,9 +123,15 @@ describe("SendResult — async callback dispatch", () => {
       },
     };
 
-    const result = createSendResult(partsFrom(events), "run_4", callbacks, {
-      autoStart: true,
-    });
+    const result = createSendResult(
+      partsFrom(events),
+      "run_4",
+      "turn_4",
+      callbacks,
+      {
+        autoStart: true,
+      },
+    );
 
     const response = await result.response;
     expect(parts).toEqual(["hello", " world"]);

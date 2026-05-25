@@ -99,12 +99,16 @@ const provider = createAnthropicProvider({
 
 ### Anthropic via AWS
 
+Requires peer dependency `@anthropic-ai/aws-sdk` (`npm install @anthropic-ai/aws-sdk`).
+
 ```typescript
 const provider = createAnthropicProvider({
   awsRegion: 'us-east-1',
-  awsWorkspaceId: '...',       // optional
+  awsWorkspaceId: 'wrkspc_...', // optional
+  apiKey: process.env.ANTHROPIC_AWS_API_KEY,
   agentId: 'agent_01J...',
   environmentId: 'env_01J...',
+  durable: cloudflare({ ... }), // optional — API key auth works with EdgeObserver
 });
 ```
 

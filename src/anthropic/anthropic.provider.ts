@@ -108,24 +108,48 @@ function toSessionEvent(
   };
 }
 
-export type AnthropicProviderConfig = {
+type AnthropicDirectConfig = {
+  apiKey: string;
+  awsRegion?: never;
+  awsWorkspaceId?: never;
+};
+
+type AnthropicAwsApiKeyConfig = {
+  awsRegion: string;
+  awsWorkspaceId?: string;
+  apiKey: string;
+};
+
+type AnthropicBaseConfig = {
   agentId: string;
   environmentId: string;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurableBackend;
-} & (
-  | { apiKey: string; awsRegion?: never; awsWorkspaceId?: never }
-  | { awsRegion: string; awsWorkspaceId?: string; apiKey?: never }
-);
+};
+
+export type AnthropicProviderConfig = AnthropicBaseConfig &
+  (AnthropicDirectConfig | AnthropicAwsApiKeyConfig);
 
 async function createClient(
   config: AnthropicProviderConfig,
 ): Promise<Anthropic> {
-  if ("awsRegion" in config && config.awsRegion) {
+  if ("awsRegion" in config) {
+    if (!config.awsRegion?.trim()) {
+      throw new Error("AWS Anthropic provider requires a non-empty awsRegion");
+    }
+
+    if (!config.apiKey?.trim()) {
+      throw new Error(
+        "AWS Anthropic provider requires apiKey when awsRegion is set",
+      );
+    }
+
     const { AnthropicAws } = await import("@anthropic-ai/aws-sdk");
+
     return new AnthropicAws({
       awsRegion: config.awsRegion,
       workspaceId: config.awsWorkspaceId,
+      apiKey: config.apiKey,
     }) as unknown as Anthropic;
   }
 
@@ -430,6 +454,9 @@ class AnthropicProvider {
         "x-api-key": client.apiKey ?? "",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "managed-agents-2026-04-01",
+        ...("awsRegion" in this.config && this.config.awsWorkspaceId
+          ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
+          : {}),
       },
       provider: "anthropic",
       webhook: {

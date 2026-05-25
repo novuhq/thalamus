@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig, mockSse } from "./_helpers.js";
+import { awsConfig, config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -35,7 +35,7 @@ vi.mock("@anthropic-ai/aws-sdk", () => ({
 
 mockAnthropicAws.mockImplementation(function (
   this: any,
-  config: Record<string, unknown>,
+  clientConfig: Record<string, unknown>,
 ) {
   return {
     beta: {
@@ -45,19 +45,68 @@ mockAnthropicAws.mockImplementation(function (
       },
       vaults: { create: vi.fn(), retrieve: vi.fn() },
     },
-    _awsConfig: config,
+    _awsConfig: clientConfig,
   };
 });
 
 afterEach(() => vi.clearAllMocks());
 
-describe("AWS auth variant", () => {
+describe("cloud auth", () => {
+  it("creates Anthropic client with cloud apiKey", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_cloud" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.status_idle",
+          id: "evt_1",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const rt = createAnthropicProvider(config);
+    await rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
+
+    expect(mockAnthropicAws).not.toHaveBeenCalled();
+  });
+});
+
+describe("AWS API key auth — client config", () => {
   it("creates provider with awsRegion config", () => {
     const rt = createAnthropicProvider(awsConfig);
     expect(rt.provider).toBe("anthropic");
     expect(rt.runtimeId).toBe("agent_abc");
   });
 
+  it("passes awsRegion, workspaceId, and apiKey to AnthropicAws", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_ws" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.status_idle",
+          id: "evt_1",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const rt = createAnthropicProvider({
+      ...awsConfig,
+      awsWorkspaceId: "wrkspc_abc",
+    });
+    await rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
+
+    expect(mockAnthropicAws).toHaveBeenCalledWith({
+      awsRegion: "us-east-1",
+      workspaceId: "wrkspc_abc",
+      apiKey: "aws-api-key-abc123",
+    });
+  });
+});
+
+describe("AWS API key auth — streaming", () => {
   it("streams successfully via AnthropicAws client", async () => {
     mockCreate.mockResolvedValue({ id: "sess_aws" });
     mockSseStream.mockResolvedValue(
@@ -91,29 +140,35 @@ describe("AWS auth variant", () => {
     expect(response.content).toBe("Hello from AWS!");
     expect(response.sessionId).toBe("sess_aws");
   });
+});
 
-  it("passes awsWorkspaceId when provided", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_ws" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "session.status_idle",
-          id: "evt_1",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-    mockSend.mockResolvedValue({});
-
+describe("AWS auth validation", () => {
+  it("throws when awsRegion is set without apiKey", async () => {
     const rt = createAnthropicProvider({
-      ...awsConfig,
-      awsWorkspaceId: "wrkspc_abc",
-    });
-    await rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
-
-    expect(mockAnthropicAws).toHaveBeenCalledWith({
+      agentId: "agent_abc",
+      environmentId: "env_xyz",
       awsRegion: "us-east-1",
-      workspaceId: "wrkspc_abc",
-    });
+    } as Parameters<typeof createAnthropicProvider>[0]);
+
+    await expect(
+      rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] }),
+    ).rejects.toThrow(
+      "AWS Anthropic provider requires apiKey when awsRegion is set",
+    );
+    expect(mockAnthropicAws).not.toHaveBeenCalled();
+  });
+
+  it("throws when awsRegion is empty", async () => {
+    const rt = createAnthropicProvider({
+      agentId: "agent_abc",
+      environmentId: "env_xyz",
+      awsRegion: "",
+      apiKey: "aws-api-key-abc123",
+    } as Parameters<typeof createAnthropicProvider>[0]);
+
+    await expect(
+      rt.send({ messages: [{ role: MessageRole.USER, content: "hi" }] }),
+    ).rejects.toThrow("AWS Anthropic provider requires a non-empty awsRegion");
+    expect(mockAnthropicAws).not.toHaveBeenCalled();
   });
 });

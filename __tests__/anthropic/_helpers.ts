@@ -16,4 +16,5 @@ export const awsConfig = {
   agentId: "agent_abc",
   environmentId: "env_xyz",
   awsRegion: "us-east-1",
+  apiKey: "aws-api-key-abc123",
 };

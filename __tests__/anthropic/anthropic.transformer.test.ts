@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { toContentBlocks } from "../../src/anthropic/anthropic.transformer.js";
+import {
+  buildSendEvents,
+  toContentBlocks,
+} from "../../src/anthropic/anthropic.transformer.js";
+import { MessageRole } from "../../src/types.js";
 
 describe("toContentBlocks", () => {
   it("converts a string to a single text block", () => {
@@ -78,5 +82,108 @@ describe("toContentBlocks", () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({ type: "text" });
     expect(result[1]).toMatchObject({ type: "image" });
+  });
+});
+
+describe("buildSendEvents", () => {
+  it("emits one user.message per USER message when no context is present", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.USER, content: "First" },
+          { role: MessageRole.USER, content: "Second" },
+        ],
+      }),
+    ).toEqual([
+      { type: "user.message", content: [{ type: "text", text: "First" }] },
+      { type: "user.message", content: [{ type: "text", text: "Second" }] },
+    ]);
+  });
+
+  it("packs assistant context onto the next user message", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.ASSISTANT, content: "Welcome!" },
+          { role: MessageRole.USER, content: "Hello" },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Welcome!\n\n[Message]\nHello",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("packs accumulated assistant context per user turn", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.ASSISTANT, content: "Welcome!" },
+          { role: MessageRole.USER, content: "Hello" },
+          { role: MessageRole.ASSISTANT, content: "Hi there!" },
+          { role: MessageRole.USER, content: "Follow up" },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Welcome!\n\n[Message]\nHello",
+          },
+        ],
+      },
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Hi there!\n\n[Message]\nFollow up",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("includes system rows in the context block", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.SYSTEM, content: "Be concise" },
+          { role: MessageRole.USER, content: "Hello" },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nSystem: Be concise\n\n[Message]\nHello",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("emits context-only user.message when trailing assistant rows have no user follow-up", () => {
+    expect(
+      buildSendEvents({
+        messages: [{ role: MessageRole.ASSISTANT, content: "Welcome!" }],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [{ type: "text", text: "[Context]\nAssistant: Welcome!" }],
+      },
+    ]);
   });
 });

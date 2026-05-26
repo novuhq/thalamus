@@ -153,6 +153,17 @@ interface Message {
 // { type: 'file', data: string, mediaType: string, name?: string }
 ```
 
+### Provider differences (Anthropic)
+
+> [!IMPORTANT]
+> Anthropic Managed Agent sessions **do not replay assistant/system rows as native input** — history is server-side. Thalamus accepts the same `messages[]` as OpenAI so your code does not branch on provider, but on Anthropic prior `assistant`/`system` rows are folded into a `[Context]` text block on the next user message. Treat this as a **recovery workaround** (dead/expired session), not normal operation.
+
+**Prefer:** live `sessionId` + one new `USER` message.
+
+**Recovery only:** pass saved transcript as `ASSISTANT` + `USER` rows when the session is gone. OpenAI uses native roles; Anthropic gets the packed format.
+
+Use `ASSISTANT` for prior agent chat lines, `SYSTEM` only for extra per-send instructions (agent persona belongs on provider/agent config).
+
 ## send() and SendResult
 
 `send()` returns a `SendResult` — a `PromiseLike<Response>` that you can consume in several ways:
@@ -330,6 +341,8 @@ const second = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'What is my name?' }],
 });
 ```
+
+With a live `sessionId`, send only the new user turn. After session loss, pass transcript in `messages` only as a recovery fallback — see Provider differences above.
 
 ## AbortSignal
 
@@ -681,6 +694,6 @@ try {
 - Callbacks are set at **provider creation** via `onSessionEvents`, not per `send()` call. This ensures consistent callback re-attachment for durable session recovery.
 - When `onSessionEvents` is set, `send()` auto-starts consumption — callbacks fire even without `await`.
 - OpenAI sessions use the Conversations API when available; falls back to `previous_response_id` for Bedrock.
-- Anthropic sessions are server-managed; `createSession()` creates a real session, `endSession()` is a no-op.
+- Anthropic sessions are server-managed; `createSession()` creates a real session, `endSession()` is a no-op. Prior assistant rows in `messages` are packed into `[Context]` text on the next user turn — a recovery workaround, not native replay.
 - `ToolSource` on tool events tells you origin: `{ type: 'builtin' }`, `{ type: 'custom' }`, or `{ type: 'mcp', serverName }`.
 - Zero runtime dependencies; only optional peer deps for provider SDKs.

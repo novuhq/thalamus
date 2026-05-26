@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildSendEvents,
   toContentBlocks,
@@ -86,7 +86,7 @@ describe("toContentBlocks", () => {
 });
 
 describe("buildSendEvents", () => {
-  it("emits one user.message per USER message", () => {
+  it("emits one user.message per USER message when no context is present", () => {
     expect(
       buildSendEvents({
         messages: [
@@ -100,9 +100,7 @@ describe("buildSendEvents", () => {
     ]);
   });
 
-  it("drops assistant and system messages instead of merging them", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
+  it("packs assistant context onto the next user message", () => {
     expect(
       buildSendEvents({
         messages: [
@@ -111,23 +109,81 @@ describe("buildSendEvents", () => {
         ],
       }),
     ).toEqual([
-      { type: "user.message", content: [{ type: "text", text: "Hello" }] },
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Welcome!\n\n[Message]\nHello",
+          },
+        ],
+      },
     ]);
-
-    expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
   });
 
-  it("returns no events when only non-user messages are provided", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("packs accumulated assistant context per user turn", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.ASSISTANT, content: "Welcome!" },
+          { role: MessageRole.USER, content: "Hello" },
+          { role: MessageRole.ASSISTANT, content: "Hi there!" },
+          { role: MessageRole.USER, content: "Follow up" },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Welcome!\n\n[Message]\nHello",
+          },
+        ],
+      },
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nAssistant: Hi there!\n\n[Message]\nFollow up",
+          },
+        ],
+      },
+    ]);
+  });
 
+  it("includes system rows in the context block", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.SYSTEM, content: "Be concise" },
+          { role: MessageRole.USER, content: "Hello" },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [
+          {
+            type: "text",
+            text: "[Context]\nSystem: Be concise\n\n[Message]\nHello",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("emits context-only user.message when trailing assistant rows have no user follow-up", () => {
     expect(
       buildSendEvents({
         messages: [{ role: MessageRole.ASSISTANT, content: "Welcome!" }],
       }),
-    ).toEqual([]);
-
-    expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
+    ).toEqual([
+      {
+        type: "user.message",
+        content: [{ type: "text", text: "[Context]\nAssistant: Welcome!" }],
+      },
+    ]);
   });
 });

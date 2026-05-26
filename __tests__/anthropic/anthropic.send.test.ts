@@ -92,9 +92,8 @@ describe("send() — basic behavior", () => {
     expect(sessionId).toBe("sess_new");
   });
 
-  it("drops assistant messages and sends only user input to Anthropic", async () => {
+  it("packs assistant context into user.message for Anthropic", async () => {
     setupBasicStream();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const provider = createAnthropicProvider(config);
     await provider.send({
@@ -110,14 +109,17 @@ describe("send() — basic behavior", () => {
         events: [
           {
             type: "user.message",
-            content: [{ type: "text", text: "Hello" }],
+            content: [
+              {
+                type: "text",
+                text: "[Context]\nAssistant: Welcome!\n\n[Message]\nHello",
+              },
+            ],
           },
         ],
       },
       expect.objectContaining({}),
     );
-    expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
   });
 });
 

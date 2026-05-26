@@ -247,6 +247,16 @@ interface Message {
 // { type: 'file', data: string, mediaType: string, name?: string }
 ```
 
+> [!IMPORTANT]
+> **Providers handle `messages` differently — be aware of this when swapping or recovering sessions.**
+>
+> You pass the same `messages[]` to every provider, but Anthropic Managed Agent sessions **do not accept assistant/system rows as native input**. History lives on the session server-side; send only accepts new **user** input.
+>
+> - **OpenAI** — roles pass through normally.
+> - **Anthropic** — if you include prior `assistant` or `system` rows (usually only after a **dead or expired session**), Thalamus has to fold them into the next user message as a `[Context]` text block. This is a **workaround**, not equivalent to real thread replay — prefer keeping the session alive and sending one new `USER` message when you can.
+>
+> **Avoid:** passing full chat history on every turn while a `sessionId` is still valid — you may duplicate context and waste tokens.
+
 ### Sessions
 
 Pass `sessionId` from a previous response to continue a conversation:

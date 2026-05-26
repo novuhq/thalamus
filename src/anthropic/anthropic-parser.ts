@@ -103,6 +103,15 @@ export function* mapEvent(
         input: e.input,
         source: { type: "builtin" },
       };
+      if (e.evaluated_permission === "ask") {
+        acc.actionsRequired.push({
+          type: "tool-confirmation",
+          toolUseId: e.id,
+          toolName: e.name,
+          input: e.input as Record<string, unknown>,
+        });
+        acc.finishReason = "requires-action";
+      }
       break;
     }
     case "agent.tool_result": {
@@ -139,6 +148,16 @@ export function* mapEvent(
           serverName: e.mcp_server_name ?? "",
         },
       };
+      if (e.evaluated_permission === "ask") {
+        acc.actionsRequired.push({
+          type: "mcp-approval",
+          toolUseId: e.id,
+          toolName: e.name,
+          serverName: e.mcp_server_name ?? "",
+          input: e.input as Record<string, unknown>,
+        });
+        acc.finishReason = "requires-action";
+      }
       break;
     }
     case "agent.mcp_tool_result": {

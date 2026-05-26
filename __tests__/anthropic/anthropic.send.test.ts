@@ -91,6 +91,34 @@ describe("send() — basic behavior", () => {
     const sessionId = await result.sessionId;
     expect(sessionId).toBe("sess_new");
   });
+
+  it("drops assistant messages and sends only user input to Anthropic", async () => {
+    setupBasicStream();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const provider = createAnthropicProvider(config);
+    await provider.send({
+      messages: [
+        { role: MessageRole.ASSISTANT, content: "Welcome!" },
+        { role: MessageRole.USER, content: "Hello" },
+      ],
+    });
+
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_new",
+      {
+        events: [
+          {
+            type: "user.message",
+            content: [{ type: "text", text: "Hello" }],
+          },
+        ],
+      },
+      expect.objectContaining({}),
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
 });
 
 describe("send() — onSessionEvents factory", () => {

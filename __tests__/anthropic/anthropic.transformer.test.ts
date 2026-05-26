@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { toContentBlocks } from "../../src/anthropic/anthropic.transformer.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildSendEvents,
+  toContentBlocks,
+} from "../../src/anthropic/anthropic.transformer.js";
+import { MessageRole } from "../../src/types.js";
 
 describe("toContentBlocks", () => {
   it("converts a string to a single text block", () => {
@@ -78,5 +82,52 @@ describe("toContentBlocks", () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({ type: "text" });
     expect(result[1]).toMatchObject({ type: "image" });
+  });
+});
+
+describe("buildSendEvents", () => {
+  it("emits one user.message per USER message", () => {
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.USER, content: "First" },
+          { role: MessageRole.USER, content: "Second" },
+        ],
+      }),
+    ).toEqual([
+      { type: "user.message", content: [{ type: "text", text: "First" }] },
+      { type: "user.message", content: [{ type: "text", text: "Second" }] },
+    ]);
+  });
+
+  it("drops assistant and system messages instead of merging them", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(
+      buildSendEvents({
+        messages: [
+          { role: MessageRole.ASSISTANT, content: "Welcome!" },
+          { role: MessageRole.USER, content: "Hello" },
+        ],
+      }),
+    ).toEqual([
+      { type: "user.message", content: [{ type: "text", text: "Hello" }] },
+    ]);
+
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("returns no events when only non-user messages are provided", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(
+      buildSendEvents({
+        messages: [{ role: MessageRole.ASSISTANT, content: "Welcome!" }],
+      }),
+    ).toEqual([]);
+
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });

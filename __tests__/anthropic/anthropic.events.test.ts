@@ -221,6 +221,134 @@ describe("stream — event mapping", () => {
     ]);
   });
 
+  it("accumulates actionsRequired on agent.tool_use with evaluated_permission ask", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_perm" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.tool_use",
+          id: "sevt_1",
+          name: "bash",
+          input: { command: "uname -a" },
+          evaluated_permission: "ask",
+        },
+        {
+          type: "agent.tool_use",
+          id: "sevt_2",
+          name: "bash",
+          input: { command: "whoami" },
+          evaluated_permission: "ask",
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_idle",
+          stop_reason: {
+            type: "requires_action",
+            event_ids: ["sevt_1", "sevt_2"],
+          },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "run stuff" }] });
+
+    const finish = parts.find((p) => p.type === "finish") as any;
+    expect(finish.response.finishReason).toBe("requires-action");
+    expect(finish.response.actionsRequired).toEqual([
+      {
+        type: "tool-confirmation",
+        toolUseId: "sevt_1",
+        toolName: "bash",
+        input: { command: "uname -a" },
+      },
+      {
+        type: "tool-confirmation",
+        toolUseId: "sevt_2",
+        toolName: "bash",
+        input: { command: "whoami" },
+      },
+    ]);
+  });
+
+  it("accumulates actionsRequired on agent.mcp_tool_use with evaluated_permission ask", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_mcp_perm" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.mcp_tool_use",
+          id: "mcp_1",
+          name: "list_repos",
+          mcp_server_name: "github",
+          input: { org: "acme" },
+          evaluated_permission: "ask",
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_idle",
+          stop_reason: {
+            type: "requires_action",
+            event_ids: ["mcp_1"],
+          },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "list repos" }] });
+
+    const finish = parts.find((p) => p.type === "finish") as any;
+    expect(finish.response.finishReason).toBe("requires-action");
+    expect(finish.response.actionsRequired).toEqual([
+      {
+        type: "mcp-approval",
+        toolUseId: "mcp_1",
+        toolName: "list_repos",
+        serverName: "github",
+        input: { org: "acme" },
+      },
+    ]);
+  });
+
+  it("does not add actionsRequired when evaluated_permission is allow", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_allow" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.tool_use",
+          id: "tu_1",
+          name: "bash",
+          input: { command: "ls" },
+          evaluated_permission: "allow",
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "run ls" }] });
+
+    const finish = parts.find((p) => p.type === "finish") as any;
+    expect(finish.response.finishReason).toBe("stop");
+    expect(finish.response.actionsRequired).toBeUndefined();
+  });
+
   it("emits status-change running on session.status_running", async () => {
     mockCreate.mockResolvedValue({ id: "sess_run" });
     mockSseStream.mockResolvedValue(

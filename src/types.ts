@@ -264,12 +264,23 @@ interface BaseProvider {
   endSession(sessionId: string): Promise<void>;
 }
 
+import type { ThalamusLoggerInput } from "./logger";
+
+export interface ProviderWebhookHandlerOptions {
+  secret: string;
+  onSessionEvents?: SessionEventsFactory;
+  logger?: ThalamusLoggerInput;
+}
+
 export interface StreamingProvider extends BaseProvider {
   send(params: RequestParams): SendResult;
 }
 
 export interface WebhookProvider extends BaseProvider {
   send(params: RequestParams): Promise<WebhookSendResult>;
+  createWebhookHandler(
+    options: ProviderWebhookHandlerOptions,
+  ): import("./webhook/index.js").WebhookHandler;
 }
 
 export type Provider = StreamingProvider | WebhookProvider;

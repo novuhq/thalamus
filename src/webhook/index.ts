@@ -1,5 +1,7 @@
+import { resolveLogger, type ThalamusLoggerInput } from "../logger";
 import { CALLBACK_MAP } from "../send-result";
 import type {
+  ProviderWebhookHandlerOptions,
   SessionEventsFactory,
   StreamCallbacks,
   StreamPart,
@@ -10,7 +12,10 @@ export interface WebhookHandlerOptions {
   /** Signature timestamp tolerance in seconds (default: 300). */
   tolerance?: number;
   onSessionEvents: SessionEventsFactory;
+  logger?: ThalamusLoggerInput;
 }
+
+export type { ProviderWebhookHandlerOptions };
 
 export interface WebhookHandlerResult {
   status: number;
@@ -49,6 +54,7 @@ export function createWebhookHandler(
   options: WebhookHandlerOptions,
 ): WebhookHandler {
   const { secret, tolerance = 300, onSessionEvents } = options;
+  const log = resolveLogger(options.logger);
 
   async function verifySignature(
     rawBody: string,
@@ -105,6 +111,10 @@ export function createWebhookHandler(
     signatureHeader: string | null,
   ): Promise<WebhookHandlerResult> {
     if (!signatureHeader) {
+      log.warn("webhook.missing-signature", {
+        stage: "webhook.missing-signature",
+      });
+
       return {
         status: 401,
         body: JSON.stringify({ error: "Missing X-Thalamus-Signature header" }),
@@ -113,6 +123,10 @@ export function createWebhookHandler(
 
     const valid = await verifySignature(rawBody, signatureHeader);
     if (!valid) {
+      log.warn("webhook.invalid-signature", {
+        stage: "webhook.invalid-signature",
+      });
+
       return {
         status: 401,
         body: JSON.stringify({ error: "Invalid signature" }),
@@ -132,6 +146,13 @@ export function createWebhookHandler(
     const { sessionId, runId, turnId, metadata, event } = payload;
 
     if (!sessionId || !runId || !event?.type) {
+      log.warn("webhook.invalid-payload", {
+        stage: "webhook.invalid-payload",
+        sessionId,
+        runId,
+        eventType: event?.type,
+      });
+
       return {
         status: 400,
         body: JSON.stringify({
@@ -140,6 +161,16 @@ export function createWebhookHandler(
       };
     }
 
+    log.debug("webhook.received", {
+      stage: "webhook.received",
+      sessionId,
+      runId,
+      turnId: turnId ?? undefined,
+      sequence: payload.sequence,
+      eventType: event.type,
+      conversationId: metadata?.conversationId,
+    });
+
     const callbacks = onSessionEvents({
       sessionId,
       turnId: turnId ?? crypto.randomUUID(),
@@ -147,11 +178,32 @@ export function createWebhookHandler(
       metadata: metadata ?? {},
     });
 
+    const handledAt = Date.now();
     try {
       await dispatch(callbacks, event);
-    } catch {
+    } catch (err) {
+      log.error("webhook.callback.failed", {
+        stage: "webhook.callback.failed",
+        sessionId,
+        runId,
+        turnId: turnId ?? undefined,
+        sequence: payload.sequence,
+        eventType: event.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+
       return { status: 500, body: JSON.stringify({ error: "Callback error" }) };
     }
+
+    log.debug("webhook.handled", {
+      stage: "webhook.handled",
+      sessionId,
+      runId,
+      turnId: turnId ?? undefined,
+      sequence: payload.sequence,
+      eventType: event.type,
+      durationMs: Date.now() - handledAt,
+    });
 
     return { status: 200, body: null };
   }
@@ -196,6 +248,25 @@ export function createWebhookHandler(
       res.end(result.body);
     },
   };
+}
+
+export function createProviderWebhookHandler(
+  defaultLogger: ThalamusLoggerInput | undefined,
+  providerOnSessionEvents: SessionEventsFactory | undefined,
+  options: ProviderWebhookHandlerOptions,
+): WebhookHandler {
+  const onSessionEvents = options.onSessionEvents ?? providerOnSessionEvents;
+  if (!onSessionEvents) {
+    throw new Error(
+      "createWebhookHandler requires onSessionEvents on the provider or in options",
+    );
+  }
+
+  return createWebhookHandler({
+    secret: options.secret,
+    onSessionEvents,
+    logger: options.logger ?? defaultLogger,
+  });
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

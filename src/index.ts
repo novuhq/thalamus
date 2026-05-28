@@ -7,6 +7,19 @@ export type {
   EdgeObserver,
 } from "./durable/types";
 export * from "./errors";
+export type {
+  LogContext,
+  PinoLike,
+  ThalamusLogger,
+  ThalamusLoggerInput,
+} from "./logger";
+export {
+  adaptPinoLogger,
+  createConsoleLogger,
+  logErrorMessage,
+  resolveLogger,
+  silentLogger,
+} from "./logger";
 export * from "./send-result";
 export * from "./types";
 export type {

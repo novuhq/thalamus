@@ -17,10 +17,17 @@ import {
   type SessionCheckpoint,
 } from "../durable/types";
 import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
+import {
+  logErrorMessage,
+  resolveLogger,
+  type ThalamusLogger,
+  type ThalamusLoggerInput,
+} from "../logger";
 import { createSendResult } from "../send-result";
 import {
   ANTHROPIC,
   type Provider,
+  type ProviderWebhookHandlerOptions,
   type RequestParams,
   type Response,
   type SendResult,
@@ -33,6 +40,8 @@ import {
   type WebhookSendResult,
 } from "../types";
 import type { Vault, VaultOptions } from "../vault/vault.interface";
+import type { WebhookHandler } from "../webhook/index";
+import { createProviderWebhookHandler } from "../webhook/index";
 import { toContentBlocks } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
@@ -125,6 +134,7 @@ type AnthropicBaseConfig = {
   environmentId: string;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurableBackend;
+  logger?: ThalamusLoggerInput;
 };
 
 export type AnthropicProviderConfig = AnthropicBaseConfig &
@@ -166,12 +176,14 @@ class AnthropicProvider {
   private readonly config: AnthropicProviderConfig;
   private readonly agentId: string;
   private readonly environmentId: string;
+  private readonly log: ThalamusLogger;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
     this.runtimeId = config.agentId;
+    this.log = resolveLogger(config.logger);
 
     if (
       config.durable &&
@@ -216,13 +228,35 @@ class AnthropicProvider {
     turnId: string,
   ): Promise<WebhookSendResult> {
     const client = await this.getClient();
+
+    this.log.info("send.start", {
+      stage: "send.start",
+      provider: ANTHROPIC,
+      mode: "webhook",
+      sessionId: params.sessionId,
+      runId,
+      turnId,
+      messageCount: params.messages.length,
+    });
+
     const sessionId =
       params.sessionId ??
       (await this.createSession({
         vaultIds: params.vaultIds,
         providerOptions: params.providerOptions,
       }));
+
     await this.edgeObserve(client, sessionId, runId, turnId, params);
+
+    this.log.info("send.complete", {
+      stage: "send.complete",
+      provider: ANTHROPIC,
+      mode: "webhook",
+      sessionId,
+      runId,
+      turnId,
+    });
+
     return { sessionId, runId, turnId };
   }
 
@@ -234,6 +268,15 @@ class AnthropicProvider {
   ): Promise<void> {
     const events = buildSendEvents(params);
     const sendParams: EventSendParams = { events };
+
+    this.log.debug("dispatch.events", {
+      stage: "dispatch.events",
+      provider: ANTHROPIC,
+      sessionId,
+      eventCount: events.length,
+      eventTypes: events.map((event) => event.type),
+    });
+
     await client.beta.sessions.events.send(sessionId, sendParams, { signal });
   }
 
@@ -332,6 +375,15 @@ class AnthropicProvider {
 
         retries++;
         if (retries > MAX_RECONNECT_RETRIES) throw err;
+
+        this.log.warn("stream.reconnect", {
+          stage: "stream.reconnect",
+          provider: ANTHROPIC,
+          sessionId,
+          runId,
+          retry: retries,
+          error: logErrorMessage(err),
+        });
       }
     }
   }
@@ -377,10 +429,13 @@ class AnthropicProvider {
               { autoStart: true },
             );
             result.response.catch(async (err) => {
-              console.error(
-                `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
-                err instanceof Error ? err.message : err,
-              );
+              this.log.error("recovery.stream.failed", {
+                stage: "recovery.stream.failed",
+                provider: ANTHROPIC,
+                sessionId: checkpoint.sessionId,
+                runId,
+                error: logErrorMessage(err),
+              });
               await backend.remove(checkpoint.sessionId).catch(() => {});
             });
           } else {
@@ -467,28 +522,68 @@ class AnthropicProvider {
     params: RequestParams,
   ): Promise<void> {
     const observer = this.edgeObserver!;
+    const streamUrl = `${client.baseURL}/v1/sessions/${sessionId}/events/stream`;
 
-    await observer.observe({
+    this.log.info("edge.observe.start", {
+      stage: "edge.observe.start",
+      provider: ANTHROPIC,
       sessionId,
       runId,
       turnId,
-      streamUrl: `${client.baseURL}/v1/sessions/${sessionId}/events/stream`,
-      headers: {
-        "x-api-key": client.apiKey ?? "",
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "managed-agents-2026-04-01",
-        ...("awsRegion" in this.config && this.config.awsWorkspaceId
-          ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
-          : {}),
-      },
-      provider: "anthropic",
-      webhook: {
-        ...observer.webhook,
-        metadata: params.webhookMetadata,
-      },
+      streamUrl,
+    });
+
+    const observeStartedAt = Date.now();
+    try {
+      await observer.observe({
+        sessionId,
+        runId,
+        turnId,
+        streamUrl,
+        headers: {
+          "x-api-key": client.apiKey ?? "",
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "managed-agents-2026-04-01",
+          ...("awsRegion" in this.config && this.config.awsWorkspaceId
+            ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
+            : {}),
+        },
+        provider: "anthropic",
+        webhook: {
+          ...observer.webhook,
+          metadata: params.webhookMetadata,
+        },
+      });
+    } catch (err) {
+      this.log.error("edge.observe.failed", {
+        stage: "edge.observe.failed",
+        provider: ANTHROPIC,
+        sessionId,
+        runId,
+        error: logErrorMessage(err),
+      });
+      throw err;
+    }
+
+    this.log.info("edge.observe.ok", {
+      stage: "edge.observe.ok",
+      provider: ANTHROPIC,
+      sessionId,
+      runId,
+      durationMs: Date.now() - observeStartedAt,
     });
 
     await this.dispatch(client, sessionId, params);
+
+    const events = buildSendEvents(params);
+    this.log.info("edge.dispatch.sent", {
+      stage: "edge.dispatch.sent",
+      provider: ANTHROPIC,
+      sessionId,
+      runId,
+      turnId,
+      eventTypes: events.map((event) => event.type),
+    });
   }
 
   private async *runStream(
@@ -525,6 +620,14 @@ class AnthropicProvider {
       ...options?.providerOptions,
     };
     const session = await client.beta.sessions.create(params);
+
+    this.log.info("session.create", {
+      stage: "session.create",
+      provider: ANTHROPIC,
+      sessionId: session.id,
+      vaultIdCount: options?.vaultIds?.length ?? 0,
+    });
+
     return session.id;
   }
 
@@ -545,6 +648,14 @@ class AnthropicProvider {
     const client = await this.getClient();
     await client.beta.vaults.retrieve(vaultId);
     return new AnthropicVault(vaultId, client, this.agentId);
+  }
+
+  createWebhookHandler(options: ProviderWebhookHandlerOptions): WebhookHandler {
+    return createProviderWebhookHandler(
+      this.config.logger,
+      this.config.onSessionEvents,
+      options,
+    );
   }
 }
 

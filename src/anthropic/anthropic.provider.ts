@@ -1,9 +1,7 @@
 import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 import type {
-  BetaManagedAgentsEventParams,
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsUserCustomToolResultEventParams,
-  BetaManagedAgentsUserMessageEventParams,
   BetaManagedAgentsUserToolConfirmationEventParams,
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
@@ -42,7 +40,7 @@ import {
 import type { Vault, VaultOptions } from "../vault/vault.interface";
 import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
-import { toContentBlocks } from "./anthropic.transformer";
+import { buildSendEvents } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
 import { toAnthropicToolResultContent } from "./tool-result";
@@ -82,20 +80,6 @@ function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (err instanceof APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
   return true;
-}
-
-function buildSendEvents(
-  params: RequestParams,
-): BetaManagedAgentsEventParams[] {
-  if (params.toolResults?.length) {
-    return params.toolResults.map(toSessionEvent);
-  }
-
-  const event: BetaManagedAgentsUserMessageEventParams = {
-    type: "user.message",
-    content: params.messages.flatMap((msg) => toContentBlocks(msg.content)),
-  };
-  return [event];
 }
 
 function toSessionEvent(
@@ -266,7 +250,9 @@ class AnthropicProvider {
     params: RequestParams,
     signal?: AbortSignal,
   ): Promise<void> {
-    const events = buildSendEvents(params);
+    const events = params.toolResults?.length
+      ? params.toolResults.map(toSessionEvent)
+      : buildSendEvents(params);
     const sendParams: EventSendParams = { events };
 
     this.log.debug("dispatch.events", {

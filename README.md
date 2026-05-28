@@ -423,6 +423,7 @@ Your app just needs a webhook endpoint. If it crashes and restarts, the Worker k
 
 ```typescript
 import { cloudflare } from '@novu/thalamus/durable';
+import { adaptPinoLogger } from '@novu/thalamus';
 import { createWebhookHandler } from '@novu/thalamus/webhook';
 
 // --- Provider setup (sends message, returns sessionId) ---
@@ -452,6 +453,7 @@ const { sessionId, runId } = await provider.send({
 
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
+  logger: adaptPinoLogger(pino), // optional — trace webhook ingress
   onSessionEvents: (sessionId, runId, metadata) => ({
     onTextDelta: ({ text }) => pushToClient(sessionId, text),
 
@@ -502,6 +504,79 @@ interface DurabilityBackend {
 }
 ```
 
+## Lifecycle Logging
+
+Opt-in structured logging for debugging the durable agent pipeline (observe → dispatch → webhook → callbacks). **Default is silent** — existing integrations are unchanged without `logger`.
+
+The SDK logs infrastructure stages only. Agent/business events belong in `onSessionEvents` callbacks.
+
+### Enable on provider creation
+
+```typescript
+import { thalamus, adaptPinoLogger } from '@novu/thalamus';
+import { cloudflare } from '@novu/thalamus/durable';
+
+const log = adaptPinoLogger(pino); // maps Thalamus (msg, ctx) → Pino (ctx, msg)
+
+const provider = thalamus.anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  agentId: 'agent_01J...',
+  environmentId: 'env_01J...',
+  durable: cloudflare({ url, apiKey, webhook: { url, secret } }),
+  logger: log, // false | 'silent' | 'debug' | custom adapter
+  onSessionEvents: (ctx) => ({ ... }),
+});
+```
+
+| `logger` | Behavior |
+|---|---|
+| omitted / `false` / `"silent"` | No SDK logs |
+| `"debug"` | Built-in console output for local scripts |
+| custom object | Your adapter; partial implementations supported (missing methods no-op) |
+
+Exported helpers: `resolveLogger`, `silentLogger`, `createConsoleLogger`, `adaptPinoLogger`, `logErrorMessage`.
+
+### Webhook handler
+
+When the webhook endpoint is a singleton (separate from provider creation), pass the same logger:
+
+```typescript
+import { createWebhookHandler } from '@novu/thalamus/webhook';
+
+const handler = createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+  logger: log,
+  onSessionEvents: (ctx) => ({ ... }),
+});
+```
+
+For single-provider apps, `provider.createWebhookHandler({ secret })` inherits `logger` and `onSessionEvents` from provider config.
+
+### Correlation fields
+
+Each log includes a `stage` string plus `sessionId`, `runId`, `turnId`, `provider`, `eventType`, `durationMs`, and `error` when relevant — enough to trace a turn through observe, dispatch, webhook delivery, and callback execution.
+
+<details>
+<summary>Lifecycle stages</summary>
+
+| Stage | Level | When |
+|---|---|---|
+| `send.start` / `send.complete` | info | Webhook send lifecycle |
+| `edge.observe.start` / `edge.observe.ok` / `edge.observe.failed` | info / error | Edge observer registration |
+| `edge.dispatch.sent` | info | Anthropic events dispatched after observe |
+| `dispatch.start` / `dispatch.sent` / `dispatch.input` | debug / info | OpenAI background dispatch |
+| `dispatch.events` | debug | Anthropic session events payload |
+| `session.create` | info | New Anthropic session |
+| `conversation.create` | debug | OpenAI conversation created |
+| `stream.reconnect` | warn | Checkpoint SSE reconnect |
+| `stream.error` | error | OpenAI stream-mode failure |
+| `recovery.failed` / `recovery.stream.failed` | error | Durable session recovery |
+| `webhook.received` / `webhook.handled` | debug | Webhook ingress + callback success |
+| `webhook.missing-signature` / `webhook.invalid-signature` / `webhook.invalid-payload` | warn | Webhook auth/validation |
+| `webhook.callback.failed` | error | Callback threw |
+
+</details>
+
 ## Error Handling
 
 All errors extend `ThalamusError` with `provider` and `isRetryable` fields:
@@ -538,12 +613,12 @@ try {
 
 | Subpath | Contents |
 |---|---|
-| `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore` |
+| `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore`, logger helpers |
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
 | `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
-| `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver |
+| `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver (optional `logger`) |
 
 Tree-shakeable — install and import only the provider you use. Zero runtime dependencies; only peer deps for the provider SDKs.
 

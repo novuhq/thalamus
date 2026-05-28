@@ -38,6 +38,14 @@ import { redis, cloudflare } from '@novu/thalamus/durable';
 // Webhook handler (for edge observer mode)
 import { createWebhookHandler } from '@novu/thalamus/webhook';
 
+// Lifecycle logging (optional, default silent)
+import {
+  adaptPinoLogger,
+  createConsoleLogger,
+  resolveLogger,
+  silentLogger,
+} from '@novu/thalamus';
+
 // Errors
 import { ThalamusError, ProviderRateLimitError, ProviderAuthError, AbortedError } from '@novu/thalamus';
 ```
@@ -56,6 +64,7 @@ const provider = createOpenAIProvider({
   vaultStore: createMemoryVaultStore(), // optional, required for vault ops
   onSessionEvents: ({ sessionId, turnId, runId }) => ({ ... }), // optional streaming callbacks
   durable: redis(redisClient),  // optional durability backend
+  logger: 'debug',              // optional — false | 'silent' | 'debug' | custom adapter
 });
 ```
 
@@ -94,6 +103,7 @@ const provider = createAnthropicProvider({
   environmentId: 'env_01J...',
   onSessionEvents: ({ sessionId, turnId, runId }) => ({ ... }), // optional
   durable: redis(redisClient),                       // optional
+  logger: adaptPinoLogger(pino),                     // optional
 });
 ```
 
@@ -134,7 +144,7 @@ interface WebhookSendResult {
 }
 ```
 
-When `durable` is configured with an edge observer (Cloudflare + webhook), TypeScript narrows `send()` to return `Promise<WebhookSendResult>` instead of `SendResult`.
+When `durable` is configured with an edge observer (Cloudflare + webhook), TypeScript narrows `send()` to return `Promise<WebhookSendResult>` instead of `SendResult`. The narrowed `WebhookProvider` also exposes `createWebhookHandler({ secret })`, which inherits `logger` and `onSessionEvents` from provider config.
 
 ## Messages
 
@@ -569,6 +579,7 @@ Receives events from the Cloudflare edge observer. HMAC-verified.
 ```typescript
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
+  logger: adaptPinoLogger(pino), // optional — same adapter as provider
   onSessionEvents: ({ sessionId, turnId, runId, metadata }) => ({
     onPart(part) {
       switch (part.type) {
@@ -583,6 +594,11 @@ const handler = createWebhookHandler({
   }),
 });
 
+// Or bind to the provider (inherits logger + onSessionEvents)
+const handler = provider.createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+});
+
 // Express / Node http
 app.post('/webhook', (req, res) => handler.express(req, res));
 
@@ -591,6 +607,8 @@ export default { fetch: (req) => handler.handle(req) };
 ```
 
 Note: the webhook `onSessionEvents` factory receives a `SessionEventContext` object with `sessionId`, `turnId`, `runId`, and `metadata`. The `metadata` contains the `webhookMetadata` you passed in `send()`. Session and run IDs are also exposed in the request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
+
+Use standalone `createWebhookHandler` when one webhook endpoint serves many providers (e.g. Novu). Use `provider.createWebhookHandler` for single-provider apps.
 
 ### Custom durability backend
 
@@ -603,6 +621,90 @@ interface DurabilityBackend {
   getActive(): Promise<SessionCheckpoint[]>;
 }
 ```
+
+## Lifecycle Logging
+
+Opt-in structured logging for the durable pipeline (observe → dispatch → webhook → callbacks). **Default is silent** — no behavior change without opt-in.
+
+SDK logs plumbing only (observe registration, dispatch, webhook ingress). Business events stay in `onSessionEvents` / `onPart`.
+
+### Provider config
+
+```typescript
+import { adaptPinoLogger } from '@novu/thalamus';
+
+const log = adaptPinoLogger(pino); // flips (msg, ctx) → Pino's (ctx, msg)
+
+const provider = thalamus.anthropic({
+  agentId,
+  environmentId,
+  apiKey,
+  durable: cloudflare({ url, webhook }),
+  logger: log,              // false | 'silent' | 'debug' | custom adapter
+  onSessionEvents: (ctx) => ({ ... }),
+});
+```
+
+| `logger` value | Behavior |
+|---|---|
+| omitted / `false` / `"silent"` | No SDK logs |
+| `"debug"` | Built-in console adapter (`[thalamus] stage { ctx }`) |
+| custom / partial | Used as-is; missing methods no-op |
+
+Helpers exported from `@novu/thalamus`: `resolveLogger`, `silentLogger`, `createConsoleLogger`, `adaptPinoLogger`, `logErrorMessage`.
+
+### Webhook handler
+
+Pass the same adapter on standalone handlers (required when webhook is a singleton separate from provider creation):
+
+```typescript
+const handler = createWebhookHandler({
+  secret,
+  logger: log,
+  onSessionEvents: (ctx) => ({ ... }),
+});
+```
+
+Or use `provider.createWebhookHandler({ secret })` to inherit provider `logger` and `onSessionEvents`.
+
+### Log context
+
+Every log includes a `stage` key plus correlation fields when available:
+
+```typescript
+type LogContext = {
+  stage: string;
+  provider?: 'anthropic' | 'openai';
+  sessionId?: string;
+  runId?: string;
+  turnId?: string;
+  sequence?: number;
+  eventType?: string;
+  mode?: 'webhook' | 'stream';
+  durationMs?: number;
+  error?: string;
+};
+```
+
+### Stage vocabulary
+
+| Stage | Level | When |
+|---|---|---|
+| `send.start` / `send.complete` | info | Webhook send lifecycle |
+| `edge.observe.start` / `edge.observe.ok` / `edge.observe.failed` | info / error | Edge observer registration |
+| `edge.dispatch.sent` | info | Anthropic events dispatched after observe |
+| `dispatch.start` / `dispatch.sent` / `dispatch.input` | debug / info | OpenAI background dispatch |
+| `dispatch.events` | debug | Anthropic session events payload |
+| `session.create` | info | New Anthropic session |
+| `conversation.create` | debug | OpenAI conversation created |
+| `stream.reconnect` | warn | Checkpoint SSE reconnect |
+| `stream.error` | error | OpenAI stream-mode failure |
+| `recovery.failed` / `recovery.stream.failed` | error | Durable session recovery |
+| `webhook.received` / `webhook.handled` | debug | Webhook ingress + callback success |
+| `webhook.missing-signature` / `webhook.invalid-signature` / `webhook.invalid-payload` | warn | Webhook auth/validation |
+| `webhook.callback.failed` | error | `onSessionEvents` callback threw |
+
+`cloudflare()` has no logger — provider logs the observe lifecycle.
 
 ## Cloudflare Worker Deployment
 
@@ -678,12 +780,12 @@ try {
 
 | Subpath | Contents |
 |---|---|
-| `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore`, both providers |
+| `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore`, logger helpers, both providers |
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
 | `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
-| `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver |
+| `@novu/thalamus/webhook` | `createWebhookHandler`, `createProviderWebhookHandler` — HMAC-verified webhook receiver |
 
 ## Key Design Notes
 
@@ -697,3 +799,4 @@ try {
 - Anthropic sessions are server-managed; `createSession()` creates a real session, `endSession()` is a no-op. Prior assistant rows in `messages` are packed into `[Context]` text on the next user turn — a recovery workaround, not native replay.
 - `ToolSource` on tool events tells you origin: `{ type: 'builtin' }`, `{ type: 'custom' }`, or `{ type: 'mcp', serverName }`.
 - Zero runtime dependencies; only optional peer deps for provider SDKs.
+- `logger?` on provider config enables opt-in lifecycle logging (default silent). Use `adaptPinoLogger(pino)` for Pino; pass the same adapter to standalone `createWebhookHandler` when webhook is wired separately.

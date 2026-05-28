@@ -20,11 +20,18 @@ import {
   ProviderUnavailableError,
   ThalamusError,
 } from "../errors";
+import {
+  logErrorMessage,
+  resolveLogger,
+  type ThalamusLogger,
+  type ThalamusLoggerInput,
+} from "../logger";
 import { createSendResult } from "../send-result";
 import {
   type McpServerConfig,
   OPENAI,
   type Provider,
+  type ProviderWebhookHandlerOptions,
   type RequestParams,
   type Response,
   type SendResult,
@@ -42,6 +49,8 @@ import type {
   VaultOptions,
   VaultStore,
 } from "../vault/vault.interface";
+import type { WebhookHandler } from "../webhook/index";
+import { createProviderWebhookHandler } from "../webhook/index";
 import { openaiTransformer } from "./openai.transformer";
 import { mapEvent, ResponseAccumulator } from "./openai-parser";
 import { createSigV4Fetch } from "./sigv4-fetch";
@@ -124,6 +133,7 @@ type OpenAIBaseConfig = {
   vaultStore?: VaultStore;
   onSessionEvents?: SessionEventsFactory;
   durable?: DurableBackend;
+  logger?: ThalamusLoggerInput;
 };
 
 function mapApprovalPolicy(policy: McpServerConfig["approvalPolicy"]): unknown {
@@ -205,6 +215,7 @@ class OpenAIProvider {
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
   private readonly config: OpenAIProviderConfig;
+  private readonly log: ThalamusLogger;
 
   private get edgeObserver(): CloudflareEdgeObserver | null {
     return this.config.durable && isEdgeObserver(this.config.durable)
@@ -228,6 +239,7 @@ class OpenAIProvider {
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
+    this.log = resolveLogger(config.logger);
 
     if (
       config.durable &&
@@ -266,6 +278,15 @@ class OpenAIProvider {
     runId: string,
     turnId: string,
   ): Promise<WebhookSendResult> {
+    this.log.info("send.start", {
+      stage: "send.start",
+      provider: OPENAI,
+      mode: "webhook",
+      sessionId: params.sessionId,
+      runId,
+      turnId,
+    });
+
     const sessionParams = await this.resolveSessionParams(params.sessionId);
     const credentials = params.vaultIds?.length
       ? await this.resolveCredentials(params.vaultIds)
@@ -281,6 +302,16 @@ class OpenAIProvider {
       sessionParams,
       mcpTools,
     );
+
+    this.log.info("send.complete", {
+      stage: "send.complete",
+      provider: OPENAI,
+      mode: "webhook",
+      sessionId,
+      runId,
+      turnId,
+    });
+
     return { sessionId, runId, turnId };
   }
 
@@ -288,8 +319,16 @@ class OpenAIProvider {
     sessionId?: string,
   ): Promise<Record<string, unknown>> {
     if (this.useConversations) {
-      const id = sessionId ?? (await this.client.conversations.create()).id;
-      return { conversation: { id } };
+      if (sessionId) {
+        return { conversation: { id: sessionId } };
+      }
+      const conversation = await this.client.conversations.create();
+      this.log.debug("conversation.create", {
+        stage: "conversation.create",
+        provider: OPENAI,
+        sessionId: conversation.id,
+      });
+      return { conversation: { id: conversation.id } };
     }
     return sessionId ? { previous_response_id: sessionId } : {};
   }
@@ -396,6 +435,15 @@ class OpenAIProvider {
     let lastSequenceNumber = -1;
     let responseId: string | undefined;
     let retries = 0;
+    let dispatchSent = false;
+
+    this.log.debug("dispatch.input", {
+      stage: "dispatch.input",
+      provider: OPENAI,
+      runId,
+      messageCount: params.messages.length,
+      hasToolResults: Boolean(params.toolResults?.length),
+    });
 
     const createParams = {
       model: this.model,
@@ -417,6 +465,12 @@ class OpenAIProvider {
             signal,
           );
         } else {
+          this.log.debug("dispatch.start", {
+            stage: "dispatch.start",
+            provider: OPENAI,
+            mode: "stream",
+            runId,
+          });
           rawStream = await this.client.responses.create(
             {
               ...createParams,
@@ -437,6 +491,16 @@ class OpenAIProvider {
           }
           if (rawEvent.type === "response.created") {
             responseId = rawEvent.response.id;
+            if (!dispatchSent) {
+              dispatchSent = true;
+              this.log.info("dispatch.sent", {
+                stage: "dispatch.sent",
+                provider: OPENAI,
+                mode: "stream",
+                runId,
+                sessionId: responseId,
+              });
+            }
           }
           yield* mapEvent(rawEvent, acc);
           if (backend && responseId) {
@@ -454,6 +518,13 @@ class OpenAIProvider {
         if (backend && responseId) {
           await backend.remove(acc.sessionId ?? responseId);
         }
+        this.log.info("send.complete", {
+          stage: "send.complete",
+          provider: OPENAI,
+          mode: "stream",
+          runId,
+          sessionId: responseId ?? acc.sessionId,
+        });
         yield { type: "finish", response: acc.toResponse() };
         return;
       } catch (err) {
@@ -462,6 +533,15 @@ class OpenAIProvider {
 
         retries++;
         if (retries > MAX_RECONNECT_RETRIES) throw err;
+
+        this.log.warn("stream.reconnect", {
+          stage: "stream.reconnect",
+          provider: OPENAI,
+          runId,
+          sessionId: responseId,
+          retry: retries,
+          error: logErrorMessage(err),
+        });
       }
     }
   }
@@ -482,6 +562,13 @@ class OpenAIProvider {
       active.map(async (checkpoint) => {
         const responseId = checkpoint.metadata?.responseId;
         if (!responseId) {
+          this.log.error("recovery.failed", {
+            stage: "recovery.failed",
+            provider: OPENAI,
+            sessionId: checkpoint.sessionId,
+            runId: checkpoint.runId,
+            error: "missing responseId in checkpoint metadata",
+          });
           await backend.remove(checkpoint.sessionId);
           return;
         }
@@ -515,17 +602,23 @@ class OpenAIProvider {
             { autoStart: true },
           );
           result.response.catch(async (err) => {
-            console.error(
-              `[thalamus] recovery stream failed for ${checkpoint.sessionId}:`,
-              err instanceof Error ? err.message : err,
-            );
+            this.log.error("recovery.stream.failed", {
+              stage: "recovery.stream.failed",
+              provider: OPENAI,
+              sessionId: checkpoint.sessionId,
+              runId,
+              error: logErrorMessage(err),
+            });
             await backend.remove(checkpoint.sessionId).catch(() => {});
           });
         } catch (err) {
-          console.error(
-            `[thalamus] recovery failed for ${checkpoint.sessionId}:`,
-            err instanceof Error ? err.message : err,
-          );
+          this.log.error("recovery.failed", {
+            stage: "recovery.failed",
+            provider: OPENAI,
+            sessionId: checkpoint.sessionId,
+            runId: checkpoint.runId,
+            error: logErrorMessage(err),
+          });
           await backend.remove(checkpoint.sessionId).catch(() => {});
         }
       }),
@@ -600,6 +693,23 @@ class OpenAIProvider {
     const observer = this.edgeObserver!;
     const input = this.buildInput(params);
 
+    this.log.debug("dispatch.input", {
+      stage: "dispatch.input",
+      provider: OPENAI,
+      runId,
+      turnId,
+      messageCount: params.messages.length,
+      hasToolResults: Boolean(params.toolResults?.length),
+    });
+
+    this.log.debug("dispatch.start", {
+      stage: "dispatch.start",
+      provider: OPENAI,
+      mode: "webhook",
+      runId,
+      turnId,
+    });
+
     const initStream = await this.client.responses.create({
       model: this.model,
       input,
@@ -633,20 +743,61 @@ class OpenAIProvider {
       );
     }
 
-    const startingAfter = lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : "";
-    await observer.observe({
+    this.log.info("dispatch.sent", {
+      stage: "dispatch.sent",
+      provider: OPENAI,
+      mode: "webhook",
+      runId,
+      turnId,
+      sessionId: responseId,
+    });
+
+    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true${
+      lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""
+    }`;
+
+    this.log.info("edge.observe.start", {
+      stage: "edge.observe.start",
+      provider: OPENAI,
       sessionId: responseId,
       runId,
       turnId,
-      streamUrl: `${this.client.baseURL}/responses/${responseId}?stream=true${startingAfter}`,
-      headers: {
-        Authorization: `Bearer ${this.client.apiKey}`,
-      },
-      provider: "openai",
-      webhook: {
-        ...observer.webhook,
-        metadata: params.webhookMetadata,
-      },
+      streamUrl,
+    });
+
+    const observeStartedAt = Date.now();
+    try {
+      await observer.observe({
+        sessionId: responseId,
+        runId,
+        turnId,
+        streamUrl,
+        headers: {
+          Authorization: `Bearer ${this.client.apiKey}`,
+        },
+        provider: "openai",
+        webhook: {
+          ...observer.webhook,
+          metadata: params.webhookMetadata,
+        },
+      });
+    } catch (err) {
+      this.log.error("edge.observe.failed", {
+        stage: "edge.observe.failed",
+        provider: OPENAI,
+        sessionId: responseId,
+        runId,
+        error: logErrorMessage(err),
+      });
+      throw err;
+    }
+
+    this.log.info("edge.observe.ok", {
+      stage: "edge.observe.ok",
+      provider: OPENAI,
+      sessionId: responseId,
+      runId,
+      durationMs: Date.now() - observeStartedAt,
     });
 
     return responseId;
@@ -656,6 +807,14 @@ class OpenAIProvider {
     params: RequestParams,
     runId: string,
   ): AsyncIterable<StreamPart> {
+    this.log.info("send.start", {
+      stage: "send.start",
+      provider: OPENAI,
+      mode: "stream",
+      sessionId: params.sessionId,
+      runId,
+    });
+
     try {
       const sessionParams = await this.resolveSessionParams(params.sessionId);
 
@@ -680,6 +839,14 @@ class OpenAIProvider {
     } catch (err) {
       const mapped =
         err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
+      this.log.error("stream.error", {
+        stage: "stream.error",
+        provider: OPENAI,
+        mode: "stream",
+        runId,
+        sessionId: params.sessionId,
+        error: logErrorMessage(mapped),
+      });
       yield { type: "error", error: mapped };
     }
   }
@@ -745,6 +912,14 @@ class OpenAIProvider {
 
   async endSession(_sessionId: string): Promise<void> {
     // No-op for stateless provider.
+  }
+
+  createWebhookHandler(options: ProviderWebhookHandlerOptions): WebhookHandler {
+    return createProviderWebhookHandler(
+      this.config.logger,
+      this.config.onSessionEvents,
+      options,
+    );
   }
 }
 

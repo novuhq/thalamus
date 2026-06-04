@@ -190,9 +190,11 @@ class AnthropicProvider {
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
     const runId = crypto.randomUUID();
     const turnId = params.turnId ?? crypto.randomUUID();
+
     if (this.edgeObserver) {
       return this.sendViaWebhook(params, runId, turnId);
     }
+
     const callbacks = this.config.onSessionEvents
       ? this.config.onSessionEvents({
           sessionId: params.sessionId ?? "<<pending>>",
@@ -202,62 +204,48 @@ class AnthropicProvider {
         })
       : undefined;
 
-    if (params.toolResults?.length) {
-      return createSendResult(
-        this.runStreamAndRelease(params, runId),
-        runId,
-        turnId,
-        callbacks,
-        { autoStart: !!this.config.onSessionEvents },
-      );
-    }
+    const stream = params.toolResults?.length
+      ? this.streamToolResults(params, runId)
+      : this.streamWithLock(params, runId);
 
-    if (!params.sessionId) {
-      return createSendResult(
-        this.runStreamWithLock(params, runId),
-        runId,
-        turnId,
-        callbacks,
-        { autoStart: !!this.config.onSessionEvents },
-      );
-    }
-
-    return createSendResult(
-      this.runStreamQueued(params, runId),
-      runId,
-      turnId,
-      callbacks,
-      { autoStart: !!this.config.onSessionEvents },
-    );
-  }
-
-  private async bootstrapSession(params: RequestParams): Promise<string> {
-    await this.getClient();
-    const sessionId = await this.createSession({
-      vaultIds: params.vaultIds,
-      providerOptions: params.providerOptions,
+    return createSendResult(stream, runId, turnId, callbacks, {
+      autoStart: !!this.config.onSessionEvents,
     });
-    await this.turnLock.acquire(sessionId, params.abortSignal);
-    return sessionId;
   }
 
-  private async resolveSessionIdForLock(
-    params: RequestParams,
-  ): Promise<string> {
+  /**
+   * Ensures a sessionId is available, deduplicating concurrent first-message calls.
+   * If params already has a sessionId, returns it (after any in-flight bootstrap settles).
+   * Otherwise creates a new session via a shared promise so concurrent sends
+   * don't each create their own session.
+   */
+  private async ensureSession(params: RequestParams): Promise<string> {
     if (params.sessionId) {
       if (this.sessionBootstrap) await this.sessionBootstrap;
       return params.sessionId;
     }
 
     if (!this.sessionBootstrap) {
-      this.sessionBootstrap = this.bootstrapSession(params).finally(() => {
+      this.sessionBootstrap = this.createNewSession(params).finally(() => {
         this.sessionBootstrap = null;
       });
     }
     return this.sessionBootstrap;
   }
 
-  private async *runStreamWithLock(
+  private async createNewSession(params: RequestParams): Promise<string> {
+    await this.getClient();
+    return this.createSession({
+      vaultIds: params.vaultIds,
+      providerOptions: params.providerOptions,
+    });
+  }
+
+  /**
+   * Main streaming path for new messages (with or without an existing sessionId).
+   * Acquires the turn lock, runs the stream, and releases on finish or error.
+   */
+  private async *streamWithLock(
     params: RequestParams,
     runId: string,
   ): AsyncIterable<StreamPart> {
@@ -265,77 +253,60 @@ class AnthropicProvider {
     try {
       let sessionId: string;
       try {
-        sessionId = await this.resolveSessionIdForLock(params);
+        sessionId = await this.ensureSession(params);
       } catch (err) {
         yield { type: "error", error: mapStreamError(err, params.sessionId) };
         return;
       }
 
-      release = params.sessionId
-        ? await this.turnLock.acquire(sessionId, params.abortSignal)
-        : () => this.turnLock.release(sessionId);
-
-      for await (const part of this.runStream(
-        { ...params, sessionId },
-        runId,
-      )) {
-        if (
-          part.type === "finish" &&
-          part.response.finishReason !== "requires-action"
-        ) {
-          release();
-        }
-        yield part;
+      if (params.sessionId) {
+        yield { type: "status-change", status: "queued" };
       }
+
+      release = await this.turnLock.acquire(sessionId, params.abortSignal);
+
+      yield* this.withTurnRelease(
+        this.runStream({ ...params, sessionId }, runId),
+        release,
+      );
     } catch (err) {
       release?.();
       throw err;
     }
   }
 
-  private async *runStreamAndRelease(
+  /** toolResults bypass the queue — just stream and release the existing holder. */
+  private async *streamToolResults(
     params: RequestParams,
     runId: string,
   ): AsyncIterable<StreamPart> {
     const sessionId = params.sessionId;
+    const release = sessionId
+      ? () => this.turnLock.release(sessionId)
+      : undefined;
+
     try {
-      for await (const part of this.runStream(params, runId)) {
-        if (
-          sessionId &&
-          part.type === "finish" &&
-          part.response.finishReason !== "requires-action"
-        ) {
-          this.turnLock.release(sessionId);
-        }
-        yield part;
-      }
+      yield* this.withTurnRelease(this.runStream(params, runId), release);
     } catch (err) {
-      if (sessionId) this.turnLock.release(sessionId);
+      release?.();
       throw err;
     }
   }
 
-  private async *runStreamQueued(
-    params: RequestParams,
-    runId: string,
+  /** Forwards stream parts, calling release on terminal finish */
+  private async *withTurnRelease(
+    stream: AsyncIterable<StreamPart>,
+    release: (() => void) | undefined,
   ): AsyncIterable<StreamPart> {
-    const sessionId = params.sessionId!;
-    yield { type: "status-change", status: "queued" };
-
-    const release = await this.turnLock.acquire(sessionId, params.abortSignal);
-    try {
-      for await (const part of this.runStream(params, runId)) {
-        if (
-          part.type === "finish" &&
-          part.response.finishReason !== "requires-action"
-        ) {
-          release();
-        }
-        yield part;
+    for await (const part of stream) {
+      if (
+        release &&
+        part.type === "finish" &&
+        part.response.finishReason !== "requires-action"
+      ) {
+        release();
       }
-    } catch (err) {
-      release();
-      throw err;
+      yield part;
     }
   }
 

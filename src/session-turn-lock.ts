@@ -1,79 +1,93 @@
-export interface SessionTurnLockOptions {
+export interface SessionMutexOptions {
   maxQueueSize?: number;
 }
 
-const DEFAULT_MAX_QUEUE_SIZE = 50;
+interface SessionEntry {
+  release: () => void;
+  queue: Array<() => void>;
+}
 
-export class SessionTurnLock {
-  private chains = new Map<string, Promise<void>>();
-  private waiters = new Map<string, number>();
-  private activeReleases = new Map<string, () => void>();
+/**
+ * Per-session mutex with FIFO ordering.
+ *
+ * Only one acquire() caller runs at a time per sessionId.
+ * Subsequent callers wait in a queue and are admitted in order.
+ */
+export class SessionMutex {
+  private sessions = new Map<string, SessionEntry>();
   private readonly maxQueueSize: number;
 
-  constructor(options?: SessionTurnLockOptions) {
-    this.maxQueueSize = options?.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
+  constructor(options?: SessionMutexOptions) {
+    this.maxQueueSize = options?.maxQueueSize ?? 50;
   }
 
   async acquire(sessionId: string, signal?: AbortSignal): Promise<() => void> {
-    const prev = this.chains.get(sessionId);
+    const session = this.sessions.get(sessionId);
 
-    if (prev) {
-      const waiters = this.waiters.get(sessionId) ?? 0;
-      if (waiters >= this.maxQueueSize) {
-        throw new Error(
-          `Session message queue is full (limit: ${this.maxQueueSize})`,
-        );
-      }
-      this.waiters.set(sessionId, waiters + 1);
+    if (session) {
+      await this.waitInQueue(session, signal);
     }
 
-    let release!: () => void;
-    const next = new Promise<void>((r) => {
-      release = () => {
-        this.chains.delete(sessionId);
-        this.waiters.delete(sessionId);
-        this.activeReleases.delete(sessionId);
-        r();
-      };
-    });
-    this.chains.set(sessionId, next);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.admitNext(sessionId);
+    };
 
-    if (prev) {
-      if (signal) {
-        await Promise.race([
-          prev,
-          new Promise<never>((_, reject) => {
-            if (signal.aborted) {
-              reject(new Error("aborted"));
-              return;
-            }
-            signal.addEventListener(
-              "abort",
-              () => reject(new Error("aborted")),
-              { once: true },
-            );
-          }),
-        ]).catch((err) => {
-          const w = (this.waiters.get(sessionId) ?? 1) - 1;
-          if (w <= 0) this.waiters.delete(sessionId);
-          else this.waiters.set(sessionId, w);
-          release();
-          throw err;
-        });
-      } else {
-        await prev;
-      }
-      const w = (this.waiters.get(sessionId) ?? 1) - 1;
-      if (w <= 0) this.waiters.delete(sessionId);
-      else this.waiters.set(sessionId, w);
+    if (session) {
+      session.release = release;
+    } else {
+      this.sessions.set(sessionId, { release, queue: [] });
     }
 
-    this.activeReleases.set(sessionId, release);
     return release;
   }
 
-  /** Force-release the current holder (e.g. after toolResults completes the turn). */
+  /** Force-release the current holder by sessionId (e.g. after toolResults). */
   release(sessionId: string): void {
-    this.activeReleases.get(sessionId)?.();
+    this.sessions.get(sessionId)?.release();
+  }
+
+  private admitNext(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const next = session.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.sessions.delete(sessionId);
+    }
+  }
+
+  private waitInQueue(
+    session: SessionEntry,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (session.queue.length >= this.maxQueueSize) {
+      throw new Error(
+        `Session message queue is full (limit: ${this.maxQueueSize})`,
+      );
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      session.queue.push(resolve);
+
+      if (!signal) return;
+
+      const onAbort = () => {
+        const i = session.queue.indexOf(resolve);
+        if (i !== -1) session.queue.splice(i, 1);
+        reject(new Error("aborted"));
+      };
+
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 }

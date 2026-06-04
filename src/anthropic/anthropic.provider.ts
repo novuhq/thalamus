@@ -22,7 +22,7 @@ import {
   type ThalamusLoggerInput,
 } from "../logger";
 import { createSendResult } from "../send-result";
-import { SessionTurnLock } from "../session-turn-lock.js";
+import { SessionMutex } from "../session-turn-lock.js";
 import {
   ANTHROPIC,
   type Provider,
@@ -162,7 +162,7 @@ class AnthropicProvider {
   private readonly agentId: string;
   private readonly environmentId: string;
   private readonly log: ThalamusLogger;
-  private readonly turnLock = new SessionTurnLock();
+  private readonly turnLock = new SessionMutex();
   /** While set, a new session is being created and its turn lock is being acquired. */
   private sessionBootstrap: Promise<string> | null = null;
 

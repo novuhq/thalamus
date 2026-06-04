@@ -9,15 +9,18 @@ const mockSend = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
-  const MockAnthropic = () => ({
-    beta: {
-      sessions: {
-        create: mockCreate,
-        events: { stream: mockSseStream, send: mockSend },
+  // biome-ignore lint/complexity/useArrowFunction: must be callable with `new`
+  const MockAnthropic = function () {
+    return {
+      beta: {
+        sessions: {
+          create: mockCreate,
+          events: { stream: mockSseStream, send: mockSend },
+        },
+        vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
-      vaults: { create: vi.fn(), retrieve: vi.fn() },
-    },
-  });
+    };
+  };
   return {
     default: MockAnthropic,
     APIError: actual.APIError,

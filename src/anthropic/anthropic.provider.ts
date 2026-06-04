@@ -22,6 +22,7 @@ import {
   type ThalamusLoggerInput,
 } from "../logger";
 import { createSendResult } from "../send-result";
+import { SessionTurnLock } from "../session-turn-lock.js";
 import {
   ANTHROPIC,
   type Provider,
@@ -161,6 +162,9 @@ class AnthropicProvider {
   private readonly agentId: string;
   private readonly environmentId: string;
   private readonly log: ThalamusLogger;
+  private readonly turnLock = new SessionTurnLock();
+  /** While set, a new session is being created and its turn lock is being acquired. */
+  private sessionBootstrap: Promise<string> | null = null;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
@@ -197,13 +201,142 @@ class AnthropicProvider {
           metadata: {},
         })
       : undefined;
+
+    if (params.toolResults?.length) {
+      return createSendResult(
+        this.runStreamAndRelease(params, runId),
+        runId,
+        turnId,
+        callbacks,
+        { autoStart: !!this.config.onSessionEvents },
+      );
+    }
+
+    if (!params.sessionId) {
+      return createSendResult(
+        this.runStreamWithLock(params, runId),
+        runId,
+        turnId,
+        callbacks,
+        { autoStart: !!this.config.onSessionEvents },
+      );
+    }
+
     return createSendResult(
-      this.runStream(params, runId),
+      this.runStreamQueued(params, runId),
       runId,
       turnId,
       callbacks,
       { autoStart: !!this.config.onSessionEvents },
     );
+  }
+
+  private async bootstrapSession(params: RequestParams): Promise<string> {
+    await this.getClient();
+    const sessionId = await this.createSession({
+      vaultIds: params.vaultIds,
+      providerOptions: params.providerOptions,
+    });
+    await this.turnLock.acquire(sessionId, params.abortSignal);
+    return sessionId;
+  }
+
+  private async resolveSessionIdForLock(
+    params: RequestParams,
+  ): Promise<string> {
+    if (params.sessionId) {
+      if (this.sessionBootstrap) await this.sessionBootstrap;
+      return params.sessionId;
+    }
+
+    if (!this.sessionBootstrap) {
+      this.sessionBootstrap = this.bootstrapSession(params).finally(() => {
+        this.sessionBootstrap = null;
+      });
+    }
+    return this.sessionBootstrap;
+  }
+
+  private async *runStreamWithLock(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    let release: (() => void) | undefined;
+    try {
+      let sessionId: string;
+      try {
+        sessionId = await this.resolveSessionIdForLock(params);
+      } catch (err) {
+        yield { type: "error", error: mapStreamError(err, params.sessionId) };
+        return;
+      }
+
+      release = params.sessionId
+        ? await this.turnLock.acquire(sessionId, params.abortSignal)
+        : () => this.turnLock.release(sessionId);
+
+      for await (const part of this.runStream(
+        { ...params, sessionId },
+        runId,
+      )) {
+        if (
+          part.type === "finish" &&
+          part.response.finishReason !== "requires-action"
+        ) {
+          release();
+        }
+        yield part;
+      }
+    } catch (err) {
+      release?.();
+      throw err;
+    }
+  }
+
+  private async *runStreamAndRelease(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    const sessionId = params.sessionId;
+    try {
+      for await (const part of this.runStream(params, runId)) {
+        if (
+          sessionId &&
+          part.type === "finish" &&
+          part.response.finishReason !== "requires-action"
+        ) {
+          this.turnLock.release(sessionId);
+        }
+        yield part;
+      }
+    } catch (err) {
+      if (sessionId) this.turnLock.release(sessionId);
+      throw err;
+    }
+  }
+
+  private async *runStreamQueued(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    const sessionId = params.sessionId!;
+    yield { type: "status-change", status: "queued" };
+
+    const release = await this.turnLock.acquire(sessionId, params.abortSignal);
+    try {
+      for await (const part of this.runStream(params, runId)) {
+        if (
+          part.type === "finish" &&
+          part.response.finishReason !== "requires-action"
+        ) {
+          release();
+        }
+        yield part;
+      }
+    } catch (err) {
+      release();
+      throw err;
+    }
   }
 
   private async sendViaWebhook(

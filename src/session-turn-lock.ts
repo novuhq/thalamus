@@ -7,6 +7,7 @@ const DEFAULT_MAX_QUEUE_SIZE = 50;
 export class SessionTurnLock {
   private chains = new Map<string, Promise<void>>();
   private waiters = new Map<string, number>();
+  private activeReleases = new Map<string, () => void>();
   private readonly maxQueueSize: number;
 
   constructor(options?: SessionTurnLockOptions) {
@@ -31,6 +32,7 @@ export class SessionTurnLock {
       release = () => {
         this.chains.delete(sessionId);
         this.waiters.delete(sessionId);
+        this.activeReleases.delete(sessionId);
         r();
       };
     });
@@ -66,6 +68,12 @@ export class SessionTurnLock {
       else this.waiters.set(sessionId, w);
     }
 
+    this.activeReleases.set(sessionId, release);
     return release;
+  }
+
+  /** Force-release the current holder (e.g. after toolResults completes the turn). */
+  release(sessionId: string): void {
+    this.activeReleases.get(sessionId)?.();
   }
 }

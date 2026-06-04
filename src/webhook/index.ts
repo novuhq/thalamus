@@ -1,3 +1,4 @@
+import type { SerializedRequestParams } from "../durable/types";
 import { resolveLogger, type ThalamusLoggerInput } from "../logger";
 import { CALLBACK_MAP } from "../send-result";
 import type {
@@ -13,6 +14,13 @@ export interface WebhookHandlerOptions {
   tolerance?: number;
   onSessionEvents: SessionEventsFactory;
   logger?: ThalamusLoggerInput;
+  /** @internal Intercept queue-ready events for provider re-dispatch. */
+  onQueueReady?: (params: {
+    sessionId: string;
+    runId: string;
+    turnId: string;
+    request: SerializedRequestParams;
+  }) => Promise<void>;
 }
 
 export type { ProviderWebhookHandlerOptions };
@@ -37,6 +45,12 @@ export interface WebhookHandler {
   ): Promise<WebhookHandlerResult>;
 }
 
+// Event indicating that there is no in-process request for this session, so the caller can dispatch a new request.
+interface QueueReadyEvent {
+  type: "queue-ready";
+  request: SerializedRequestParams;
+}
+
 interface WebhookPayload {
   sessionId: string;
   /** Unique identifier for the originating `send()` invocation. */
@@ -47,13 +61,13 @@ interface WebhookPayload {
   timestamp: number;
   provider: string;
   metadata: Record<string, string>;
-  event: StreamPart;
+  event: StreamPart | QueueReadyEvent;
 }
 
 export function createWebhookHandler(
   options: WebhookHandlerOptions,
 ): WebhookHandler {
-  const { secret, tolerance = 300, onSessionEvents } = options;
+  const { secret, tolerance = 300, onSessionEvents, onQueueReady } = options;
   const log = resolveLogger(options.logger);
 
   async function verifySignature(
@@ -171,6 +185,31 @@ export function createWebhookHandler(
       conversationId: metadata?.conversationId,
     });
 
+    if (event.type === "queue-ready") {
+      if (onQueueReady) {
+        try {
+          await onQueueReady({
+            sessionId,
+            runId,
+            turnId: turnId ?? "",
+            request: event.request,
+          });
+        } catch (err) {
+          log.error("webhook.queue-ready.failed", {
+            stage: "webhook.queue-ready.failed",
+            sessionId,
+            runId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return {
+            status: 500,
+            body: JSON.stringify({ error: "Queue dispatch failed" }),
+          };
+        }
+      }
+      return { status: 200, body: null };
+    }
+
     const callbacks = onSessionEvents({
       sessionId,
       turnId: turnId ?? crypto.randomUUID(),
@@ -253,7 +292,9 @@ export function createWebhookHandler(
 export function createProviderWebhookHandler(
   defaultLogger: ThalamusLoggerInput | undefined,
   providerOnSessionEvents: SessionEventsFactory | undefined,
-  options: ProviderWebhookHandlerOptions,
+  options: ProviderWebhookHandlerOptions & {
+    onQueueReady?: WebhookHandlerOptions["onQueueReady"];
+  },
 ): WebhookHandler {
   const onSessionEvents = options.onSessionEvents ?? providerOnSessionEvents;
   if (!onSessionEvents) {
@@ -266,6 +307,7 @@ export function createProviderWebhookHandler(
     secret: options.secret,
     onSessionEvents,
     logger: options.logger ?? defaultLogger,
+    onQueueReady: options.onQueueReady,
   });
 }
 

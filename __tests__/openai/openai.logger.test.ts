@@ -70,7 +70,16 @@ describe("openai lifecycle logging", () => {
   it("emits durable webhook stages when logger is configured", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_edge" });
     mockEdgeDispatchStream();
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) {
+        return new Response(JSON.stringify({ status: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
 
     const { logger, stages } = captureLogger();
     const provider = createOpenAIProvider({
@@ -89,17 +98,9 @@ describe("openai lifecycle logging", () => {
     expect(stages).toEqual([
       "send.start",
       "conversation.create",
-      "dispatch.input",
-      "dispatch.start",
-      "dispatch.sent",
-      "edge.observe.start",
-      "edge.observe.ok",
+      "edge.enqueue",
       "send.complete",
     ]);
-
-    expect(stages.indexOf("dispatch.sent")).toBeLessThan(
-      stages.indexOf("edge.observe.ok"),
-    );
   });
 
   it("emits stream-mode stages when logger is configured", async () => {
@@ -146,7 +147,16 @@ describe("openai lifecycle logging", () => {
   it("stays silent when logger is omitted", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_silent" });
     mockEdgeDispatchStream("resp_silent");
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) {
+        return new Response(JSON.stringify({ status: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
 
     const info = vi.fn();
     const provider = createOpenAIProvider({

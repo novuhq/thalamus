@@ -64,7 +64,16 @@ describe("anthropic lifecycle logging", () => {
   it("emits durable send stages when logger is configured", async () => {
     mockCreate.mockResolvedValue({ id: "sess_log" });
     mockSend.mockResolvedValue({});
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) {
+        return new Response(JSON.stringify({ status: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
 
     const stages: string[] = [];
     const logger: ThalamusLogger = {
@@ -95,10 +104,8 @@ describe("anthropic lifecycle logging", () => {
     expect(stages).toEqual([
       "send.start",
       "session.create",
-      "edge.observe.start",
-      "edge.observe.ok",
+      "edge.enqueue",
       "dispatch.events",
-      "edge.dispatch.sent",
       "send.complete",
     ]);
   });
@@ -106,7 +113,16 @@ describe("anthropic lifecycle logging", () => {
   it("stays silent when logger is omitted", async () => {
     mockCreate.mockResolvedValue({ id: "sess_silent" });
     mockSend.mockResolvedValue({});
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) {
+        return new Response(JSON.stringify({ status: "active" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
 
     const info = vi.fn();
     const provider = createAnthropicProvider({

@@ -15,49 +15,66 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const enqueueParams = {
+  sessionId: "sess_1",
+  runId: "run_1",
+  turnId: "turn_1",
+  provider: "anthropic",
+  request: {
+    messages: [{ role: "user" as const, content: "hello" }],
+    sessionId: "sess_1",
+  },
+  webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
+};
+
+const observeParams = {
+  sessionId: "sess_1",
+  runId: "run_1",
+  turnId: "turn_1",
+  streamUrl: "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
+  headers: { "x-api-key": "key" },
+  provider: "anthropic",
+  webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
+};
+
+function enqueueResponse(status: "active" | "queued" = "active") {
+  return new Response(JSON.stringify({ status }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("cloudflare() edge observer", () => {
-  it("observe sends POST /observe with params including runId", async () => {
-    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+  it("enqueue sends POST /enqueue and returns status", async () => {
+    mockFetch.mockResolvedValueOnce(enqueueResponse("active"));
 
     const backend = cloudflare(defaultOptions);
-    await backend.observe({
-      sessionId: "sess_1",
-      runId: "run_1",
-      streamUrl: "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
-      headers: { "x-api-key": "key" },
-      provider: "anthropic",
-      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
-    });
+    const result = await backend.enqueue(enqueueParams);
 
+    expect(result).toEqual({ status: "active" });
     expect(mockFetch).toHaveBeenCalledWith(
-      "https://worker.example.com/observe",
+      "https://worker.example.com/enqueue",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({
-          sessionId: "sess_1",
-          runId: "run_1",
-          streamUrl:
-            "https://api.anthropic.com/v1/sessions/sess_1/events/stream",
-          headers: { "x-api-key": "key" },
-          provider: "anthropic",
-          webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
-        }),
+        body: JSON.stringify(enqueueParams),
       }),
     );
   });
 
-  it("observe includes Authorization header when apiKey is set", async () => {
-    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+  it("enqueue returns queued status", async () => {
+    mockFetch.mockResolvedValueOnce(enqueueResponse("queued"));
+
+    const backend = cloudflare(defaultOptions);
+    const result = await backend.enqueue(enqueueParams);
+
+    expect(result).toEqual({ status: "queued" });
+  });
+
+  it("enqueue includes Authorization header when apiKey is set", async () => {
+    mockFetch.mockResolvedValueOnce(enqueueResponse());
 
     const backend = cloudflare({ ...defaultOptions, apiKey: "secret" });
-    await backend.observe({
-      sessionId: "sess_1",
-      runId: "run_1",
-      streamUrl: "https://example.com/sse",
-      headers: {},
-      provider: "anthropic",
-      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
-    });
+    await backend.enqueue(enqueueParams);
 
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
@@ -69,20 +86,37 @@ describe("cloudflare() edge observer", () => {
     );
   });
 
+  it("enqueue throws on non-ok response", async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 502 }));
+
+    const backend = cloudflare(defaultOptions);
+    await expect(backend.enqueue(enqueueParams)).rejects.toThrow(
+      "cloudflare enqueue failed: 502",
+    );
+  });
+
+  it("observe sends POST /observe", async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const backend = cloudflare(defaultOptions);
+    await backend.observe(observeParams);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://worker.example.com/observe",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(observeParams),
+      }),
+    );
+  });
+
   it("observe throws on non-ok response", async () => {
     mockFetch.mockResolvedValueOnce(new Response(null, { status: 502 }));
 
     const backend = cloudflare(defaultOptions);
-    await expect(
-      backend.observe({
-        sessionId: "sess_1",
-        runId: "run_1",
-        streamUrl: "https://example.com/sse",
-        headers: {},
-        provider: "anthropic",
-        webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
-      }),
-    ).rejects.toThrow("cloudflare observe failed: 502");
+    await expect(backend.observe(observeParams)).rejects.toThrow(
+      "cloudflare observe failed: 502",
+    );
   });
 
   it("stop sends DELETE /observe/:sessionId", async () => {
@@ -126,23 +160,16 @@ describe("cloudflare() edge observer", () => {
   });
 
   it("strips trailing slashes from base URL", async () => {
-    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    mockFetch.mockResolvedValueOnce(enqueueResponse());
 
     const backend = cloudflare({
       ...defaultOptions,
       url: "https://worker.example.com///",
     });
-    await backend.observe({
-      sessionId: "sess_1",
-      runId: "run_1",
-      streamUrl: "https://example.com/sse",
-      headers: {},
-      provider: "anthropic",
-      webhook: { url: "https://myapp.com/webhook", secret: "whsec_test" },
-    });
+    await backend.enqueue(enqueueParams);
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "https://worker.example.com/observe",
+      "https://worker.example.com/enqueue",
       expect.any(Object),
     );
   });

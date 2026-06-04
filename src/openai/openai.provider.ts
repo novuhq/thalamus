@@ -10,6 +10,7 @@ import {
   type DurableBackend,
   type EdgeObserver,
   isEdgeObserver,
+  type SerializedRequestParams,
   type SessionCheckpoint,
 } from "../durable/types";
 import {
@@ -31,10 +32,8 @@ import { SessionMutex } from "../session-turn-lock.js";
 import {
   type McpServerConfig,
   OPENAI,
-  type Provider,
   type ProviderWebhookHandlerOptions,
   type RequestParams,
-  type Response,
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
@@ -292,33 +291,181 @@ class OpenAIProvider {
       turnId,
     });
 
+    const observer = this.edgeObserver!;
     const resolvedSessionId = await this.ensureSession(params);
-    const sessionParams = this.resolveSessionParams(resolvedSessionId);
-    const credentials = params.vaultIds?.length
-      ? await this.resolveCredentials(params.vaultIds)
-      : undefined;
-    const mcpTools =
-      this.mcpServers.length > 0
-        ? toMcpTools(this.mcpServers, credentials)
-        : undefined;
-    const sessionId = await this.edgeObserve(
-      { ...params, sessionId: resolvedSessionId },
+
+    const serializedRequest: SerializedRequestParams = {
+      messages: params.messages,
+      sessionId: resolvedSessionId,
+      toolResults: params.toolResults,
+      vaultIds: params.vaultIds,
+      providerOptions: params.providerOptions,
+      webhookMetadata: params.webhookMetadata,
+    };
+
+    this.log.info("edge.enqueue", {
+      stage: "edge.enqueue",
+      provider: OPENAI,
+      sessionId: resolvedSessionId,
       runId,
       turnId,
-      sessionParams,
-      mcpTools,
-    );
+    });
+
+    const enqueueStartedAt = Date.now();
+    let enqueueResult: { status: "active" | "queued" };
+    try {
+      enqueueResult = await observer.enqueue({
+        sessionId: resolvedSessionId,
+        runId,
+        turnId,
+        provider: "openai",
+        request: serializedRequest,
+        webhook: {
+          ...observer.webhook,
+          metadata: params.webhookMetadata,
+        },
+      });
+    } catch (err) {
+      this.log.error("edge.enqueue.failed", {
+        stage: "edge.enqueue.failed",
+        provider: OPENAI,
+        sessionId: resolvedSessionId,
+        runId,
+        error: logErrorMessage(err),
+      });
+      throw err;
+    }
+
+    if (enqueueResult.status === "active") {
+      const sessionParams = this.resolveSessionParams(resolvedSessionId);
+      const credentials = params.vaultIds?.length
+        ? await this.resolveCredentials(params.vaultIds)
+        : undefined;
+      const mcpTools =
+        this.mcpServers.length > 0
+          ? toMcpTools(this.mcpServers, credentials)
+          : undefined;
+      const input = this.buildInput(params);
+
+      await this.dispatchAndObserve(
+        resolvedSessionId,
+        runId,
+        turnId,
+        input,
+        sessionParams,
+        mcpTools,
+        params.providerOptions,
+        params.webhookMetadata,
+      );
+    }
 
     this.log.info("send.complete", {
       stage: "send.complete",
       provider: OPENAI,
       mode: "webhook",
+      sessionId: resolvedSessionId,
+      runId,
+      turnId,
+      durationMs: Date.now() - enqueueStartedAt,
+    });
+
+    return { sessionId: resolvedSessionId, runId, turnId };
+  }
+
+  private async dispatchAndObserve(
+    sessionId: string,
+    runId: string,
+    turnId: string,
+    input: ResponseInput,
+    sessionParams: Record<string, unknown>,
+    mcpTools: Record<string, unknown>[] | undefined,
+    providerOptions: Record<string, unknown> | undefined,
+    webhookMetadata: Record<string, string> | undefined,
+  ): Promise<void> {
+    const observer = this.edgeObserver!;
+
+    const createParams = {
+      model: this.model,
+      input,
+      ...(this.instructions ? { instructions: this.instructions } : {}),
+      ...(mcpTools ? { tools: mcpTools } : {}),
+      ...sessionParams,
+      ...providerOptions,
+    };
+
+    const rawStream = await this.client.responses.create({
+      ...createParams,
+      stream: true,
+      background: true,
+    } as ResponseCreateParamsStreaming);
+
+    let responseId: string | undefined;
+    let lastSeqNo = -1;
+
+    for await (const event of rawStream) {
+      if (
+        "sequence_number" in event &&
+        typeof event.sequence_number === "number"
+      ) {
+        lastSeqNo = event.sequence_number;
+      }
+      if (event.type === "response.created") {
+        responseId = event.response.id;
+        break;
+      }
+    }
+
+    if (!responseId) {
+      throw new ThalamusError(
+        "Failed to obtain responseId from OpenAI stream",
+        { provider: OPENAI, isRetryable: false },
+      );
+    }
+
+    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true&starting_after=${lastSeqNo}`;
+
+    await observer.observe({
       sessionId,
       runId,
       turnId,
+      streamUrl,
+      headers: {
+        Authorization: `Bearer ${this.client.apiKey}`,
+      },
+      provider: "openai",
+      webhook: {
+        ...observer.webhook,
+        metadata: webhookMetadata,
+      },
     });
+  }
 
-    return { sessionId, runId, turnId };
+  async dispatchQueued(
+    sessionId: string,
+    runId: string,
+    turnId: string,
+    request: SerializedRequestParams,
+  ): Promise<void> {
+    const sessionParams = this.resolveSessionParams(sessionId);
+    const credentials = request.vaultIds?.length
+      ? await this.resolveCredentials(request.vaultIds)
+      : undefined;
+    const mcpTools =
+      this.mcpServers.length > 0
+        ? toMcpTools(this.mcpServers, credentials)
+        : undefined;
+    const input = this.buildInput(request as RequestParams);
+
+    await this.dispatchAndObserve(
+      sessionId,
+      runId,
+      turnId,
+      input,
+      sessionParams,
+      mcpTools,
+      request.providerOptions,
+      request.webhookMetadata,
+    );
   }
 
   /**
@@ -384,36 +531,6 @@ class OpenAIProvider {
     }
 
     return input;
-  }
-
-  private async *dispatchAndObserve(
-    params: RequestParams,
-    sessionParams: Record<string, unknown>,
-    mcpTools: Record<string, unknown>[] | undefined,
-    signal?: AbortSignal,
-  ): AsyncIterable<StreamPart> {
-    const input = this.buildInput(params);
-
-    const rawStream = await this.client.responses.create(
-      {
-        model: this.model,
-        input,
-        stream: true,
-        ...(this.instructions ? { instructions: this.instructions } : {}),
-        ...(mcpTools ? { tools: mcpTools } : {}),
-        ...sessionParams,
-        ...params.providerOptions,
-      } as ResponseCreateParamsStreaming,
-      { signal },
-    );
-
-    const acc = new ResponseAccumulator();
-    for await (const rawEvent of rawStream) {
-      yield* mapEvent(rawEvent, acc);
-    }
-
-    const response = acc.toResponse();
-    yield { type: "finish", response };
   }
 
   private async *resumeObservation(
@@ -710,126 +827,6 @@ class OpenAIProvider {
     }
   }
 
-  private async edgeObserve(
-    params: RequestParams,
-    runId: string,
-    turnId: string,
-    sessionParams: Record<string, unknown>,
-    mcpTools: Record<string, unknown>[] | undefined,
-  ): Promise<string> {
-    const observer = this.edgeObserver!;
-    const input = this.buildInput(params);
-
-    this.log.debug("dispatch.input", {
-      stage: "dispatch.input",
-      provider: OPENAI,
-      runId,
-      turnId,
-      messageCount: params.messages.length,
-      hasToolResults: Boolean(params.toolResults?.length),
-    });
-
-    this.log.debug("dispatch.start", {
-      stage: "dispatch.start",
-      provider: OPENAI,
-      mode: "webhook",
-      runId,
-      turnId,
-    });
-
-    const initStream = await this.client.responses.create({
-      model: this.model,
-      input,
-      stream: true,
-      background: true,
-      ...(this.instructions ? { instructions: this.instructions } : {}),
-      ...(mcpTools ? { tools: mcpTools } : {}),
-      ...sessionParams,
-      ...params.providerOptions,
-    } as ResponseCreateParamsStreaming);
-
-    let responseId: string | undefined;
-    let lastSeqNo = -1;
-    for await (const event of initStream as AsyncIterable<ResponseStreamEvent>) {
-      if (
-        "sequence_number" in event &&
-        typeof event.sequence_number === "number"
-      ) {
-        lastSeqNo = event.sequence_number;
-      }
-      if (event.type === "response.created") {
-        responseId = event.response.id;
-        break;
-      }
-    }
-
-    if (!responseId) {
-      throw new ThalamusError(
-        "edge observe: no responseId from initial stream",
-        { provider: OPENAI, isRetryable: false },
-      );
-    }
-
-    this.log.info("dispatch.sent", {
-      stage: "dispatch.sent",
-      provider: OPENAI,
-      mode: "webhook",
-      runId,
-      turnId,
-      sessionId: responseId,
-    });
-
-    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true${
-      lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""
-    }`;
-
-    this.log.info("edge.observe.start", {
-      stage: "edge.observe.start",
-      provider: OPENAI,
-      sessionId: responseId,
-      runId,
-      turnId,
-      streamUrl,
-    });
-
-    const observeStartedAt = Date.now();
-    try {
-      await observer.observe({
-        sessionId: responseId,
-        runId,
-        turnId,
-        streamUrl,
-        headers: {
-          Authorization: `Bearer ${this.client.apiKey}`,
-        },
-        provider: "openai",
-        webhook: {
-          ...observer.webhook,
-          metadata: params.webhookMetadata,
-        },
-      });
-    } catch (err) {
-      this.log.error("edge.observe.failed", {
-        stage: "edge.observe.failed",
-        provider: OPENAI,
-        sessionId: responseId,
-        runId,
-        error: logErrorMessage(err),
-      });
-      throw err;
-    }
-
-    this.log.info("edge.observe.ok", {
-      stage: "edge.observe.ok",
-      provider: OPENAI,
-      sessionId: responseId,
-      runId,
-      durationMs: Date.now() - observeStartedAt,
-    });
-
-    return responseId;
-  }
-
   private async *streamWithLock(
     params: RequestParams,
     runId: string,
@@ -1016,7 +1013,16 @@ class OpenAIProvider {
     return createProviderWebhookHandler(
       this.config.logger,
       this.config.onSessionEvents,
-      options,
+      {
+        ...options,
+        onQueueReady: (params) =>
+          this.dispatchQueued(
+            params.sessionId,
+            params.runId,
+            params.turnId,
+            params.request,
+          ),
+      },
     );
   }
 }

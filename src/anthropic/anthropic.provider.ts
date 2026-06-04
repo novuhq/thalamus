@@ -293,20 +293,22 @@ class AnthropicProvider {
     }
   }
 
-  /** Forwards stream parts, calling release on terminal finish */
+  /** Forwards stream parts, releasing the lock when the turn ends.
+   *  Uses try/finally so errors and aborts also release the lock. */
   private async *withTurnRelease(
     stream: AsyncIterable<StreamPart>,
     release: (() => void) | undefined,
   ): AsyncIterable<StreamPart> {
-    for await (const part of stream) {
-      if (
-        release &&
-        part.type === "finish" &&
-        part.response.finishReason !== "requires-action"
-      ) {
-        release();
+    let keepLock = false;
+    try {
+      for await (const part of stream) {
+        if (part.type === "finish") {
+          keepLock = part.response.finishReason === "requires-action";
+        }
+        yield part;
       }
-      yield part;
+    } finally {
+      if (!keepLock) release?.();
     }
   }
 

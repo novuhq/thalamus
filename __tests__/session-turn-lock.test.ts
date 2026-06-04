@@ -111,4 +111,36 @@ describe("SessionMutex", () => {
     const release2 = await mutex.acquire("sess_1");
     release2();
   });
+
+  it("double release is idempotent", async () => {
+    const mutex = new SessionMutex();
+    const release = await mutex.acquire("sess_1");
+    release();
+    release();
+    const release2 = await mutex.acquire("sess_1");
+    expect(release2).toBeTypeOf("function");
+    release2();
+  });
+
+  it("release(sessionId) force-releases the current holder", async () => {
+    const mutex = new SessionMutex();
+    const order: number[] = [];
+
+    await mutex.acquire("sess_1");
+    order.push(1);
+
+    const second = mutex.acquire("sess_1").then((r) => {
+      order.push(2);
+      r();
+    });
+
+    mutex.release("sess_1");
+    await second;
+    expect(order).toEqual([1, 2]);
+  });
+
+  it("release(sessionId) is no-op for unknown session", () => {
+    const mutex = new SessionMutex();
+    expect(() => mutex.release("unknown")).not.toThrow();
+  });
 });

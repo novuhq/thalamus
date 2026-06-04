@@ -314,6 +314,62 @@ describe("createWebhookHandler", () => {
     });
   });
 
+  describe("queue-ready interception", () => {
+    it("calls onQueueReady and does not reach onSessionEvents", async () => {
+      const onQueueReady = vi.fn();
+      const factory = vi.fn(() => ({}));
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: factory,
+        onQueueReady,
+      });
+
+      const body = makePayload({
+        type: "queue-ready",
+        request: {
+          messages: [{ role: "user", content: "hi" }],
+          sessionId: "sess_123",
+        },
+      } as unknown as StreamPart);
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      const result = await handler.handleRaw(body, sig);
+
+      expect(result.status).toBe(200);
+      expect(onQueueReady).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "sess_123",
+          runId: "run_test_1",
+          request: expect.objectContaining({ sessionId: "sess_123" }),
+        }),
+      );
+      expect(factory).not.toHaveBeenCalled();
+    });
+
+    it("returns 500 when onQueueReady throws", async () => {
+      const handler = createWebhookHandler({
+        secret: SECRET,
+        onSessionEvents: () => ({}),
+        onQueueReady: async () => {
+          throw new Error("dispatch failed");
+        },
+      });
+
+      const body = makePayload({
+        type: "queue-ready",
+        request: { messages: [] },
+      } as unknown as StreamPart);
+      const timestamp = Math.floor(Date.now() / 1000);
+      const sig = await sign(body, SECRET, timestamp);
+
+      const result = await handler.handleRaw(body, sig);
+
+      expect(result.status).toBe(500);
+      expect(JSON.parse(result.body!).error).toMatch(/Queue dispatch failed/);
+    });
+  });
+
   describe("payload validation", () => {
     it("rejects malformed JSON", async () => {
       const handler = createWebhookHandler({

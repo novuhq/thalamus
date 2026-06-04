@@ -27,6 +27,7 @@ import {
   type ThalamusLoggerInput,
 } from "../logger";
 import { createSendResult } from "../send-result";
+import { SessionMutex } from "../session-turn-lock.js";
 import {
   type McpServerConfig,
   OPENAI,
@@ -216,6 +217,8 @@ class OpenAIProvider {
   private readonly onSessionEvents?: SessionEventsFactory;
   private readonly config: OpenAIProviderConfig;
   private readonly log: ThalamusLogger;
+  private readonly turnLock = new SessionMutex();
+  private sessionBootstrap: Promise<string> | null = null;
 
   private get edgeObserver(): CloudflareEdgeObserver | null {
     return this.config.durable && isEdgeObserver(this.config.durable)
@@ -256,6 +259,7 @@ class OpenAIProvider {
     if (this.edgeObserver) {
       return this.sendViaWebhook(params, runId, turnId);
     }
+
     const callbacks = this.onSessionEvents
       ? this.onSessionEvents({
           sessionId: params.sessionId ?? "<<pending>>",
@@ -264,13 +268,14 @@ class OpenAIProvider {
           metadata: {},
         })
       : undefined;
-    return createSendResult(
-      this.runStream(params, runId),
-      runId,
-      turnId,
-      callbacks,
-      { autoStart: !!this.onSessionEvents },
-    );
+
+    const stream = params.toolResults?.length
+      ? this.streamToolResults(params, runId)
+      : this.streamWithLock(params, runId);
+
+    return createSendResult(stream, runId, turnId, callbacks, {
+      autoStart: !!this.onSessionEvents,
+    });
   }
 
   private async sendViaWebhook(
@@ -287,7 +292,8 @@ class OpenAIProvider {
       turnId,
     });
 
-    const sessionParams = await this.resolveSessionParams(params.sessionId);
+    const resolvedSessionId = await this.ensureSession(params);
+    const sessionParams = this.resolveSessionParams(resolvedSessionId);
     const credentials = params.vaultIds?.length
       ? await this.resolveCredentials(params.vaultIds)
       : undefined;
@@ -296,7 +302,7 @@ class OpenAIProvider {
         ? toMcpTools(this.mcpServers, credentials)
         : undefined;
     const sessionId = await this.edgeObserve(
-      params,
+      { ...params, sessionId: resolvedSessionId },
       runId,
       turnId,
       sessionParams,
@@ -315,22 +321,43 @@ class OpenAIProvider {
     return { sessionId, runId, turnId };
   }
 
-  private async resolveSessionParams(
-    sessionId?: string,
-  ): Promise<Record<string, unknown>> {
-    if (this.useConversations) {
-      if (sessionId) {
-        return { conversation: { id: sessionId } };
-      }
-      const conversation = await this.client.conversations.create();
-      this.log.debug("conversation.create", {
-        stage: "conversation.create",
-        provider: OPENAI,
-        sessionId: conversation.id,
-      });
-      return { conversation: { id: conversation.id } };
+  /**
+   * Ensures a sessionId is available, deduplicating concurrent first-message calls.
+   * For conversations mode, creates a conversation if needed via a shared promise
+   * so concurrent sends don't each create their own session.
+   */
+  private async ensureSession(params: RequestParams): Promise<string> {
+    if (params.sessionId) {
+      if (this.sessionBootstrap) await this.sessionBootstrap;
+      return params.sessionId;
     }
-    return sessionId ? { previous_response_id: sessionId } : {};
+
+    if (!this.sessionBootstrap) {
+      this.sessionBootstrap = this.createNewSession().finally(() => {
+        this.sessionBootstrap = null;
+      });
+    }
+    return this.sessionBootstrap;
+  }
+
+  private async createNewSession(): Promise<string> {
+    if (!this.useConversations) {
+      return crypto.randomUUID();
+    }
+    const conversation = await this.client.conversations.create();
+    this.log.debug("conversation.create", {
+      stage: "conversation.create",
+      provider: OPENAI,
+      sessionId: conversation.id,
+    });
+    return conversation.id;
+  }
+
+  private resolveSessionParams(sessionId: string): Record<string, unknown> {
+    if (this.useConversations) {
+      return { conversation: { id: sessionId } };
+    }
+    return { previous_response_id: sessionId };
   }
 
   private buildInput(params: RequestParams): ResponseInput {
@@ -803,6 +830,73 @@ class OpenAIProvider {
     return responseId;
   }
 
+  private async *streamWithLock(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    let release: (() => void) | undefined;
+    try {
+      let sessionId: string;
+      try {
+        sessionId = await this.ensureSession(params);
+      } catch (err) {
+        const mapped =
+          err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
+        yield { type: "error", error: mapped };
+        return;
+      }
+
+      if (params.sessionId) {
+        yield { type: "status-change", status: "queued" };
+      }
+
+      release = await this.turnLock.acquire(sessionId, params.abortSignal);
+
+      yield* this.withTurnRelease(
+        this.runStream({ ...params, sessionId }, runId),
+        release,
+      );
+    } catch (err) {
+      release?.();
+      throw err;
+    }
+  }
+
+  /** toolResults bypass the queue — just stream and release the existing holder. */
+  private async *streamToolResults(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    const sessionId = params.sessionId;
+    const release = sessionId
+      ? () => this.turnLock.release(sessionId)
+      : undefined;
+
+    try {
+      yield* this.withTurnRelease(this.runStream(params, runId), release);
+    } catch (err) {
+      release?.();
+      throw err;
+    }
+  }
+
+  /** Forwards stream parts, calling release on terminal finish. */
+  private async *withTurnRelease(
+    stream: AsyncIterable<StreamPart>,
+    release: (() => void) | undefined,
+  ): AsyncIterable<StreamPart> {
+    for await (const part of stream) {
+      if (
+        release &&
+        part.type === "finish" &&
+        part.response.finishReason !== "requires-action"
+      ) {
+        release();
+      }
+      yield part;
+    }
+  }
+
   private async *runStream(
     params: RequestParams,
     runId: string,
@@ -816,7 +910,9 @@ class OpenAIProvider {
     });
 
     try {
-      const sessionParams = await this.resolveSessionParams(params.sessionId);
+      const sessionParams = params.sessionId
+        ? this.resolveSessionParams(params.sessionId)
+        : {};
 
       const credentials = params.vaultIds?.length
         ? await this.resolveCredentials(params.vaultIds)

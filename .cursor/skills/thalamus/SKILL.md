@@ -225,6 +225,12 @@ interface RequestParams {
 }
 ```
 
+### Sequential turns
+
+Messages to the same session are serialized automatically. If you `send()` while a previous turn is still running, it queues and dispatches when the session is ready. `toolResults` bypass the queue (they resolve the current `requires-action` turn). Different sessions don't block each other.
+
+A `status-change: queued` event fires when a message is waiting. In webhook mode, the edge observer manages the queue and sends `queue-ready` webhooks when slots open.
+
 ### providerOptions Pass-Through
 
 Forward arbitrary options to the underlying SDK call:
@@ -609,6 +615,39 @@ export default { fetch: (req) => handler.handle(req) };
 Note: the webhook `onSessionEvents` factory receives a `SessionEventContext` object with `sessionId`, `turnId`, `runId`, and `metadata`. The `metadata` contains the `webhookMetadata` you passed in `send()`. Session and run IDs are also exposed in the request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
 
 Use standalone `createWebhookHandler` when one webhook endpoint serves many providers (e.g. Novu). Use `provider.createWebhookHandler` for single-provider apps.
+
+### Sequential turns in webhook mode
+
+The edge observer queues messages per session. When you `send()` while a turn is active, the observer stores the request in SQLite and returns `{ status: "queued" }`. When the active turn completes, it sends a `queue-ready` webhook. The `WebhookHandler` intercepts it and calls `provider.dispatchQueued()` to dispatch via SDK.
+
+This is automatic with `provider.createWebhookHandler()`. For multi-provider setups using standalone `createWebhookHandler()`, pass `onQueueReady`:
+
+```typescript
+const handler = createWebhookHandler({
+  secret,
+  onSessionEvents: (ctx) => handlers(ctx),
+  onQueueReady: async ({ sessionId, runId, turnId, request }) => {
+    const provider = await resolveProvider(request.webhookMetadata);
+    await provider.dispatchQueued(sessionId, runId, turnId, request);
+  },
+});
+```
+
+Key types for the edge observer interface:
+
+```typescript
+interface EdgeObserver {
+  enqueue(params: EdgeEnqueueParams): Promise<{ status: "active" | "queued" }>;
+  observe(params: EdgeObserveParams): Promise<void>;
+  stop(sessionId: string): Promise<void>;
+}
+
+interface WebhookProvider {
+  // ...existing methods...
+  dispatchQueued(sessionId: string, runId: string, turnId: string,
+                 request: SerializedRequestParams): Promise<void>;
+}
+```
 
 ### Custom durability backend
 

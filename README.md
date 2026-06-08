@@ -151,6 +151,33 @@ if (response.finishReason === 'requires-action') { /* handle approval */ }
 
 Without `onSessionEvents`, consumption is **lazy** — nothing happens until you access `.sessionId`, `.response`, or `await` the result.
 
+#### Sequential turns
+
+Messages to the same session are processed one at a time, in order. If you send a message while the agent is still working on the previous one, it's held and dispatched when the session is ready.
+
+```typescript
+const s1 = provider.send({ sessionId, messages: [{ role: MessageRole.USER, content: 'First' }] });
+const s2 = provider.send({ sessionId, messages: [{ role: MessageRole.USER, content: 'Second' }] });
+const s3 = provider.send({ sessionId, messages: [{ role: MessageRole.USER, content: 'Third' }] });
+
+// All three resolve — s2 waits for s1, s3 waits for s2
+const [r1, r2, r3] = await Promise.all([s1, s2, s3]);
+```
+
+Tool results (`toolResults`) always resolve the current turn immediately — they never wait in line. Different sessions don't block each other.
+
+Consumers can react to the `status-change: queued` event to show a waiting indicator:
+
+```typescript
+onSessionEvents: ({ sessionId }) => ({
+  onStatusChange: ({ status }) => {
+    if (status === 'queued') showWaitingIndicator(sessionId);
+  },
+}),
+```
+
+This works in both streaming mode and [webhook mode](#durable-sessions--webhook-delivery).
+
 ---
 
 Every `send()` gets a fresh `runId` for correlating callbacks, logs, and webhook events back to a specific turn. The same `runId` is passed to `onSessionEvents(sessionId, runId)` and echoed in webhook payloads.
@@ -489,6 +516,21 @@ Events never overlap. Your callbacks always see the previous callback's side eff
 **Type safety:** With `durable` + webhook configured, TypeScript narrows `send()` to `Promise<WebhookSendResult>`.
 
 **Multi-node safe:** No in-memory state, works behind any load balancer. The Observer guarantees ordering regardless of which node receives the request.
+
+**Sequential turns in webhook mode:** The edge observer queues messages per session automatically. When you send a message while another turn is active, the observer holds it and sends a `status-change: queued` webhook. When the active turn completes, the observer sends a `queue-ready` webhook — thalamus's webhook handler intercepts it and dispatches the queued message via the provider SDK. This is transparent when using `provider.createWebhookHandler()`.
+
+For multi-provider setups (one webhook handler serving many providers), pass `onQueueReady` to `createWebhookHandler()` to handle `queue-ready` events manually:
+
+```typescript
+const handler = createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+  onSessionEvents: (ctx) => myHandlers(ctx),
+  onQueueReady: async ({ sessionId, runId, turnId, request }) => {
+    const provider = await resolveProvider(request.webhookMetadata);
+    await provider.dispatchQueued(sessionId, runId, turnId, request);
+  },
+});
+```
 
 For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 

@@ -3,8 +3,10 @@ export {
   cloudflare,
 } from "./durable/cloudflare";
 export type {
+  EdgeEnqueueParams,
   EdgeObserveParams,
   EdgeObserver,
+  SerializedRequestParams,
 } from "./durable/types";
 export * from "./errors";
 export type {

@@ -1,4 +1,8 @@
-import type { EdgeObserveParams, EdgeObserver } from "./types";
+import type {
+  EdgeEnqueueParams,
+  EdgeObserveParams,
+  EdgeObserver,
+} from "./types";
 
 export interface WebhookConfig {
   url: string;
@@ -26,6 +30,18 @@ export function cloudflare(
 
   return {
     webhook: options.webhook,
+
+    async enqueue(params: EdgeEnqueueParams) {
+      const res = await fetch(`${base}/enqueue`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(params),
+      });
+      if (!res.ok) {
+        throw new Error(`cloudflare enqueue failed: ${res.status}`);
+      }
+      return (await res.json()) as { status: "active" | "queued" };
+    },
 
     async observe(params: EdgeObserveParams) {
       const res = await fetch(`${base}/observe`, {

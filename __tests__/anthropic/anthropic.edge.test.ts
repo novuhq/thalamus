@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { cloudflare } from "../../src/durable/cloudflare.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig, mockSse } from "./_helpers.js";
+import { awsConfig } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSend = vi.fn();
@@ -51,6 +51,13 @@ mockAnthropicAws.mockImplementation(function (
   };
 });
 
+function enqueueResponse() {
+  return new Response(JSON.stringify({ status: "active" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
 });
@@ -63,7 +70,11 @@ describe("AWS EdgeObserver auth headers", () => {
   it("passes x-api-key and anthropic-workspace-id to the edge observer", async () => {
     mockCreate.mockResolvedValue({ id: "sess_edge" });
     mockSend.mockResolvedValue({});
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) return enqueueResponse();
+      return new Response(null, { status: 204 });
+    });
 
     const provider = createAnthropicProvider({
       ...awsConfig,
@@ -78,15 +89,12 @@ describe("AWS EdgeObserver auth headers", () => {
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://worker.example.com/observe",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"anthropic-workspace-id":"wrkspc_edge"'),
-      }),
+    const observeCall = mockFetch.mock.calls.find(
+      (c) => typeof c[0] === "string" && c[0].includes("/observe"),
     );
-    expect(mockFetch.mock.calls[0][1]?.body).toContain(
-      '"x-api-key":"aws-api-key-abc123"',
-    );
+    expect(observeCall).toBeDefined();
+    const observeBody = observeCall![1]?.body as string;
+    expect(observeBody).toContain('"anthropic-workspace-id":"wrkspc_edge"');
+    expect(observeBody).toContain('"x-api-key":"aws-api-key-abc123"');
   });
 });

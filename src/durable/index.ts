@@ -8,8 +8,10 @@ export { type RedisLike, redis } from "./redis";
 export type {
   DurabilityBackend,
   DurableBackend,
+  EdgeEnqueueParams,
   EdgeObserveParams,
   EdgeObserver,
+  SerializedRequestParams,
   SessionCheckpoint,
 } from "./types";
 export { isEdgeObserver } from "./types";

@@ -281,6 +281,13 @@ export interface WebhookProvider extends BaseProvider {
   createWebhookHandler(
     options: ProviderWebhookHandlerOptions,
   ): import("./webhook/index.js").WebhookHandler;
+  /** Dispatch a previously queued message via SDK. Called by the webhook handler when a `queue-ready` event arrives. */
+  dispatchQueued(
+    sessionId: string,
+    runId: string,
+    turnId: string,
+    request: import("./durable/types").SerializedRequestParams,
+  ): Promise<void>;
 }
 
 export type Provider = StreamingProvider | WebhookProvider;

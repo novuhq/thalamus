@@ -10,8 +10,11 @@ import type { CloudflareEdgeObserver } from "../durable/cloudflare";
 import {
   type DurabilityBackend,
   type DurableBackend,
+  type EdgeEnqueueParams,
+  type EdgeObserveParams,
   type EdgeObserver,
   isEdgeObserver,
+  type SerializedRequestParams,
   type SessionCheckpoint,
 } from "../durable/types";
 import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
@@ -22,12 +25,11 @@ import {
   type ThalamusLoggerInput,
 } from "../logger";
 import { createSendResult } from "../send-result";
+import { SessionMutex } from "../session-turn-lock.js";
 import {
   ANTHROPIC,
-  type Provider,
   type ProviderWebhookHandlerOptions,
   type RequestParams,
-  type Response,
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
@@ -161,6 +163,9 @@ class AnthropicProvider {
   private readonly agentId: string;
   private readonly environmentId: string;
   private readonly log: ThalamusLogger;
+  private readonly turnLock = new SessionMutex();
+  /** While set, a new session is being created and its turn lock is being acquired. */
+  private sessionBootstrap: Promise<string> | null = null;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
@@ -186,9 +191,11 @@ class AnthropicProvider {
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
     const runId = crypto.randomUUID();
     const turnId = params.turnId ?? crypto.randomUUID();
+
     if (this.edgeObserver) {
       return this.sendViaWebhook(params, runId, turnId);
     }
+
     const callbacks = this.config.onSessionEvents
       ? this.config.onSessionEvents({
           sessionId: params.sessionId ?? "<<pending>>",
@@ -197,13 +204,113 @@ class AnthropicProvider {
           metadata: {},
         })
       : undefined;
-    return createSendResult(
-      this.runStream(params, runId),
-      runId,
-      turnId,
-      callbacks,
-      { autoStart: !!this.config.onSessionEvents },
-    );
+
+    const stream = params.toolResults?.length
+      ? this.streamToolResults(params, runId)
+      : this.streamWithLock(params, runId);
+
+    return createSendResult(stream, runId, turnId, callbacks, {
+      autoStart: !!this.config.onSessionEvents,
+    });
+  }
+
+  /**
+   * Ensures a sessionId is available, deduplicating concurrent first-message calls.
+   * If params already has a sessionId, returns it (after any in-flight bootstrap settles).
+   * Otherwise creates a new session via a shared promise so concurrent sends
+   * don't each create their own session.
+   */
+  private async ensureSession(params: RequestParams): Promise<string> {
+    if (params.sessionId) {
+      if (this.sessionBootstrap) await this.sessionBootstrap;
+      return params.sessionId;
+    }
+
+    if (!this.sessionBootstrap) {
+      this.sessionBootstrap = this.createNewSession(params).finally(() => {
+        this.sessionBootstrap = null;
+      });
+    }
+    return this.sessionBootstrap;
+  }
+
+  private async createNewSession(params: RequestParams): Promise<string> {
+    await this.getClient();
+    return this.createSession({
+      vaultIds: params.vaultIds,
+      providerOptions: params.providerOptions,
+    });
+  }
+
+  /**
+   * Main streaming path for new messages (with or without an existing sessionId).
+   * Acquires the turn lock, runs the stream, and releases on finish or error.
+   */
+  private async *streamWithLock(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    let release: (() => void) | undefined;
+    try {
+      let sessionId: string;
+      try {
+        sessionId = await this.ensureSession(params);
+      } catch (err) {
+        yield { type: "error", error: mapStreamError(err, params.sessionId) };
+        return;
+      }
+
+      if (params.sessionId) {
+        yield { type: "status-change", status: "queued" };
+      }
+
+      release = await this.turnLock.acquire(sessionId, params.abortSignal);
+
+      yield* this.withTurnRelease(
+        this.runStream({ ...params, sessionId }, runId),
+        release,
+      );
+    } catch (err) {
+      release?.();
+      throw err;
+    }
+  }
+
+  /** toolResults bypass the queue — just stream and release the existing holder. */
+  private async *streamToolResults(
+    params: RequestParams,
+    runId: string,
+  ): AsyncIterable<StreamPart> {
+    const sessionId = params.sessionId;
+    const release = sessionId
+      ? () => this.turnLock.release(sessionId)
+      : undefined;
+
+    try {
+      yield* this.withTurnRelease(this.runStream(params, runId), release);
+    } catch (err) {
+      release?.();
+      throw err;
+    }
+  }
+
+  /** Forwards stream parts, releasing the lock when the turn ends.
+   *  Uses try/finally so errors and aborts also release the lock. */
+  private async *withTurnRelease(
+    stream: AsyncIterable<StreamPart>,
+    release: (() => void) | undefined,
+  ): AsyncIterable<StreamPart> {
+    let keepLock = false;
+    try {
+      for await (const part of stream) {
+        if (part.type === "finish") {
+          keepLock = part.response.finishReason === "requires-action";
+        }
+        yield part;
+      }
+    } finally {
+      if (!keepLock) release?.();
+    }
   }
 
   private async sendViaWebhook(
@@ -212,6 +319,7 @@ class AnthropicProvider {
     turnId: string,
   ): Promise<WebhookSendResult> {
     const client = await this.getClient();
+    const observer = this.edgeObserver!;
 
     this.log.info("send.start", {
       stage: "send.start",
@@ -230,7 +338,60 @@ class AnthropicProvider {
         providerOptions: params.providerOptions,
       }));
 
-    await this.edgeObserve(client, sessionId, runId, turnId, params);
+    const request: SerializedRequestParams = {
+      messages: params.messages,
+      sessionId: params.sessionId,
+      toolResults: params.toolResults,
+      vaultIds: params.vaultIds,
+      providerOptions: params.providerOptions,
+      webhookMetadata: params.webhookMetadata,
+    };
+
+    const enqueueParams: EdgeEnqueueParams = {
+      sessionId,
+      runId,
+      turnId,
+      provider: ANTHROPIC,
+      request,
+      webhook: {
+        ...observer.webhook,
+        metadata: params.webhookMetadata,
+      },
+    };
+
+    this.log.info("edge.enqueue", {
+      stage: "edge.enqueue",
+      provider: ANTHROPIC,
+      sessionId,
+      runId,
+      turnId,
+    });
+
+    const enqueueStartedAt = Date.now();
+    let status: "active" | "queued";
+    try {
+      ({ status } = await observer.enqueue(enqueueParams));
+    } catch (err) {
+      this.log.error("edge.enqueue.failed", {
+        stage: "edge.enqueue.failed",
+        provider: ANTHROPIC,
+        sessionId,
+        runId,
+        error: logErrorMessage(err),
+      });
+      throw err;
+    }
+
+    if (status === "active") {
+      await this.dispatchAndObserve(
+        client,
+        observer,
+        sessionId,
+        runId,
+        turnId,
+        params,
+      );
+    }
 
     this.log.info("send.complete", {
       stage: "send.complete",
@@ -239,9 +400,66 @@ class AnthropicProvider {
       sessionId,
       runId,
       turnId,
+      status,
+      durationMs: Date.now() - enqueueStartedAt,
     });
 
     return { sessionId, runId, turnId };
+  }
+
+  private async dispatchAndObserve(
+    client: Anthropic,
+    observer: CloudflareEdgeObserver,
+    sessionId: string,
+    runId: string,
+    turnId: string,
+    params: RequestParams,
+  ): Promise<void> {
+    await this.dispatch(client, sessionId, params);
+
+    const baseUrl = client.baseURL.replace(/\/+$/, "");
+    const observeParams: EdgeObserveParams = {
+      sessionId,
+      runId,
+      turnId,
+      streamUrl: `${baseUrl}/v1/sessions/${sessionId}/events/stream`,
+      headers: this.buildApiHeaders(client),
+      provider: ANTHROPIC,
+      webhook: {
+        ...observer.webhook,
+        metadata: params.webhookMetadata,
+      },
+    };
+
+    await observer.observe(observeParams);
+  }
+
+  async dispatchQueued(
+    sessionId: string,
+    runId: string,
+    turnId: string,
+    request: SerializedRequestParams,
+  ): Promise<void> {
+    const client = await this.getClient();
+    const observer = this.edgeObserver!;
+
+    const params: RequestParams = {
+      messages: request.messages,
+      sessionId: request.sessionId,
+      toolResults: request.toolResults,
+      vaultIds: request.vaultIds,
+      providerOptions: request.providerOptions,
+      webhookMetadata: request.webhookMetadata,
+    };
+
+    await this.dispatchAndObserve(
+      client,
+      observer,
+      sessionId,
+      runId,
+      turnId,
+      params,
+    );
   }
 
   private async dispatch(
@@ -500,76 +718,15 @@ class AnthropicProvider {
       : null;
   }
 
-  private async edgeObserve(
-    client: Anthropic,
-    sessionId: string,
-    runId: string,
-    turnId: string,
-    params: RequestParams,
-  ): Promise<void> {
-    const observer = this.edgeObserver!;
-    const streamUrl = `${client.baseURL}/v1/sessions/${sessionId}/events/stream`;
-
-    this.log.info("edge.observe.start", {
-      stage: "edge.observe.start",
-      provider: ANTHROPIC,
-      sessionId,
-      runId,
-      turnId,
-      streamUrl,
-    });
-
-    const observeStartedAt = Date.now();
-    try {
-      await observer.observe({
-        sessionId,
-        runId,
-        turnId,
-        streamUrl,
-        headers: {
-          "x-api-key": client.apiKey ?? "",
-          "anthropic-version": "2023-06-01",
-          "anthropic-beta": "managed-agents-2026-04-01",
-          ...("awsRegion" in this.config && this.config.awsWorkspaceId
-            ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
-            : {}),
-        },
-        provider: "anthropic",
-        webhook: {
-          ...observer.webhook,
-          metadata: params.webhookMetadata,
-        },
-      });
-    } catch (err) {
-      this.log.error("edge.observe.failed", {
-        stage: "edge.observe.failed",
-        provider: ANTHROPIC,
-        sessionId,
-        runId,
-        error: logErrorMessage(err),
-      });
-      throw err;
-    }
-
-    this.log.info("edge.observe.ok", {
-      stage: "edge.observe.ok",
-      provider: ANTHROPIC,
-      sessionId,
-      runId,
-      durationMs: Date.now() - observeStartedAt,
-    });
-
-    await this.dispatch(client, sessionId, params);
-
-    const events = buildSendEvents(params);
-    this.log.info("edge.dispatch.sent", {
-      stage: "edge.dispatch.sent",
-      provider: ANTHROPIC,
-      sessionId,
-      runId,
-      turnId,
-      eventTypes: events.map((event) => event.type),
-    });
+  private buildApiHeaders(client: Anthropic): Record<string, string> {
+    return {
+      "x-api-key": client.apiKey ?? "",
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "managed-agents-2026-04-01",
+      ...("awsRegion" in this.config && this.config.awsWorkspaceId
+        ? { "anthropic-workspace-id": this.config.awsWorkspaceId }
+        : {}),
+    };
   }
 
   private async *runStream(
@@ -640,7 +797,16 @@ class AnthropicProvider {
     return createProviderWebhookHandler(
       this.config.logger,
       this.config.onSessionEvents,
-      options,
+      {
+        ...options,
+        onQueueReady: (params) =>
+          this.dispatchQueued(
+            params.sessionId,
+            params.runId,
+            params.turnId,
+            params.request,
+          ),
+      },
     );
   }
 }

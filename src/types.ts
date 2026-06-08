@@ -238,6 +238,8 @@ export interface WebhookSendResult {
   runId: string;
   /** Stable turn identifier — carry this to subsequent send() calls for grouping. */
   turnId: string;
+  /** Whether this turn started immediately or was queued behind an in-flight session turn. */
+  status: "active" | "queued";
 }
 
 export interface SessionEventContext {

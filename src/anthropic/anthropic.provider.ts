@@ -404,7 +404,7 @@ class AnthropicProvider {
       durationMs: Date.now() - enqueueStartedAt,
     });
 
-    return { sessionId, runId, turnId };
+    return { sessionId, runId, turnId, status };
   }
 
   private async dispatchAndObserve(

@@ -369,7 +369,12 @@ class OpenAIProvider {
       durationMs: Date.now() - enqueueStartedAt,
     });
 
-    return { sessionId: resolvedSessionId, runId, turnId };
+    return {
+      sessionId: resolvedSessionId,
+      runId,
+      turnId,
+      status: enqueueResult.status,
+    };
   }
 
   private async dispatchAndObserve(

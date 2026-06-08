@@ -206,6 +206,12 @@ export function createWebhookHandler(
             body: JSON.stringify({ error: "Queue dispatch failed" }),
           };
         }
+      } else {
+        log.warn("webhook.queue-ready.no-handler", {
+          stage: "webhook.queue-ready.no-handler",
+          sessionId,
+          runId,
+        });
       }
       return { status: 200, body: null };
     }

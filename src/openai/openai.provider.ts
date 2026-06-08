@@ -422,7 +422,7 @@ class OpenAIProvider {
       );
     }
 
-    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true&starting_after=${lastSeqNo}`;
+    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true${lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""}`;
 
     await observer.observe({
       sessionId,

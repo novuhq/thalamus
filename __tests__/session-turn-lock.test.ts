@@ -97,11 +97,15 @@ describe("SessionMutex", () => {
     const mutex = new SessionMutex({ maxQueueSize: 2 });
     const release1 = await mutex.acquire("sess_1");
 
-    const _p2 = mutex.acquire("sess_1");
-    const _p3 = mutex.acquire("sess_1");
+    const p2 = mutex.acquire("sess_1");
+    const p3 = mutex.acquire("sess_1");
 
     await expect(mutex.acquire("sess_1")).rejects.toThrow("queue is full");
     release1();
+    const release2 = await p2;
+    release2();
+    const release3 = await p3;
+    release3();
   });
 
   it("release cleans up when no waiters", async () => {

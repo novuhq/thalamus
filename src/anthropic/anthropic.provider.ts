@@ -17,12 +17,7 @@ import {
   type SerializedRequestParams,
   type SessionCheckpoint,
 } from "../durable/types";
-import {
-  AbortedError,
-  SessionBusyError,
-  SessionExpiredError,
-  ThalamusError,
-} from "../errors";
+import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
 import {
   logErrorMessage,
   resolveLogger,
@@ -39,7 +34,6 @@ import {
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
-  type SessionUpdateOptions,
   type StreamingProvider,
   type StreamPart,
   type ToolResult,
@@ -346,6 +340,10 @@ class AnthropicProvider {
         providerOptions: params.providerOptions,
       }));
 
+    if (params.agent) {
+      await this.applyAgentOverrides(client, sessionId, params.agent);
+    }
+
     const request: SerializedRequestParams = {
       messages: params.messages,
       sessionId: params.sessionId,
@@ -353,6 +351,7 @@ class AnthropicProvider {
       vaultIds: params.vaultIds,
       providerOptions: params.providerOptions,
       webhookMetadata: params.webhookMetadata,
+      agent: params.agent,
     };
 
     const enqueueParams: EdgeEnqueueParams = {
@@ -451,6 +450,10 @@ class AnthropicProvider {
     const client = await this.getClient();
     const observer = this.edgeObserver!;
 
+    if (request.agent) {
+      await this.applyAgentOverrides(client, sessionId, request.agent);
+    }
+
     const params: RequestParams = {
       messages: request.messages,
       sessionId: request.sessionId,
@@ -458,6 +461,7 @@ class AnthropicProvider {
       vaultIds: request.vaultIds,
       providerOptions: request.providerOptions,
       webhookMetadata: request.webhookMetadata,
+      agent: request.agent,
     };
 
     await this.dispatchAndObserve(
@@ -752,6 +756,10 @@ class AnthropicProvider {
 
       yield { type: "stream-start", sessionId };
 
+      if (params.agent) {
+        await this.applyAgentOverrides(client, sessionId, params.agent);
+      }
+
       const signal = params.abortSignal ?? undefined;
       yield* this.resilientObserve(client, sessionId, runId, signal, () =>
         this.dispatch(client, sessionId, params, signal),
@@ -791,33 +799,7 @@ class AnthropicProvider {
       vaultIdCount: options?.vaultIds?.length ?? 0,
     });
 
-    if (options?.agent) {
-      await this.applyAgentOverrides(client, session.id, options.agent);
-    }
-
     return session.id;
-  }
-
-  async updateSession(
-    sessionId: string,
-    options: SessionUpdateOptions,
-  ): Promise<void> {
-    const client = await this.getClient();
-    try {
-      await this.applyAgentOverrides(client, sessionId, options.agent);
-    } catch (err) {
-      if (
-        err instanceof APIError &&
-        (err.status === 409 || err.status === 400) &&
-        String(err.message).toLowerCase().includes("idle")
-      ) {
-        throw new SessionBusyError(sessionId, {
-          provider: ANTHROPIC,
-          cause: err,
-        });
-      }
-      throw err;
-    }
   }
 
   async endSession(_sessionId: string): Promise<void> {

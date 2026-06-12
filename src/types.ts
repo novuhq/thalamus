@@ -68,6 +68,23 @@ export interface RequestParams {
 export interface SessionOptions {
   vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
+  agent?: AgentSessionConfig;
+}
+
+export interface AgentToolConfig {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface AgentSessionConfig {
+  mcpServers?: McpServerConfig[];
+  tools?: AgentToolConfig[];
+  providerTools?: Record<string, unknown>[];
+}
+
+export interface SessionUpdateOptions {
+  agent: AgentSessionConfig;
 }
 
 export interface Usage {
@@ -263,6 +280,10 @@ interface BaseProvider {
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
+  updateSession(
+    sessionId: string,
+    options: SessionUpdateOptions,
+  ): Promise<void>;
   endSession(sessionId: string): Promise<void>;
 }
 

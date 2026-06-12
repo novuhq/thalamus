@@ -131,3 +131,19 @@ export class McpServerError extends ThalamusError {
     this.statusCode = options.statusCode;
   }
 }
+
+export class SessionBusyError extends ThalamusError {
+  readonly sessionId: string;
+
+  constructor(
+    sessionId: string,
+    options: { provider: string; cause?: unknown },
+  ) {
+    super(
+      `Session ${sessionId} is not idle — retry after the current turn completes`,
+      { ...options, isRetryable: true },
+    );
+    this.name = "SessionBusyError";
+    this.sessionId = sessionId;
+  }
+}

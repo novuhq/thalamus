@@ -17,7 +17,12 @@ import {
   type SerializedRequestParams,
   type SessionCheckpoint,
 } from "../durable/types";
-import { AbortedError, SessionExpiredError, ThalamusError } from "../errors";
+import {
+  AbortedError,
+  SessionBusyError,
+  SessionExpiredError,
+  ThalamusError,
+} from "../errors";
 import {
   logErrorMessage,
   resolveLogger,
@@ -27,12 +32,14 @@ import {
 import { createSendResult } from "../send-result";
 import { SessionMutex } from "../session-turn-lock.js";
 import {
+  type AgentSessionConfig,
   ANTHROPIC,
   type ProviderWebhookHandlerOptions,
   type RequestParams,
   type SendResult,
   type SessionEventsFactory,
   type SessionOptions,
+  type SessionUpdateOptions,
   type StreamingProvider,
   type StreamPart,
   type ToolResult,
@@ -45,6 +52,7 @@ import { createProviderWebhookHandler } from "../webhook/index";
 import { buildSendEvents } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
+import { buildSessionAgentUpdate } from "./session-overrides";
 import { toAnthropicToolResultContent } from "./tool-result";
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
@@ -754,6 +762,18 @@ class AnthropicProvider {
     }
   }
 
+  private async applyAgentOverrides(
+    client: Anthropic,
+    sessionId: string,
+    agentConfig: AgentSessionConfig,
+  ): Promise<void> {
+    const session = await client.beta.sessions.retrieve(sessionId);
+    const agentUpdate = buildSessionAgentUpdate(agentConfig, session);
+    if (!agentUpdate) return;
+
+    await client.beta.sessions.update(sessionId, { agent: agentUpdate });
+  }
+
   async createSession(options?: SessionOptions): Promise<string> {
     const client = await this.getClient();
     const params: SessionCreateParams = {
@@ -771,7 +791,33 @@ class AnthropicProvider {
       vaultIdCount: options?.vaultIds?.length ?? 0,
     });
 
+    if (options?.agent) {
+      await this.applyAgentOverrides(client, session.id, options.agent);
+    }
+
     return session.id;
+  }
+
+  async updateSession(
+    sessionId: string,
+    options: SessionUpdateOptions,
+  ): Promise<void> {
+    const client = await this.getClient();
+    try {
+      await this.applyAgentOverrides(client, sessionId, options.agent);
+    } catch (err) {
+      if (
+        err instanceof APIError &&
+        (err.status === 409 || err.status === 400) &&
+        String(err.message).toLowerCase().includes("idle")
+      ) {
+        throw new SessionBusyError(sessionId, {
+          provider: ANTHROPIC,
+          cause: err,
+        });
+      }
+      throw err;
+    }
   }
 
   async endSession(_sessionId: string): Promise<void> {

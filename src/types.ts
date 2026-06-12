@@ -63,12 +63,13 @@ export interface RequestParams {
   webhookMetadata?: Record<string, string>;
   /** Carry forward from a previous SendResult to group approval resumes into one logical turn. */
   turnId?: string;
+  /** Per-turn agent overrides — MCP servers, custom tools, or provider-specific tools. */
+  agent?: AgentSessionConfig;
 }
 
 export interface SessionOptions {
   vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
-  agent?: AgentSessionConfig;
 }
 
 export interface AgentToolConfig {
@@ -81,10 +82,6 @@ export interface AgentSessionConfig {
   mcpServers?: McpServerConfig[];
   tools?: AgentToolConfig[];
   providerTools?: Record<string, unknown>[];
-}
-
-export interface SessionUpdateOptions {
-  agent: AgentSessionConfig;
 }
 
 export interface Usage {
@@ -280,10 +277,6 @@ interface BaseProvider {
   createVault(options: VaultOptions): Promise<Vault>;
   getVault(vaultId: string): Promise<Vault>;
   createSession(options?: SessionOptions): Promise<string>;
-  updateSession(
-    sessionId: string,
-    options: SessionUpdateOptions,
-  ): Promise<void>;
   endSession(sessionId: string): Promise<void>;
 }
 

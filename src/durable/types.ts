@@ -29,6 +29,7 @@ export interface SerializedRequestParams {
   vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
   webhookMetadata?: Record<string, string>;
+  /** Per-turn overrides; inline MCP `authorization` is stripped before persistence. */
   agent?: AgentSessionConfig;
 }
 

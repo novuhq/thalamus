@@ -7,6 +7,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import type { CloudflareEdgeObserver } from "../durable/cloudflare";
+import { sanitizeAgentForSerialization } from "../durable/serialize-agent";
 import {
   type DurabilityBackend,
   type DurableBackend,
@@ -351,7 +352,7 @@ class AnthropicProvider {
       vaultIds: params.vaultIds,
       providerOptions: params.providerOptions,
       webhookMetadata: params.webhookMetadata,
-      agent: params.agent,
+      agent: sanitizeAgentForSerialization(params.agent),
     };
 
     const enqueueParams: EdgeEnqueueParams = {

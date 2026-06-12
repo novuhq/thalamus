@@ -5,6 +5,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import type { CloudflareEdgeObserver } from "../durable/cloudflare";
+import { sanitizeAgentForSerialization } from "../durable/serialize-agent";
 import {
   type DurabilityBackend,
   type DurableBackend,
@@ -302,7 +303,7 @@ class OpenAIProvider {
       vaultIds: params.vaultIds,
       providerOptions: params.providerOptions,
       webhookMetadata: params.webhookMetadata,
-      agent: params.agent,
+      agent: sanitizeAgentForSerialization(params.agent),
     };
 
     this.log.info("edge.enqueue", {

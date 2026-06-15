@@ -7,6 +7,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import type { CloudflareEdgeObserver } from "../durable/cloudflare";
+import { sanitizeAgentForSerialization } from "../durable/serialize-agent";
 import {
   type DurabilityBackend,
   type DurableBackend,
@@ -27,6 +28,7 @@ import {
 import { createSendResult } from "../send-result";
 import { SessionMutex } from "../session-turn-lock.js";
 import {
+  type AgentSessionConfig,
   ANTHROPIC,
   type ProviderWebhookHandlerOptions,
   type RequestParams,
@@ -45,6 +47,7 @@ import { createProviderWebhookHandler } from "../webhook/index";
 import { buildSendEvents } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
+import { buildSessionAgentUpdate } from "./session-overrides";
 import { toAnthropicToolResultContent } from "./tool-result";
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
@@ -338,6 +341,10 @@ class AnthropicProvider {
         providerOptions: params.providerOptions,
       }));
 
+    if (params.agent) {
+      await this.applyAgentOverrides(client, sessionId, params.agent);
+    }
+
     const request: SerializedRequestParams = {
       messages: params.messages,
       sessionId: params.sessionId,
@@ -345,6 +352,7 @@ class AnthropicProvider {
       vaultIds: params.vaultIds,
       providerOptions: params.providerOptions,
       webhookMetadata: params.webhookMetadata,
+      agent: sanitizeAgentForSerialization(params.agent),
     };
 
     const enqueueParams: EdgeEnqueueParams = {
@@ -443,6 +451,10 @@ class AnthropicProvider {
     const client = await this.getClient();
     const observer = this.edgeObserver!;
 
+    if (request.agent) {
+      await this.applyAgentOverrides(client, sessionId, request.agent);
+    }
+
     const params: RequestParams = {
       messages: request.messages,
       sessionId: request.sessionId,
@@ -450,6 +462,7 @@ class AnthropicProvider {
       vaultIds: request.vaultIds,
       providerOptions: request.providerOptions,
       webhookMetadata: request.webhookMetadata,
+      agent: request.agent,
     };
 
     await this.dispatchAndObserve(
@@ -744,6 +757,10 @@ class AnthropicProvider {
 
       yield { type: "stream-start", sessionId };
 
+      if (params.agent) {
+        await this.applyAgentOverrides(client, sessionId, params.agent);
+      }
+
       const signal = params.abortSignal ?? undefined;
       yield* this.resilientObserve(client, sessionId, runId, signal, () =>
         this.dispatch(client, sessionId, params, signal),
@@ -752,6 +769,18 @@ class AnthropicProvider {
       const error = mapStreamError(err, params.sessionId);
       yield { type: "error", error };
     }
+  }
+
+  private async applyAgentOverrides(
+    client: Anthropic,
+    sessionId: string,
+    agentConfig: AgentSessionConfig,
+  ): Promise<void> {
+    const session = await client.beta.sessions.retrieve(sessionId);
+    const agentUpdate = buildSessionAgentUpdate(agentConfig, session);
+    if (!agentUpdate) return;
+
+    await client.beta.sessions.update(sessionId, { agent: agentUpdate });
   }
 
   async createSession(options?: SessionOptions): Promise<string> {

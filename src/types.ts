@@ -63,11 +63,25 @@ export interface RequestParams {
   webhookMetadata?: Record<string, string>;
   /** Carry forward from a previous SendResult to group approval resumes into one logical turn. */
   turnId?: string;
+  /** Per-turn agent overrides — MCP servers, custom tools, or provider-specific tools. */
+  agent?: AgentSessionConfig;
 }
 
 export interface SessionOptions {
   vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
+}
+
+export interface AgentToolConfig {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface AgentSessionConfig {
+  mcpServers?: McpServerConfig[];
+  tools?: AgentToolConfig[];
+  providerTools?: Record<string, unknown>[];
 }
 
 export interface Usage {

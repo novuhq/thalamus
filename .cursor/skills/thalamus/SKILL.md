@@ -222,6 +222,23 @@ interface RequestParams {
   abortSignal?: AbortSignal;    // cancel the request
   webhookMetadata?: Record<string, string>; // forwarded in webhook payloads
   turnId?: string;              // carry forward from previous SendResult for turn grouping
+  agent?: AgentSessionConfig;   // per-turn MCP/tool overrides (see below)
+}
+```
+
+`AgentSessionConfig` fields:
+
+```typescript
+interface AgentSessionConfig {
+  mcpServers?: McpServerConfig[];       // override which MCP servers are active this turn
+  tools?: AgentToolConfig[];              // custom tools (mapped to provider format)
+  providerTools?: Record<string, unknown>[]; // provider-specific tool payloads (passthrough)
+}
+
+interface AgentToolConfig {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;   // JSON Schema object
 }
 ```
 
@@ -359,6 +376,59 @@ const second = await provider.send({
 ```
 
 With a live `sessionId`, send only the new user turn. After session loss, pass transcript in `messages` only as a recovery fallback — see Provider differences above.
+
+### Per-turn agent overrides
+
+Pass `agent` on `send()` to override MCP servers and tools for a single turn — no session state or extra API methods required.
+
+```typescript
+// Provider defaults: github, slack, linear
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-4o',
+  mcpServers: [
+    { name: 'github', url: 'https://api.githubcopilot.com/mcp/' },
+    { name: 'slack', url: 'https://mcp.slack.com/sse' },
+    { name: 'linear', url: 'https://mcp.linear.app/sse' },
+  ],
+});
+
+// This subscriber only gets GitHub MCP tools for this turn
+await provider.send({
+  sessionId,
+  messages: [{ role: MessageRole.USER, content: 'Summarize my open PRs' }],
+  agent: {
+    mcpServers: [
+      { name: 'github', url: 'https://api.githubcopilot.com/mcp/' },
+    ],
+  },
+});
+
+// Custom tools + provider-specific entries
+await provider.send({
+  sessionId,
+  messages: [{ role: MessageRole.USER, content: 'Run lookup' }],
+  agent: {
+    tools: [
+      {
+        name: 'lookup_subscriber',
+        description: 'Look up a subscriber by ID',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+      },
+    ],
+    providerTools: [
+      { type: 'agent_toolset_20260401' }, // Anthropic passthrough
+    ],
+    mcpServers: [{ name: 'github', url: 'https://api.githubcopilot.com/mcp/' }],
+  },
+});
+```
+
+**Provider behavior:**
+- **OpenAI** — resolves `agent.mcpServers`, maps `agent.tools` to function tools, and passes `agent.providerTools` through when building the `responses.create()` request.
+- **Anthropic** — calls `sessions.update()` before dispatch to apply MCP/tool overrides for that turn. Existing non-MCP tools are preserved when only `mcpServers` is set; `tools` + `providerTools` replace non-MCP tools when provided.
+
+In webhook/edge mode, `agent` is serialized in `SerializedRequestParams` so queued turns keep the same overrides.
 
 ## AbortSignal
 

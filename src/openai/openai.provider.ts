@@ -5,6 +5,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import type { CloudflareEdgeObserver } from "../durable/cloudflare";
+import { sanitizeAgentForSerialization } from "../durable/serialize-agent";
 import {
   type DurabilityBackend,
   type DurableBackend,
@@ -30,6 +31,7 @@ import {
 import { createSendResult } from "../send-result";
 import { SessionMutex } from "../session-turn-lock.js";
 import {
+  type AgentSessionConfig,
   type McpServerConfig,
   OPENAI,
   type ProviderWebhookHandlerOptions,
@@ -301,6 +303,7 @@ class OpenAIProvider {
       vaultIds: params.vaultIds,
       providerOptions: params.providerOptions,
       webhookMetadata: params.webhookMetadata,
+      agent: sanitizeAgentForSerialization(params.agent),
     };
 
     this.log.info("edge.enqueue", {
@@ -341,10 +344,7 @@ class OpenAIProvider {
       const credentials = params.vaultIds?.length
         ? await this.resolveCredentials(params.vaultIds)
         : undefined;
-      const mcpTools =
-        this.mcpServers.length > 0
-          ? toMcpTools(this.mcpServers, credentials)
-          : undefined;
+      const tools = this.resolveTools(params.agent, credentials);
       const input = this.buildInput(params);
 
       await this.dispatchAndObserve(
@@ -353,7 +353,7 @@ class OpenAIProvider {
         turnId,
         input,
         sessionParams,
-        mcpTools,
+        tools,
         params.providerOptions,
         params.webhookMetadata,
       );
@@ -455,10 +455,7 @@ class OpenAIProvider {
     const credentials = request.vaultIds?.length
       ? await this.resolveCredentials(request.vaultIds)
       : undefined;
-    const mcpTools =
-      this.mcpServers.length > 0
-        ? toMcpTools(this.mcpServers, credentials)
-        : undefined;
+    const tools = this.resolveTools(request.agent, credentials);
     const input = this.buildInput(request as RequestParams);
 
     await this.dispatchAndObserve(
@@ -467,7 +464,7 @@ class OpenAIProvider {
       turnId,
       input,
       sessionParams,
-      mcpTools,
+      tools,
       request.providerOptions,
       request.webhookMetadata,
     );
@@ -922,10 +919,7 @@ class OpenAIProvider {
         ? await this.resolveCredentials(params.vaultIds)
         : undefined;
 
-      const mcpTools =
-        this.mcpServers.length > 0
-          ? toMcpTools(this.mcpServers, credentials)
-          : undefined;
+      const tools = this.resolveTools(params.agent, credentials);
 
       const signal = params.abortSignal ?? undefined;
 
@@ -933,7 +927,7 @@ class OpenAIProvider {
         params,
         runId,
         sessionParams,
-        mcpTools,
+        tools,
         signal,
       );
     } catch (err) {
@@ -1004,6 +998,47 @@ class OpenAIProvider {
       }
     }
     return merged;
+  }
+
+  private resolveMcpServers(
+    agentConfig?: AgentSessionConfig,
+  ): McpServerConfig[] {
+    if (agentConfig?.mcpServers) return agentConfig.mcpServers;
+    return this.mcpServers;
+  }
+
+  private resolveExtraTools(
+    agentConfig?: AgentSessionConfig,
+  ): Record<string, unknown>[] {
+    if (!agentConfig) return [];
+
+    const extra: Record<string, unknown>[] = [];
+    if (agentConfig.tools) {
+      for (const t of agentConfig.tools) {
+        extra.push({
+          type: "function",
+          name: t.name,
+          description: t.description,
+          parameters: t.inputSchema,
+        });
+      }
+    }
+    if (agentConfig.providerTools) {
+      extra.push(...agentConfig.providerTools);
+    }
+    return extra;
+  }
+
+  private resolveTools(
+    agentConfig: AgentSessionConfig | undefined,
+    credentials: Map<string, Credential> | undefined,
+  ): Record<string, unknown>[] | undefined {
+    const resolvedMcps = this.resolveMcpServers(agentConfig);
+    const mcpTools =
+      resolvedMcps.length > 0 ? toMcpTools(resolvedMcps, credentials) : [];
+    const extraTools = this.resolveExtraTools(agentConfig);
+    const tools = [...mcpTools, ...extraTools];
+    return tools.length > 0 ? tools : undefined;
   }
 
   async createSession(_options?: SessionOptions): Promise<string> {

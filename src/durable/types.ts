@@ -19,7 +19,7 @@ export interface DurabilityBackend {
 /*  the application (e.g. Cloudflare Durable Objects).                 */
 /* ------------------------------------------------------------------ */
 
-import type { Message, ToolResult } from "../types";
+import type { AgentSessionConfig, Message, ToolResult } from "../types";
 
 /** Subset of RequestParams safe to serialize (no AbortSignal, no functions). */
 export interface SerializedRequestParams {
@@ -29,6 +29,8 @@ export interface SerializedRequestParams {
   vaultIds?: string[];
   providerOptions?: Record<string, unknown>;
   webhookMetadata?: Record<string, string>;
+  /** Per-turn overrides; inline MCP `authorization` is stripped before persistence. */
+  agent?: AgentSessionConfig;
 }
 
 export interface EdgeEnqueueParams {

@@ -301,6 +301,44 @@ const second = await provider.send({
 
 How `sessionId` maps to the underlying provider (Anthropic sessions, OpenAI conversations, response chaining on Bedrock) is handled internally.
 
+### Per-turn agent overrides
+
+Pass `agent` on `send()` to filter MCP servers or inject custom tools for a single turn. Overrides are per-request — no in-memory state and no separate update API.
+
+```typescript
+// Provider configured with github, slack, linear at creation time
+const provider = createOpenAIProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  model: 'gpt-4o',
+  mcpServers: [
+    { name: 'github', url: 'https://api.githubcopilot.com/mcp/' },
+    { name: 'slack', url: 'https://mcp.slack.com/sse' },
+    { name: 'linear', url: 'https://mcp.linear.app/sse' },
+  ],
+});
+
+// Only GitHub MCP for this subscriber's turn
+await provider.send({
+  sessionId,
+  messages: [{ role: MessageRole.USER, content: 'Summarize my open PRs' }],
+  agent: {
+    mcpServers: [
+      { name: 'github', url: 'https://api.githubcopilot.com/mcp/' },
+    ],
+  },
+});
+```
+
+`AgentSessionConfig` supports three fields:
+
+| Field | Purpose |
+|---|---|
+| `mcpServers` | Replace the MCP servers active for this turn |
+| `tools` | Custom tools (`AgentToolConfig`: `name`, `description`, `inputSchema`) — mapped to OpenAI function tools or Anthropic custom tools |
+| `providerTools` | Provider-specific tool payloads passed through as-is (e.g. `{ type: 'agent_toolset_20260401' }` on Anthropic) |
+
+On **Anthropic**, the provider calls `sessions.update()` before dispatch. On **OpenAI**, overrides are applied when building the API request. In webhook mode, `agent` survives the edge serialize/deserialize round-trip via `SerializedRequestParams`.
+
 ### AbortSignal
 
 Agent turns can run for a long time — the model may chain multiple tool calls, hit slow MCP servers, or produce lengthy output. You need a way to stop a request when the user clicks "stop generating," navigates away, or when your server is shutting down gracefully.

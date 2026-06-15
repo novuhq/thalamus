@@ -5,6 +5,7 @@ export {
   type WebhookConfig,
 } from "./cloudflare";
 export { type RedisLike, redis } from "./redis";
+export { sanitizeAgentForSerialization } from "./serialize-agent";
 export type {
   DurabilityBackend,
   DurableBackend,

@@ -341,10 +341,6 @@ class AnthropicProvider {
         providerOptions: params.providerOptions,
       }));
 
-    if (params.agent) {
-      await this.applyAgentOverrides(client, sessionId, params.agent);
-    }
-
     const request: SerializedRequestParams = {
       messages: params.messages,
       sessionId: params.sessionId,
@@ -423,6 +419,10 @@ class AnthropicProvider {
     turnId: string,
     params: RequestParams,
   ): Promise<void> {
+    if (params.agent) {
+      await this.applyAgentOverrides(client, sessionId, params.agent);
+    }
+
     await this.dispatch(client, sessionId, params);
 
     const baseUrl = client.baseURL.replace(/\/+$/, "");
@@ -450,10 +450,6 @@ class AnthropicProvider {
   ): Promise<void> {
     const client = await this.getClient();
     const observer = this.edgeObserver!;
-
-    if (request.agent) {
-      await this.applyAgentOverrides(client, sessionId, request.agent);
-    }
 
     const params: RequestParams = {
       messages: request.messages,

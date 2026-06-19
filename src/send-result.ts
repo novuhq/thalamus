@@ -6,6 +6,7 @@ import type {
 } from "./types";
 
 export const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
+  message: "onMessage",
   "text-delta": "onTextDelta",
   thinking: "onThinking",
   refusal: "onRefusal",

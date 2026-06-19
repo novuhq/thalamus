@@ -128,6 +128,8 @@ export type ActionRequired =
 
 export interface Response {
   content: string;
+  /** Every assistant message produced during the turn, in order. */
+  messages: string[];
   /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */
   sessionId?: string;
   finishReason:
@@ -144,6 +146,9 @@ export interface Response {
 export type AgentStatus = "running" | "queued" | "retrying" | "idle";
 
 export type StreamPart =
+  /** One complete assistant message. The atomic text unit across all providers. */
+  | { type: "message"; text: string }
+  /** Incremental token chunk. Only emitted by providers that stream (e.g. OpenAI). */
   | { type: "text-delta"; text: string }
   | { type: "refusal"; text: string }
   | { type: "thinking"; text: string }
@@ -189,6 +194,10 @@ export type StreamPart =
 export interface StreamCallbacks {
   /** Fires for every stream part, before type-specific callbacks. */
   onPart?: (part: StreamPart) => void | Promise<void>;
+  /** Fires once per complete assistant message. The atomic text unit across all providers. */
+  onMessage?: (
+    part: Extract<StreamPart, { type: "message" }>,
+  ) => void | Promise<void>;
   onTextDelta?: (
     part: Extract<StreamPart, { type: "text-delta" }>,
   ) => void | Promise<void>;

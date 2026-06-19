@@ -53,6 +53,7 @@ function mapStreamErrorEvent(event: {
 
 export class ResponseAccumulator {
   content = "";
+  messages: string[] = [];
   sessionId: string | undefined;
   conversationId: string | undefined;
   finishReason: Response["finishReason"] = "stop";
@@ -64,6 +65,7 @@ export class ResponseAccumulator {
   toResponse(): Response {
     return {
       content: this.content,
+      messages: this.messages,
       sessionId: this.conversationId ?? this.sessionId,
       finishReason: this.finishReason,
       usage: this.usage,

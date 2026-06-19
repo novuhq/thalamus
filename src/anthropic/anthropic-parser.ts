@@ -47,6 +47,7 @@ export function mapSessionError(raw: unknown): ThalamusError {
 
 export class ResponseAccumulator {
   content = "";
+  messages: string[] = [];
   finishReason: Response["finishReason"] = "stop";
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
@@ -58,6 +59,7 @@ export class ResponseAccumulator {
   toResponse(sessionId: string): Response {
     return {
       content: this.content,
+      messages: this.messages,
       sessionId,
       finishReason: this.finishReason,
       usage: this.usage,

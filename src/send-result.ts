@@ -70,7 +70,7 @@ class SendResultImpl implements SendResult {
   }
 
   async text(): Promise<string> {
-    return (await this.response).content;
+    return (await this.response).messages.join("\n\n");
   }
 
   private async run(): Promise<Response> {

@@ -127,7 +127,6 @@ export type ActionRequired =
     };
 
 export interface Response {
-  content: string;
   /** Every assistant message produced during the turn, in order. */
   messages: string[];
   /** Session identifier to pass as `sessionId` on the next turn to continue the conversation. */

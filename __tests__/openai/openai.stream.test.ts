@@ -72,7 +72,7 @@ describe("stream — new session (conversation)", () => {
     });
     expect(parts.filter((p) => p.type === "text-delta")).toHaveLength(2);
 
-    expect(response.content).toBe("Hello world");
+    expect(response.messages).toEqual(["Hello world"]);
     expect(response.sessionId).toBe("conv_new");
     expect(response.usage?.inputTokens).toBe(5);
   });

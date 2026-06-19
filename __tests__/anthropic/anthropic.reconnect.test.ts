@@ -117,7 +117,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("Hello world");
+    expect(response.messages).toEqual(["Hello", " world"]);
     expect(response.finishReason).toBe("stop");
 
     expect(mockSseStream).toHaveBeenCalledTimes(2);
@@ -188,7 +188,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("AB");
+    expect(response.messages).toEqual(["A", "B"]);
 
     const textParts = parts.filter((p) => p.type === "message");
     expect(textParts).toHaveLength(2);

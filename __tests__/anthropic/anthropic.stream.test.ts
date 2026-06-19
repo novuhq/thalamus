@@ -80,7 +80,7 @@ describe("stream — new session", () => {
     });
     expect(parts.find((p) => p.type === "finish")).toBeDefined();
 
-    expect(response.content).toBe("Hello!");
+    expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
   });

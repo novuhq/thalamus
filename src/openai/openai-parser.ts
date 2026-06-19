@@ -53,7 +53,6 @@ function mapStreamErrorEvent(event: {
 }
 
 export class ResponseAccumulator {
-  content = "";
   messages: string[] = [];
   sessionId: string | undefined;
   conversationId: string | undefined;
@@ -65,7 +64,6 @@ export class ResponseAccumulator {
 
   toResponse(): Response {
     return {
-      content: this.content,
       messages: this.messages,
       sessionId: this.conversationId ?? this.sessionId,
       finishReason: this.finishReason,
@@ -104,7 +102,6 @@ export function* mapEvent(
         };
       }
       if (acc.messages.length === 0 && event.response.output_text) {
-        acc.content = event.response.output_text;
         acc.messages.push(event.response.output_text);
         yield { type: "message", text: event.response.output_text };
       }
@@ -126,7 +123,6 @@ export function* mapEvent(
     }
 
     case "response.output_text.delta": {
-      acc.content += event.delta;
       yield { type: "text-delta", text: event.delta };
       break;
     }

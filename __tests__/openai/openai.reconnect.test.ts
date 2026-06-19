@@ -103,7 +103,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("Hello world");
+    expect(response.messages).toEqual(["Hello world"]);
 
     expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
     expect(mockResponsesRetrieve).toHaveBeenCalledTimes(1);
@@ -180,7 +180,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("AB");
+    expect(response.messages).toEqual(["AB"]);
 
     const textParts = parts.filter((p) => p.type === "text-delta");
     expect(textParts).toHaveLength(2);

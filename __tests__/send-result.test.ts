@@ -17,7 +17,7 @@ describe("SendResult — async callback dispatch", () => {
       { type: "text-delta", text: "b" },
       {
         type: "finish",
-        response: { content: "ab", finishReason: "stop" },
+        response: { messages: ["ab"], finishReason: "stop" },
       },
     ];
 
@@ -49,7 +49,7 @@ describe("SendResult — async callback dispatch", () => {
       { type: "text-delta", text: "x" },
       {
         type: "finish",
-        response: { content: "x", finishReason: "stop" },
+        response: { messages: ["x"], finishReason: "stop" },
       },
     ];
 
@@ -82,7 +82,7 @@ describe("SendResult — async callback dispatch", () => {
       { type: "text-delta", text: "a" },
       {
         type: "finish",
-        response: { content: "a", finishReason: "stop" },
+        response: { messages: ["a"], finishReason: "stop" },
       },
     ];
 
@@ -113,7 +113,7 @@ describe("SendResult — async callback dispatch", () => {
       { type: "text-delta", text: " world" },
       {
         type: "finish",
-        response: { content: "hello world", finishReason: "stop" },
+        response: { messages: ["hello world"], finishReason: "stop" },
       },
     ];
 
@@ -135,6 +135,6 @@ describe("SendResult — async callback dispatch", () => {
 
     const response = await result.response;
     expect(parts).toEqual(["hello", " world"]);
-    expect(response.content).toBe("hello world");
+    expect(response.messages).toEqual(["hello world"]);
   });
 });

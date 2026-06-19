@@ -54,7 +54,7 @@ describe("send() — basic behavior", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("Hello world");
+    expect(response.messages).toEqual(["Hello world"]);
     expect(response.sessionId).toBe("conv_new");
     expect(response.usage?.inputTokens).toBe(5);
   });
@@ -151,7 +151,7 @@ describe("send() — onSessionEvents factory", () => {
     expect(onFinish).toHaveBeenCalledWith(
       expect.objectContaining({ type: "finish" }),
     );
-    expect(response.content).toBe("Hello world");
+    expect(response.messages).toEqual(["Hello world"]);
   });
 
   it("passes existing sessionId to factory when provided", async () => {

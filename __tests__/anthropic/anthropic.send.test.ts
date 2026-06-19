@@ -62,7 +62,7 @@ describe("send() — basic behavior", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(response.content).toBe("Hello!");
+    expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
   });
@@ -185,7 +185,7 @@ describe("send() — onSessionEvents factory", () => {
     expect(onFinish).toHaveBeenCalledWith(
       expect.objectContaining({ type: "finish" }),
     );
-    expect(response.content).toBe("Hello!");
+    expect(response.messages).toEqual(["Hello!"]);
   });
 
   it("passes existing sessionId to factory when provided", async () => {
@@ -261,7 +261,7 @@ describe("send() — lazy without onSessionEvents", () => {
     // Before awaiting, the stream shouldn't have started
     // (we can't directly assert this, but we can verify it works when awaited)
     const response = await result;
-    expect(response.content).toBe("Hello!");
+    expect(response.messages).toEqual(["Hello!"]);
   });
 });
 

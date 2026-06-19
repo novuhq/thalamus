@@ -137,7 +137,7 @@ describe("AWS API key auth — streaming", () => {
     expect(parts.find((p) => p.type === "message")).toMatchObject({
       text: "Hello from AWS!",
     });
-    expect(response.content).toBe("Hello from AWS!");
+    expect(response.messages).toEqual(["Hello from AWS!"]);
     expect(response.sessionId).toBe("sess_aws");
   });
 });

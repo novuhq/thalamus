@@ -134,7 +134,7 @@ describe("AWS API key auth — streaming", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(parts.find((p) => p.type === "text-delta")).toMatchObject({
+    expect(parts.find((p) => p.type === "message")).toMatchObject({
       text: "Hello from AWS!",
     });
     expect(response.content).toBe("Hello from AWS!");

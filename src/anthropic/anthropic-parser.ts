@@ -76,11 +76,14 @@ export function* mapEvent(
   switch (event.type) {
     case "agent.message": {
       const e = event as BetaManagedAgentsAgentMessageEvent;
+      let text = "";
       for (const block of e.content) {
-        if (block.type === "text") {
-          acc.content += block.text;
-          yield { type: "text-delta", text: block.text };
-        }
+        if (block.type === "text") text += block.text;
+      }
+      if (text) {
+        acc.content += text;
+        acc.messages.push(text);
+        yield { type: "message", text };
       }
       break;
     }

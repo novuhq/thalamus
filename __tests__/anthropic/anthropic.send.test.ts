@@ -121,15 +121,46 @@ describe("send() — basic behavior", () => {
       expect.objectContaining({}),
     );
   });
+
+  it("captures each agent.message as a separate message in order", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_multi" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "agent.message",
+          id: "evt_1",
+          content: [{ type: "text", text: "On it." }],
+        },
+        {
+          type: "agent.message",
+          id: "evt_2",
+          content: [{ type: "text", text: "Here is the answer." }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_3",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const provider = createAnthropicProvider(config);
+    const response = await provider.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(response.messages).toEqual(["On it.", "Here is the answer."]);
+  });
 });
 
 describe("send() — onSessionEvents factory", () => {
   it("calls onSessionEvents factory and routes events through callbacks", async () => {
     setupBasicStream();
 
-    const onTextDelta = vi.fn();
+    const onMessage = vi.fn();
     const onFinish = vi.fn();
-    const factory = vi.fn().mockReturnValue({ onTextDelta, onFinish });
+    const factory = vi.fn().mockReturnValue({ onMessage, onFinish });
 
     const provider = createAnthropicProvider({
       ...config,
@@ -148,8 +179,8 @@ describe("send() — onSessionEvents factory", () => {
         metadata: {},
       }),
     );
-    expect(onTextDelta).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "text-delta", text: "Hello!" }),
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "message", text: "Hello!" }),
     );
     expect(onFinish).toHaveBeenCalledWith(
       expect.objectContaining({ type: "finish" }),

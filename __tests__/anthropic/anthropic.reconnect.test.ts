@@ -123,7 +123,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
     expect(mockSseStream).toHaveBeenCalledTimes(2);
     expect(mockList).toHaveBeenCalledTimes(1);
 
-    const textParts = parts.filter((p) => p.type === "text-delta");
+    const textParts = parts.filter((p) => p.type === "message");
     expect(textParts).toHaveLength(2);
     expect(textParts.map((p) => (p as { text: string }).text)).toEqual([
       "Hello",
@@ -190,7 +190,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
 
     expect(response.content).toBe("AB");
 
-    const textParts = parts.filter((p) => p.type === "text-delta");
+    const textParts = parts.filter((p) => p.type === "message");
     expect(textParts).toHaveLength(2);
     expect(textParts.map((p) => (p as { text: string }).text)).toEqual([
       "A",

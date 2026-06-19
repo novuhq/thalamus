@@ -181,7 +181,7 @@ describe("durable recovery — Anthropic", () => {
       { timeout: 2000 },
     );
 
-    const textParts = parts.filter((p) => p.type === "text-delta");
+    const textParts = parts.filter((p) => p.type === "message");
     expect(textParts.map((p) => (p as { text: string }).text)).toEqual(["C"]);
 
     const active = await durable.getActive();
@@ -236,7 +236,7 @@ describe("durable recovery — Anthropic", () => {
       { timeout: 2000 },
     );
 
-    const textParts = parts.filter((p) => p.type === "text-delta");
+    const textParts = parts.filter((p) => p.type === "message");
     expect(textParts.map((p) => (p as { text: string }).text)).toEqual(["B"]);
 
     const active = await durable.getActive();

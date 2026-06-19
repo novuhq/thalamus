@@ -241,7 +241,8 @@ onToolUseDone: ({ toolName }) => {
 | Callback | Event | Description |
 |---|---|---|
 | `onPart` | all | Fires for every event, before type-specific callbacks |
-| `onTextDelta` | `text-delta` | Incremental text output |
+| `onMessage` | `message` | One complete assistant message (all providers) |
+| `onTextDelta` | `text-delta` | Incremental text output (OpenAI only) |
 | `onThinking` | `thinking` | Model reasoning content |
 | `onRefusal` | `refusal` | Model refused to respond |
 | `onToolUseStart` | `tool-use-start` | Tool call initiated |
@@ -254,6 +255,8 @@ onToolUseDone: ({ toolName }) => {
 | `onFinish` | `finish` | Stream complete, includes final `Response` |
 | `onError` | `error` | Error occurred |
 | `onProviderEvent` | `provider-event` | Unmapped provider-specific event (escape hatch) |
+
+> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted **only** by providers that stream tokens (OpenAI); Anthropic does not emit `text-delta`. The final `Response.messages` holds every `message` of the turn.
 
 </details>
 

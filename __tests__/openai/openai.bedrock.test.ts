@@ -69,7 +69,7 @@ describe("Bedrock API Key auth — streaming", () => {
       onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
     }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
-    expect(response.content).toBe("Hello from Bedrock!");
+    expect(response.messages).toEqual(["Hello from Bedrock!"]);
     expect(response.sessionId).toBe("conv_br");
   });
 });
@@ -179,6 +179,6 @@ describe("Bedrock SigV4 auth — streaming", () => {
       onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
     }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
-    expect(response.content).toBe("Signed!");
+    expect(response.messages).toEqual(["Signed!"]);
   });
 });

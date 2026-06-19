@@ -6,6 +6,7 @@ import type {
 } from "./types";
 
 export const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
+  message: "onMessage",
   "text-delta": "onTextDelta",
   thinking: "onThinking",
   refusal: "onRefusal",
@@ -69,7 +70,7 @@ class SendResultImpl implements SendResult {
   }
 
   async text(): Promise<string> {
-    return (await this.response).content;
+    return (await this.response).messages.join("\n\n");
   }
 
   private async run(): Promise<Response> {

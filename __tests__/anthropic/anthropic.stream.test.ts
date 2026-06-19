@@ -43,7 +43,7 @@ describe("createAnthropicProvider", () => {
 });
 
 describe("stream — new session", () => {
-  it("creates a session, yields stream-start + text-delta + finish, resolves response", async () => {
+  it("creates a session, yields stream-start + message + finish, resolves response", async () => {
     mockCreate.mockResolvedValue({ id: "sess_new" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -75,12 +75,12 @@ describe("stream — new session", () => {
     expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
       sessionId: "sess_new",
     });
-    expect(parts.find((p) => p.type === "text-delta")).toMatchObject({
+    expect(parts.find((p) => p.type === "message")).toMatchObject({
       text: "Hello!",
     });
     expect(parts.find((p) => p.type === "finish")).toBeDefined();
 
-    expect(response.content).toBe("Hello!");
+    expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
   });

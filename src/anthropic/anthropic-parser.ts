@@ -46,7 +46,7 @@ export function mapSessionError(raw: unknown): ThalamusError {
 }
 
 export class ResponseAccumulator {
-  content = "";
+  messages: string[] = [];
   finishReason: Response["finishReason"] = "stop";
   usage: Usage | undefined;
   actionsRequired: ActionRequired[] = [];
@@ -57,7 +57,7 @@ export class ResponseAccumulator {
 
   toResponse(sessionId: string): Response {
     return {
-      content: this.content,
+      messages: this.messages,
       sessionId,
       finishReason: this.finishReason,
       usage: this.usage,
@@ -74,11 +74,13 @@ export function* mapEvent(
   switch (event.type) {
     case "agent.message": {
       const e = event as BetaManagedAgentsAgentMessageEvent;
+      let text = "";
       for (const block of e.content) {
-        if (block.type === "text") {
-          acc.content += block.text;
-          yield { type: "text-delta", text: block.text };
-        }
+        if (block.type === "text") text += block.text;
+      }
+      if (text) {
+        acc.messages.push(text);
+        yield { type: "message", text };
       }
       break;
     }

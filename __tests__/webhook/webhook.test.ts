@@ -220,7 +220,7 @@ describe("createWebhookHandler", () => {
       const event: StreamPart = {
         type: "finish",
         response: {
-          content: "done",
+          messages: ["done"],
           finishReason: "stop",
           sessionId: "sess_123",
         },

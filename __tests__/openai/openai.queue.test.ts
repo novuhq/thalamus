@@ -75,7 +75,7 @@ describe("sequential turns (queue)", () => {
       sessionId: "conv_1",
       messages: [{ role: MessageRole.USER, content: "A" }],
     });
-    expect(r1.content).toBe("first");
+    expect(r1.messages).toEqual(["first"]);
 
     mockResponsesCreate.mockReturnValue(
       simpleStream("resp_2", "conv_1", "second"),
@@ -85,7 +85,7 @@ describe("sequential turns (queue)", () => {
       sessionId: "conv_1",
       messages: [{ role: MessageRole.USER, content: "B" }],
     });
-    expect(r2.content).toBe("second");
+    expect(r2.messages).toEqual(["second"]);
     expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
   });
 
@@ -141,8 +141,8 @@ describe("sequential turns (queue)", () => {
     releaseFirst();
     const [r1, r2] = await Promise.all([first, second]);
 
-    expect(r1.content).toBe("first");
-    expect(r2.content).toBe("second");
+    expect(r1.messages).toEqual(["first"]);
+    expect(r2.messages).toEqual(["second"]);
     expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
   });
 
@@ -196,7 +196,11 @@ describe("sequential turns (queue)", () => {
 
     barriers[2]();
     const results = await Promise.all(sends);
-    expect(results.map((r) => r.content)).toEqual(["msg1", "msg2", "msg3"]);
+    expect(results.map((r) => r.messages.join("\n\n"))).toEqual([
+      "msg1",
+      "msg2",
+      "msg3",
+    ]);
   });
 
   it("different sessions don't block each other", async () => {
@@ -246,12 +250,12 @@ describe("sequential turns (queue)", () => {
     });
 
     const resultB = await sendB;
-    expect(resultB.content).toBe("B done");
+    expect(resultB.messages).toEqual(["B done"]);
     expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
 
     releaseA();
     const resultA = await sendA;
-    expect(resultA.content).toBe("A done");
+    expect(resultA.messages).toEqual(["A done"]);
   });
 
   it("toolResults bypass the queue", async () => {
@@ -324,7 +328,7 @@ describe("sequential turns (queue)", () => {
     expect(approval.finishReason).toBe("stop");
 
     const queuedResult = await queued;
-    expect(queuedResult.content).toBe("after");
+    expect(queuedResult.messages).toEqual(["after"]);
   });
 
   it("requires-action holds lock — queued message does not dispatch", async () => {
@@ -440,7 +444,7 @@ describe("sequential turns (queue)", () => {
     await expect(first.response).rejects.toThrow();
 
     const r2 = await second;
-    expect(r2.content).toBe("recovered");
+    expect(r2.messages).toEqual(["recovered"]);
   });
 
   it("new session (no sessionId) fires immediately", async () => {
@@ -452,7 +456,7 @@ describe("sequential turns (queue)", () => {
     const result = await createOpenAIProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
-    expect(result.content).toBe("hello");
+    expect(result.messages).toEqual(["hello"]);
   });
 
   it("bootstrap dedup — two sends without sessionId share same conversation", async () => {
@@ -471,8 +475,8 @@ describe("sequential turns (queue)", () => {
     ]);
 
     expect(mockConversationsCreate).toHaveBeenCalledTimes(1);
-    expect(r1.content).toBeDefined();
-    expect(r2.content).toBeDefined();
+    expect(r1.messages).toBeDefined();
+    expect(r2.messages).toBeDefined();
   });
 
   it("emits status-change queued when message is waiting", async () => {

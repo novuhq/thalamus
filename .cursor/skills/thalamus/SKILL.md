@@ -311,7 +311,8 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 
 | Type | Key fields |
 |---|---|
-| `text-delta` | `text` |
+| `message` | `text` (one complete assistant message — the atomic text unit across all providers) |
+| `text-delta` | `text` (incremental token chunk; only emitted by providers that stream, e.g. OpenAI) |
 | `thinking` | `text` |
 | `refusal` | `text` |
 | `tool-use-start` | `toolName`, `toolUseId`, `source?` |
@@ -325,6 +326,8 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `error` | `error: Error` |
 | `provider-event` | `provider`, `event`, `data` (escape hatch) |
 
+> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing and is **only** emitted by providers that stream tokens (OpenAI); Anthropic does not emit `text-delta`. `Response.messages` collects every `message` of the turn.
+
 ### StreamCallbacks
 
 One callback per StreamPart type, plus `onPart` which fires for every part before type-specific callbacks:
@@ -332,7 +335,8 @@ One callback per StreamPart type, plus `onPart` which fires for every part befor
 ```typescript
 interface StreamCallbacks {
   onPart?: (part: StreamPart) => void;
-  onTextDelta?: ...;
+  onMessage?: ...;   // one complete assistant message (all providers)
+  onTextDelta?: ...; // incremental tokens (OpenAI only)
   onThinking?: ...;
   onRefusal?: ...;
   onToolUseStart?: ...;
@@ -352,13 +356,15 @@ interface StreamCallbacks {
 
 ```typescript
 interface Response {
-  content: string;
+  messages: string[]; // every assistant message produced during the turn, in order
   sessionId?: string;
   finishReason: 'stop' | 'length' | 'error' | 'requires-action' | 'refused' | 'other';
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   actionsRequired?: ActionRequired[];
 }
 ```
+
+`SendResult.text()` joins `messages` with `\n\n`.
 
 ## Sessions
 
@@ -659,8 +665,11 @@ const handler = createWebhookHandler({
   onSessionEvents: ({ sessionId, turnId, runId, metadata }) => ({
     onPart(part) {
       switch (part.type) {
-        case 'text-delta':
+        case 'message': // complete assistant message — all providers
           pushToClient(sessionId, part.text);
+          break;
+        case 'text-delta': // incremental tokens — OpenAI only
+          pushDeltaToClient(sessionId, part.text);
           break;
         case 'finish':
           saveResponse(sessionId, part.response);

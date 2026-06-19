@@ -27,7 +27,7 @@ const response = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'What can you help me with?' }],
 });
 
-console.log(response.content);
+console.log(response.messages); // every assistant message produced this turn
 console.log(response.sessionId); // pass back on the next turn to continue
 ```
 
@@ -101,7 +101,7 @@ The simplest approach. Blocks until the agent finishes its turn.
 
 ```typescript
 const response = await provider.send({ messages });
-console.log(response.content);
+console.log(response.messages); // every assistant message produced this turn
 console.log(response.finishReason); // 'stop', 'requires-action', etc.
 ```
 

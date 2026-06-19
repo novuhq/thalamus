@@ -81,6 +81,42 @@ describe("send() — basic behavior", () => {
     const sessionId = await result.sessionId;
     expect(sessionId).toBe("conv_new");
   });
+
+  it("captures each finalized text part as a message in order", async () => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_multi" });
+    mockResponsesCreate.mockReturnValue(
+      makeStream([
+        {
+          type: "response.created",
+          response: { id: "resp_m", conversation: { id: "conv_multi" } },
+        },
+        { type: "response.output_text.delta", delta: "On " },
+        { type: "response.output_text.delta", delta: "it." },
+        { type: "response.output_text.done", text: "On it." },
+        { type: "response.output_text.done", text: "Here is the answer." },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_m",
+            output_text: "On it.Here is the answer.",
+            usage: {},
+          },
+        },
+      ]),
+    );
+
+    const onMessage = vi.fn();
+    const provider = createOpenAIProvider({
+      ...config,
+      onSessionEvents: () => ({ onMessage }),
+    });
+    const response = await provider.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(response.messages).toEqual(["On it.", "Here is the answer."]);
+    expect(onMessage).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("send() — onSessionEvents factory", () => {

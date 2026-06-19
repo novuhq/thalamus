@@ -4,6 +4,7 @@ import type {
   ResponseOutputItemAddedEvent,
   ResponseOutputItemDoneEvent,
   ResponseStreamEvent,
+  ResponseTextDoneEvent,
 } from "openai/resources/responses/responses";
 import {
   ProviderAuthError,
@@ -102,8 +103,10 @@ export function* mapEvent(
           totalTokens: event.response.usage.total_tokens,
         };
       }
-      if (!acc.content) {
+      if (acc.messages.length === 0 && event.response.output_text) {
         acc.content = event.response.output_text;
+        acc.messages.push(event.response.output_text);
+        yield { type: "message", text: event.response.output_text };
       }
       yield { type: "step-done", stepIndex: acc.stepIndex };
       acc.stepIndex++;
@@ -125,6 +128,13 @@ export function* mapEvent(
     case "response.output_text.delta": {
       acc.content += event.delta;
       yield { type: "text-delta", text: event.delta };
+      break;
+    }
+
+    case "response.output_text.done": {
+      const e = event as ResponseTextDoneEvent;
+      acc.messages.push(e.text);
+      yield { type: "message", text: e.text };
       break;
     }
 

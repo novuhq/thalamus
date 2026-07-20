@@ -1,6 +1,6 @@
 node_modules/
 dist/
 *.local
-scripts/
+/scripts/
 .DS_Store
 docs/

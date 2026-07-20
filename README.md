@@ -250,6 +250,7 @@ onToolUseDone: ({ toolName }) => {
 | `onToolUseDone` | `tool-use-done` | Tool call completed with parsed input |
 | `onToolUseResult` | `tool-use-result` | Tool execution result (`content` blocks) |
 | `onMcpToolsDiscovered` | `mcp-tools-discovered` | MCP server tools discovered |
+| `onMcpServerFailure` | `mcp-server-failure` | MCP init failed (auth/connection); non-fatal, session continues without that server |
 | `onStatusChange` | `status-change` | Agent status changed |
 | `onStreamStart` | `stream-start` | Stream opened, includes `sessionId` |
 | `onFinish` | `finish` | Stream complete, includes final `Response` |

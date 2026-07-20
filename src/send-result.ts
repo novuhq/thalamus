@@ -15,6 +15,7 @@ export const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
   "tool-use-done": "onToolUseDone",
   "tool-use-result": "onToolUseResult",
   "mcp-tools-discovered": "onMcpToolsDiscovered",
+  "mcp-server-failure": "onMcpServerFailure",
   "step-start": "onStepStart",
   "step-done": "onStepDone",
   "status-change": "onStatusChange",

@@ -177,6 +177,17 @@ export type StreamPart =
       serverName: string;
       tools: McpToolDef[];
     }
+  /**
+   * MCP server failed during session init (auth, connection, …). Non-fatal —
+   * the session continues without that MCP. Consumers should update connection
+   * state when `reason` indicates credentials are no longer usable.
+   */
+  | {
+      type: "mcp-server-failure";
+      reason: "authentication" | "connection";
+      serverName: string;
+      message: string;
+    }
   | { type: "step-start"; stepIndex: number }
   | { type: "step-done"; stepIndex: number }
   | { type: "status-change"; status: AgentStatus }
@@ -220,6 +231,9 @@ export interface StreamCallbacks {
   ) => void | Promise<void>;
   onMcpToolsDiscovered?: (
     part: Extract<StreamPart, { type: "mcp-tools-discovered" }>,
+  ) => void | Promise<void>;
+  onMcpServerFailure?: (
+    part: Extract<StreamPart, { type: "mcp-server-failure" }>,
   ) => void | Promise<void>;
   onStepStart?: (
     part: Extract<StreamPart, { type: "step-start" }>,

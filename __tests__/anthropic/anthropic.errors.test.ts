@@ -62,6 +62,94 @@ describe("error mapping", () => {
     expect(errPart).toBeDefined();
     expect((errPart as any).error).toBeInstanceOf(ThalamusError);
   });
+
+  it("emits mcp-server-failure (authentication) on mcp_authentication_failed_error", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_mcp_auth" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.error",
+          id: "evt_1",
+          error: {
+            type: "mcp_authentication_failed_error",
+            mcp_server_name: "Stripe",
+            message:
+              "MCP server 'Stripe' authentication failed: credential has been invalidated — re-authentication is required.",
+            retry_status: { type: "terminal" },
+          },
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    const mcpFailures: any[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({
+        onPart: (p) => parts.push(p),
+        onMcpServerFailure: (p) => mcpFailures.push(p),
+      }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
+
+    expect(parts.find((p) => p.type === "error")).toBeUndefined();
+    expect(mcpFailures).toHaveLength(1);
+    expect(mcpFailures[0]).toMatchObject({
+      type: "mcp-server-failure",
+      reason: "authentication",
+      serverName: "Stripe",
+    });
+  });
+
+  it("emits mcp-server-failure (connection) without aborting the session", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_mcp_conn" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.error",
+          id: "evt_1",
+          error: {
+            type: "mcp_connection_failed_error",
+            mcp_server_name: "GitHub",
+            message:
+              "MCP server 'GitHub' initialize failed: connection refused",
+            retry_status: { type: "terminal" },
+          },
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_2",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+
+    const parts: any[] = [];
+    const mcpFailures: any[] = [];
+    const response = await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({
+        onPart: (p) => parts.push(p),
+        onMcpServerFailure: (p) => mcpFailures.push(p),
+      }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
+
+    expect(parts.find((p) => p.type === "error")).toBeUndefined();
+    expect(mcpFailures).toHaveLength(1);
+    expect(mcpFailures[0]).toMatchObject({
+      type: "mcp-server-failure",
+      reason: "connection",
+      serverName: "GitHub",
+    });
+    expect(parts.some((p) => p.type === "finish")).toBe(true);
+    expect(response.finishReason).toBe("stop");
+  });
 });
 
 describe("session expiry detection", () => {

@@ -320,6 +320,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `tool-use-done` | `toolName`, `toolUseId`, `input?`, `source?` |
 | `tool-use-result` | `toolUseId`, `content` (`ToolResultContent[]`), `isError?`, `source?` |
 | `mcp-tools-discovered` | `serverName`, `tools: McpToolDef[]` |
+| `mcp-server-failure` | `reason` (`authentication` \| `connection`), `serverName`, `message` (non-fatal; MCP init failed) |
 | `status-change` | `status: 'running' \| 'queued' \| 'retrying' \| 'idle'` |
 | `stream-start` | `sessionId?` |
 | `finish` | `response: Response` |
@@ -344,6 +345,7 @@ interface StreamCallbacks {
   onToolUseDone?: ...;
   onToolUseResult?: ...;
   onMcpToolsDiscovered?: ...;
+  onMcpServerFailure?: ...;
   onStatusChange?: ...;
   onStreamStart?: ...;
   onFinish?: ...;
@@ -693,7 +695,7 @@ export default { fetch: (req) => handler.handle(req) };
 
 Note: the webhook `onSessionEvents` factory receives a `SessionEventContext` object with `sessionId`, `turnId`, `runId`, and `metadata`. The `metadata` contains the `webhookMetadata` you passed in `send()`. Session and run IDs are also exposed in the request headers: `X-Thalamus-Session-Id`, `X-Thalamus-Run-Id`.
 
-Use standalone `createWebhookHandler` when one webhook endpoint serves many providers (e.g. Novu). Use `provider.createWebhookHandler` for single-provider apps.
+Use standalone `createWebhookHandler` when one webhook endpoint serves many providers. Use `provider.createWebhookHandler` for single-provider apps.
 
 ### Sequential turns in webhook mode
 

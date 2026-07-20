@@ -210,8 +210,29 @@ export function* mapEvent(
     }
 
     case "session.error": {
-      const e = event as BetaManagedAgentsSessionErrorEvent;
-      throw mapSessionError(e.error);
+      const { error } = event as BetaManagedAgentsSessionErrorEvent;
+
+      switch (error.type) {
+        case "mcp_authentication_failed_error":
+          yield {
+            type: "mcp-server-failure",
+            reason: "authentication",
+            serverName: error.mcp_server_name,
+            message: error.message,
+          };
+          break;
+        case "mcp_connection_failed_error":
+          yield {
+            type: "mcp-server-failure",
+            reason: "connection",
+            serverName: error.mcp_server_name,
+            message: error.message,
+          };
+          break;
+        default:
+          throw mapSessionError(error);
+      }
+      break;
     }
 
     case "span.model_request_start": {

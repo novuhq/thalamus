@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
+import {
+  mapEvent,
+  ResponseAccumulator,
+} from "../../src/anthropic/anthropic-parser.js";
 import { MessageRole } from "../../src/types.js";
 import { config, mockSse } from "./_helpers.js";
 
@@ -83,6 +87,26 @@ describe("stream — new session", () => {
     expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
+  });
+});
+
+describe("parser — session.status_running", () => {
+  it("yields run-start before status-change running", () => {
+    const parts = [
+      ...mapEvent(
+        {
+          type: "session.status_running",
+          id: "evt_running",
+          processed_at: "2024-01-01T00:00:00Z",
+        } as any,
+        new ResponseAccumulator(),
+      ),
+    ];
+
+    expect(parts).toEqual([
+      { type: "run-start" },
+      { type: "status-change", status: "running" },
+    ]);
   });
 });
 

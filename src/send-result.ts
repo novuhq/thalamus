@@ -19,7 +19,7 @@ export const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
   "step-start": "onStepStart",
   "step-done": "onStepDone",
   "status-change": "onStatusChange",
-  "stream-start": "onStreamStart",
+  "run-start": "onRunStart",
   finish: "onFinish",
   error: "onError",
   "provider-event": "onProviderEvent",
@@ -76,7 +76,7 @@ class SendResultImpl implements SendResult {
 
   private async run(): Promise<Response> {
     for await (const part of this.source) {
-      if (part.type === "stream-start" && part.sessionId) {
+      if (part.type === "run-start" && part.sessionId) {
         this._sessionIdResolve(part.sessionId);
       }
       await this.dispatch(part);

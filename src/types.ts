@@ -191,7 +191,7 @@ export type StreamPart =
   | { type: "step-start"; stepIndex: number }
   | { type: "step-done"; stepIndex: number }
   | { type: "status-change"; status: AgentStatus }
-  | { type: "stream-start"; sessionId?: string }
+  | { type: "run-start"; sessionId?: string }
   | { type: "finish"; response: Response }
   | { type: "error"; error: Error }
   | {
@@ -244,8 +244,8 @@ export interface StreamCallbacks {
   onStatusChange?: (
     part: Extract<StreamPart, { type: "status-change" }>,
   ) => void | Promise<void>;
-  onStreamStart?: (
-    part: Extract<StreamPart, { type: "stream-start" }>,
+  onRunStart?: (
+    part: Extract<StreamPart, { type: "run-start" }>,
   ) => void | Promise<void>;
   onFinish?: (
     part: Extract<StreamPart, { type: "finish" }>,

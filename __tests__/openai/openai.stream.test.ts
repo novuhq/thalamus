@@ -39,7 +39,7 @@ describe("createOpenAIProvider", () => {
 });
 
 describe("stream — new session (conversation)", () => {
-  it("creates a conversation, yields stream-start with conversationId, resolves response", async () => {
+  it("creates a conversation, yields run-start with conversationId, resolves response", async () => {
     mockConversationsCreate.mockResolvedValue({ id: "conv_new" });
     mockResponsesCreate.mockReturnValue(
       makeStream([
@@ -67,7 +67,7 @@ describe("stream — new session (conversation)", () => {
     }).send({ messages: [{ role: MessageRole.USER, content: "Hi" }] });
 
     expect(mockConversationsCreate).toHaveBeenCalledOnce();
-    expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
+    expect(parts.find((p) => p.type === "run-start")).toMatchObject({
       sessionId: "conv_new",
     });
     expect(parts.filter((p) => p.type === "text-delta")).toHaveLength(2);

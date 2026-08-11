@@ -787,7 +787,7 @@ class OpenAIProvider {
     let lastSequenceNumber = Number(checkpoint.lastEventId) || -1;
     let retries = 0;
 
-    yield { type: "stream-start", sessionId };
+    yield { type: "run-start", sessionId };
 
     while (retries <= MAX_RECONNECT_RETRIES) {
       try {

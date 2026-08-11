@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
+import {
+  mapEvent,
+  ResponseAccumulator,
+} from "../../src/anthropic/anthropic-parser.js";
 import { MessageRole } from "../../src/types.js";
 import { config, mockSse } from "./_helpers.js";
 
@@ -43,7 +47,7 @@ describe("createAnthropicProvider", () => {
 });
 
 describe("stream — new session", () => {
-  it("creates a session, yields stream-start + message + finish, resolves response", async () => {
+  it("creates a session, yields run-start + message + finish, resolves response", async () => {
     mockCreate.mockResolvedValue({ id: "sess_new" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -72,7 +76,7 @@ describe("stream — new session", () => {
 
     expect(mockCreate).toHaveBeenCalledOnce();
     expect(mockSend).toHaveBeenCalledOnce();
-    expect(parts.find((p) => p.type === "stream-start")).toMatchObject({
+    expect(parts.find((p) => p.type === "run-start")).toMatchObject({
       sessionId: "sess_new",
     });
     expect(parts.find((p) => p.type === "message")).toMatchObject({
@@ -83,6 +87,26 @@ describe("stream — new session", () => {
     expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
+  });
+});
+
+describe("parser — session.status_running", () => {
+  it("yields run-start before status-change running", () => {
+    const parts = [
+      ...mapEvent(
+        {
+          type: "session.status_running",
+          id: "evt_running",
+          processed_at: "2024-01-01T00:00:00Z",
+        } as any,
+        new ResponseAccumulator(),
+      ),
+    ];
+
+    expect(parts).toEqual([
+      { type: "run-start" },
+      { type: "status-change", status: "running" },
+    ]);
   });
 });
 

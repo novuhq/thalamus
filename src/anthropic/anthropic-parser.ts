@@ -188,6 +188,7 @@ export function* mapEvent(
     }
 
     case "session.status_running": {
+      yield { type: "run-start" };
       yield { type: "status-change", status: "running" };
       break;
     }

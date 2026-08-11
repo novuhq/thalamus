@@ -83,7 +83,7 @@ export function* mapEvent(
       acc.sessionId = event.response.id;
       acc.conversationId = event.response.conversation?.id;
       yield {
-        type: "stream-start",
+        type: "run-start",
         sessionId: acc.conversationId ?? acc.sessionId,
       };
       break;

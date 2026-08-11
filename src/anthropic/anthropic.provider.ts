@@ -687,7 +687,7 @@ class AnthropicProvider {
           })
       : undefined;
 
-    yield { type: "stream-start", sessionId };
+    yield { type: "run-start", sessionId };
 
     const sseStream = stillRunning
       ? await client.beta.sessions.events.stream(sessionId)
@@ -751,7 +751,7 @@ class AnthropicProvider {
           providerOptions: params.providerOptions,
         }));
 
-      yield { type: "stream-start", sessionId };
+      yield { type: "run-start", sessionId };
 
       if (params.agent) {
         await this.applyAgentOverrides(client, sessionId, params.agent);

@@ -322,7 +322,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `mcp-tools-discovered` | `serverName`, `tools: McpToolDef[]` |
 | `mcp-server-failure` | `reason` (`authentication` \| `connection`), `serverName`, `message` (non-fatal; MCP init failed) |
 | `status-change` | `status: 'running' \| 'queued' \| 'retrying' \| 'idle'` |
-| `stream-start` | `sessionId?` |
+| `run-start` | `sessionId?` |
 | `finish` | `response: Response` |
 | `error` | `error: Error` |
 | `provider-event` | `provider`, `event`, `data` (escape hatch) |
@@ -347,7 +347,7 @@ interface StreamCallbacks {
   onMcpToolsDiscovered?: ...;
   onMcpServerFailure?: ...;
   onStatusChange?: ...;
-  onStreamStart?: ...;
+  onRunStart?: ...;
   onFinish?: ...;
   onError?: ...;
   onProviderEvent?: ...;

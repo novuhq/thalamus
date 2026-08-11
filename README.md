@@ -252,7 +252,7 @@ onToolUseDone: ({ toolName }) => {
 | `onMcpToolsDiscovered` | `mcp-tools-discovered` | MCP server tools discovered |
 | `onMcpServerFailure` | `mcp-server-failure` | MCP init failed (auth/connection); non-fatal, session continues without that server |
 | `onStatusChange` | `status-change` | Agent status changed |
-| `onStreamStart` | `stream-start` | Stream opened, includes `sessionId` |
+| `onRunStart` | `run-start` | Run started, includes `sessionId` when known |
 | `onFinish` | `finish` | Stream complete, includes final `Response` |
 | `onError` | `error` | Error occurred |
 | `onProviderEvent` | `provider-event` | Unmapped provider-specific event (escape hatch) |

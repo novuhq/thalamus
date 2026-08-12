@@ -98,3 +98,61 @@ describe("AWS EdgeObserver auth headers", () => {
     expect(observeBody).toContain('"x-api-key":"aws-api-key-abc123"');
   });
 });
+
+describe("EdgeObserver dispatch ordering", () => {
+  function edgeProvider() {
+    return createAnthropicProvider({
+      ...awsConfig,
+      durable: cloudflare({
+        url: "https://worker.example.com",
+        webhook: { url: "https://app.example/webhook", secret: "secret" },
+      }),
+    });
+  }
+
+  it("attaches the observer before dispatching the turn", async () => {
+    const order: string[] = [];
+    mockCreate.mockResolvedValue({ id: "sess_order" });
+    mockSend.mockImplementation(async () => {
+      order.push("dispatch");
+      return {};
+    });
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) return enqueueResponse();
+      if (url.includes("/observe")) order.push("observe");
+      return new Response(null, { status: 204 });
+    });
+
+    await edgeProvider().send({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+    });
+
+    expect(order).toEqual(["observe", "dispatch"]);
+  });
+
+  it("stops the observation when dispatch fails", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_fail" });
+    mockSend.mockRejectedValue(new Error("dispatch exploded"));
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) return enqueueResponse();
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      edgeProvider().send({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+      }),
+    ).rejects.toThrow("dispatch exploded");
+
+    const stopCall = mockFetch.mock.calls.find(
+      (c) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/observe/") &&
+        c[1]?.method === "DELETE",
+    );
+    expect(stopCall).toBeDefined();
+    expect(stopCall?.[0]).toContain("sess_fail");
+  });
+});

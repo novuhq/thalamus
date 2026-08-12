@@ -71,7 +71,7 @@ export interface EdgeObserveParams {
 export interface EdgeObserver {
   /** Reserve a queue slot. Returns "active" if the session is idle (caller should dispatch + observe). */
   enqueue(params: EdgeEnqueueParams): Promise<{ status: "active" | "queued" }>;
-  /** Start observing an SSE stream (called after SDK dispatch). */
+  /** Connect to the event stream. Resolve only when it is ready to receive events. */
   observe(params: EdgeObserveParams): Promise<void>;
   stop(sessionId: string): Promise<void>;
 }

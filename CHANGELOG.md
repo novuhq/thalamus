@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.0-alpha.18 (2026-08-12)
+
+### 🩹 Fixes
+
+- **anthropic:** observe before dispatching edge turns ([#18](https://github.com/novuhq/thalamus/pull/18))
+
+### ❤️ Thank You
+
+- Adam Chmara
+
 ## v0.1.0-alpha.17 (2026-08-11)
 
 ### 🩹 Fixes

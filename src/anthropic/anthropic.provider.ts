@@ -423,8 +423,6 @@ class AnthropicProvider {
       await this.applyAgentOverrides(client, sessionId, params.agent);
     }
 
-    await this.dispatch(client, sessionId, params);
-
     const baseUrl = client.baseURL.replace(/\/+$/, "");
     const observeParams: EdgeObserveParams = {
       sessionId,
@@ -439,7 +437,15 @@ class AnthropicProvider {
       },
     };
 
+    // Connect before dispatch so early run events are not lost.
     await observer.observe(observeParams);
+
+    try {
+      await this.dispatch(client, sessionId, params);
+    } catch (err) {
+      await observer.stop(sessionId).catch(() => {});
+      throw err;
+    }
   }
 
   async dispatchQueued(

@@ -58,7 +58,7 @@ Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth
 
 Anthropic via AWS requires an explicit `apiKey` (AWS Console API key) when `awsRegion` is set. Thalamus does not fall back to the host default AWS credential chain or IAM SigV4 signing.
 
-Gemini Enterprise uses Application Default Credentials (ADC), not an API key. Authenticate with `gcloud auth application-default login` and pass `projectId` (or set `GOOGLE_CLOUD_PROJECT`).
+Gemini Enterprise uses Application Default Credentials (ADC), not an API key. Authenticate with `gcloud auth application-default login` and pass `projectId` in config. The `@google-cloud/discoveryengine` peer requires Node 22+.
 
 ## Core API
 

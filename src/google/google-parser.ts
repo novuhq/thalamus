@@ -30,6 +30,18 @@ export class ResponseAccumulator {
   }
 }
 
+function skippedMessage(reasons: unknown): string {
+  const values = Array.isArray(reasons) ? reasons.map(String) : [];
+  if (values.includes("NON_ASSIST_SEEKING_QUERY_IGNORED")) {
+    return "Gemini Enterprise ignored that as a greeting, not a question. Ask something specific.";
+  }
+  if (values.length > 0) {
+    return `Gemini Enterprise skipped this message (${values.join(", ")}).`;
+  }
+
+  return "Gemini Enterprise skipped this message.";
+}
+
 function answerState(state: unknown): string {
   if (typeof state === "string") return state;
   if (state === STATE.IN_PROGRESS) return "IN_PROGRESS";
@@ -109,6 +121,10 @@ export function* mapChunk(
     acc.finishReason = "stop";
     acc.done = true;
   } else if (state === "SKIPPED") {
+    const reasons = chunk.answer?.assistSkippedReasons ?? [];
+    const skippedText = skippedMessage(reasons);
+    acc.messages.push(skippedText);
+    yield { type: "message", text: skippedText };
     acc.finishReason = "stop";
     acc.done = true;
   } else if (state === "FAILED") {

@@ -2,6 +2,7 @@ export {
   assistantResourceName,
   createGoogleProvider,
   discoveryEngineEndpoint,
+  engineResourceName,
   type GoogleProviderConfig,
   type GoogleStreamAssist,
   mapGoogleError,

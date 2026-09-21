@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProviderAuthError, ProviderRateLimitError } from "../../src/errors.js";
+import {
+  AbortedError,
+  ProviderAuthError,
+  ProviderRateLimitError,
+} from "../../src/errors.js";
 import {
   assistantResourceName,
   createGoogleProvider,
@@ -52,12 +56,28 @@ describe("mapChunk — text fragments", () => {
     expect(acc.finishReason).toBe("error");
   });
 
-  it("treats SKIPPED as a clean stop (greeting ignore)", () => {
+  it("treats SKIPPED as a clean stop with a visible skip message", () => {
     const acc = new ResponseAccumulator();
-    [...mapChunk({ answer: { state: "SKIPPED" } }, acc)];
+    const parts = [
+      ...mapChunk(
+        {
+          answer: {
+            state: "SKIPPED",
+            assistSkippedReasons: ["NON_ASSIST_SEEKING_QUERY_IGNORED"],
+          },
+        },
+        acc,
+      ),
+    ];
     expect(acc.done).toBe(true);
     expect(acc.finishReason).toBe("stop");
-    expect(acc.messages).toEqual([]);
+    expect(parts).toContainEqual({
+      type: "message",
+      text: "Gemini Enterprise ignored that as a greeting, not a question. Ask something specific.",
+    });
+    expect(acc.messages).toEqual([
+      "Gemini Enterprise ignored that as a greeting, not a question. Ask something specific.",
+    ]);
   });
 });
 
@@ -188,6 +208,96 @@ describe("GoogleProvider — continuing session", () => {
     expect(request.query.text).toBe("keep me");
     expect(request.session).toBe(GE_SESSION);
     expect(request.toolsSpec).toEqual({ webGroundingSpec: {} });
+  });
+
+  it("joins text parts on the last user message and does not reuse older turns", async () => {
+    const streamAssist = vi
+      .fn()
+      .mockReturnValue(streamOf(succeeded(GE_SESSION)));
+    const provider = createGoogleProvider({ ...config, streamAssist });
+    await provider.send({
+      messages: [
+        { role: MessageRole.USER, content: "stale" },
+        {
+          role: MessageRole.USER,
+          content: [
+            { type: "text", text: "keep " },
+            { type: "text", text: "me" },
+          ],
+        },
+      ],
+    });
+    expect(streamAssist.mock.calls[0][0].query.text).toBe("keep me");
+
+    streamAssist.mockClear();
+    await provider.send({
+      messages: [
+        { role: MessageRole.USER, content: "stale" },
+        {
+          role: MessageRole.USER,
+          content: [{ type: "image", data: "abc", mediaType: "image/png" }],
+        },
+      ],
+    });
+    expect(streamAssist.mock.calls[0][0].query.text).toBe("");
+  });
+});
+
+describe("GoogleProvider — first-turn lock", () => {
+  it("does not share a lock across two unsessioned sends", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const resume: Array<() => void> = [];
+    const streamAssist = vi.fn().mockImplementation(async function* () {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((resolve) => {
+        resume.push(resolve);
+      });
+      inFlight -= 1;
+      yield succeeded(`${GE_SESSION}-${resume.length}`);
+    });
+    const provider = createGoogleProvider({ ...config, streamAssist });
+    const sends = Promise.all([
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "one" }],
+      }),
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "two" }],
+      }),
+    ]);
+    await vi.waitFor(() => expect(streamAssist).toHaveBeenCalledTimes(2));
+    expect(maxInFlight).toBe(2);
+    for (const release of resume) release();
+    await sends;
+  });
+});
+
+describe("GoogleProvider — abort", () => {
+  it("cancels an in-flight stream when abort fires", async () => {
+    const abort = new AbortController();
+    let rejectWait: (error: Error) => void = () => {};
+    const cancel = vi.fn(() => {
+      rejectWait(Object.assign(new Error("Cancelled"), { name: "AbortError" }));
+    });
+    const streamAssist = vi.fn().mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        await new Promise<never>((_, reject) => {
+          rejectWait = reject;
+        });
+      },
+      cancel,
+    }));
+    const provider = createGoogleProvider({ ...config, streamAssist });
+    const result = provider.send({
+      messages: [{ role: MessageRole.USER, content: "hang" }],
+      abortSignal: abort.signal,
+    });
+    const aborted = expect(result).rejects.toBeInstanceOf(AbortedError);
+    await vi.waitFor(() => expect(streamAssist).toHaveBeenCalledOnce());
+    abort.abort();
+    await aborted;
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 

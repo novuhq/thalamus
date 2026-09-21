@@ -28,6 +28,9 @@
       "openai/parser": [
         "./dist/openai/parser.d.ts"
       ],
+      "google": [
+        "./dist/google/index.d.ts"
+      ],
       "vault": [
         "./dist/vault/index.d.ts"
       ],
@@ -65,6 +68,11 @@
       "import": "./dist/openai/parser.js",
       "require": "./dist/openai/parser.cjs"
     },
+    "./google": {
+      "types": "./dist/google/index.d.ts",
+      "import": "./dist/google/index.js",
+      "require": "./dist/google/index.cjs"
+    },
     "./vault": {
       "types": "./dist/vault/index.d.ts",
       "import": "./dist/vault/index.js",
@@ -95,10 +103,14 @@
     "@anthropic-ai/aws-sdk": ">=0.86.0",
     "@anthropic-ai/sdk": ">=0.86.0",
     "@aws-crypto/sha256-js": ">=5.0.0",
+    "@google-cloud/discoveryengine": ">=3.0.0",
     "@smithy/signature-v4": ">=3.0.0",
     "openai": ">=4.87.0"
   },
   "peerDependenciesMeta": {
+    "@google-cloud/discoveryengine": {
+      "optional": true
+    },
     "@anthropic-ai/sdk": {
       "optional": true
     },
@@ -123,6 +135,7 @@
     "@anthropic-ai/sdk": "^0.98.0",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@biomejs/biome": "latest",
+    "@google-cloud/discoveryengine": "^3.2.0",
     "@smithy/signature-v4": "^5.4.1",
     "@types/node": "^25.7.0",
     "dotenv": "^17.4.2",

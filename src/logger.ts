@@ -1,6 +1,6 @@
 export type LogContext = Record<string, unknown> & {
   stage: string;
-  provider?: "anthropic" | "openai";
+  provider?: "anthropic" | "google" | "openai";
   sessionId?: string;
   runId?: string;
   turnId?: string;

@@ -34,11 +34,13 @@ export type {
 export { createMemoryVaultStore } from "./vault/index";
 
 import { createAnthropicProvider } from "./anthropic/index";
+import { createGoogleProvider } from "./google/index";
 import { createOpenAIProvider } from "./openai/index";
 
 export const thalamus = {
   anthropic: createAnthropicProvider,
   openai: createOpenAIProvider,
+  google: createGoogleProvider,
 } as const;
 
-export { createAnthropicProvider, createOpenAIProvider };
+export { createAnthropicProvider, createGoogleProvider, createOpenAIProvider };

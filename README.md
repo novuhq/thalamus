@@ -52,6 +52,7 @@ const provider = createOpenAIProvider({
 | Anthropic via AWS | `@novu/thalamus/anthropic` | `@anthropic-ai/aws-sdk` |
 | OpenAI Responses API | `@novu/thalamus/openai` | `openai` |
 | OpenAI via AWS Bedrock Mantle | `@novu/thalamus/openai` | `openai` (+ `@smithy/signature-v4` `@aws-crypto/sha256-js` for SigV4) |
+| Gemini Enterprise | `@novu/thalamus/google` | `@google-cloud/discoveryengine` |
 
 Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth, or `awsCredentials` (access key + secret + optional session token) for SigV4 signing. SigV4 requires the additional peer deps listed above.
 
@@ -89,6 +90,7 @@ import { thalamus } from '@novu/thalamus';
 
 const provider = thalamus.anthropic({ /* config */ });
 const provider = thalamus.openai({ /* config */ });
+const provider = thalamus.google({ /* config */ });
 ```
 
 ### send() and SendResult
@@ -242,7 +244,7 @@ onToolUseDone: ({ toolName }) => {
 |---|---|---|
 | `onPart` | all | Fires for every event, before type-specific callbacks |
 | `onMessage` | `message` | One complete assistant message (all providers) |
-| `onTextDelta` | `text-delta` | Incremental text output (OpenAI only) |
+| `onTextDelta` | `text-delta` | Incremental text output (OpenAI and Google) |
 | `onThinking` | `thinking` | Model reasoning content |
 | `onRefusal` | `refusal` | Model refused to respond |
 | `onToolUseStart` | `tool-use-start` | Tool call initiated |
@@ -257,7 +259,7 @@ onToolUseDone: ({ toolName }) => {
 | `onError` | `error` | Error occurred |
 | `onProviderEvent` | `provider-event` | Unmapped provider-specific event (escape hatch) |
 
-> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted **only** by providers that stream tokens (OpenAI); Anthropic does not emit `text-delta`. The final `Response.messages` holds every `message` of the turn.
+> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted by providers that stream tokens (OpenAI and Google); Anthropic does not emit `text-delta`. The final `Response.messages` holds every `message` of the turn.
 
 </details>
 
@@ -700,6 +702,7 @@ try {
 | `@novu/thalamus` | Core types, errors, `thalamus` factory, `createMemoryVaultStore`, logger helpers |
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
+| `@novu/thalamus/google` | `createGoogleProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
 | `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
 | `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver (optional `logger`) |

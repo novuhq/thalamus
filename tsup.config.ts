@@ -7,6 +7,7 @@ export default defineConfig({
     "anthropic/parser": "src/anthropic/parser.ts",
     "openai/index": "src/openai/index.ts",
     "openai/parser": "src/openai/parser.ts",
+    "google/index": "src/google/index.ts",
     "vault/index": "src/vault/index.ts",
     "durable/index": "src/durable/index.ts",
     "webhook/index": "src/webhook/index.ts",

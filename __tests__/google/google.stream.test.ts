@@ -3,6 +3,7 @@ import {
   AbortedError,
   ProviderAuthError,
   ProviderRateLimitError,
+  ThalamusError,
 } from "../../src/errors.js";
 import {
   assistantResourceName,
@@ -62,9 +63,11 @@ describe("mapChunk — text fragments", () => {
     expect(acc.messages).toEqual(["Hello"]);
   });
 
-  it("marks finishReason error on FAILED", () => {
+  it("throws on FAILED so send() rejects", () => {
     const acc = new ResponseAccumulator();
-    [...mapChunk({ answer: { state: "FAILED" } }, acc)];
+    expect(() => [...mapChunk({ answer: { state: "FAILED" } }, acc)]).toThrow(
+      ThalamusError,
+    );
     expect(acc.done).toBe(true);
     expect(acc.finishReason).toBe("error");
   });
@@ -241,18 +244,31 @@ describe("GoogleProvider — continuing session", () => {
       ],
     });
     expect(streamAssist.mock.calls[0][0].query.text).toBe("keep me");
+  });
 
-    streamAssist.mockClear();
-    await provider.send({
-      messages: [
-        { role: MessageRole.USER, content: "stale" },
-        {
-          role: MessageRole.USER,
-          content: [{ type: "image", data: "abc", mediaType: "image/png" }],
-        },
-      ],
+  it("rejects image, image-url, and file parts instead of dropping them", async () => {
+    const streamAssist = vi
+      .fn()
+      .mockReturnValue(streamOf(succeeded(GE_SESSION)));
+    const provider = createGoogleProvider({ ...config, streamAssist });
+    await expect(
+      provider.send({
+        messages: [
+          { role: MessageRole.USER, content: "stale" },
+          {
+            role: MessageRole.USER,
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", data: "abc", mediaType: "image/png" },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      name: "ThalamusError",
+      message: expect.stringContaining("image"),
     });
-    expect(streamAssist.mock.calls[0][0].query.text).toBe("");
+    expect(streamAssist).not.toHaveBeenCalled();
   });
 });
 
@@ -353,6 +369,19 @@ describe("GoogleProvider — streaming parts", () => {
 });
 
 describe("GoogleProvider — errors", () => {
+  it("rejects send() when the answer state is FAILED", async () => {
+    const provider = createGoogleProvider({
+      ...config,
+      streamAssist: () => streamOf({ answer: { state: "FAILED" } }),
+    });
+    await expect(
+      provider.send({ messages: [{ role: MessageRole.USER, content: "x" }] }),
+    ).rejects.toMatchObject({
+      name: "ThalamusError",
+      message: "Gemini Enterprise answer failed",
+    });
+  });
+
   it("maps gRPC 16 to ProviderAuthError", async () => {
     const err = Object.assign(new Error("UNAUTHENTICATED"), { code: 16 });
     const provider = createGoogleProvider({

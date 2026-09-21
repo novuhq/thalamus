@@ -1,5 +1,10 @@
 import type { protos } from "@google-cloud/discoveryengine";
-import type { StreamPart, Response as ThalamusResponse } from "../types";
+import { ThalamusError } from "../errors";
+import {
+  GOOGLE,
+  type StreamPart,
+  type Response as ThalamusResponse,
+} from "../types";
 
 export type StreamAssistResponse =
   protos.google.cloud.discoveryengine.v1beta.IStreamAssistResponse;
@@ -135,5 +140,9 @@ export function* mapChunk(
   } else if (state === "FAILED") {
     acc.finishReason = "error";
     acc.done = true;
+    throw new ThalamusError("Gemini Enterprise answer failed", {
+      provider: GOOGLE,
+      isRetryable: false,
+    });
   }
 }

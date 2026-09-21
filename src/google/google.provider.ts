@@ -111,12 +111,27 @@ export function engineResourceName(config: GoogleProviderConfig): string {
   );
 }
 
+const UNSUPPORTED_QUERY_PARTS = new Set(["image", "image-url", "file"]);
+
 /** GE `streamAssist` takes one `query.text`. History lives in the GE session. */
 function toQuery(messages: Message[]): { text: string } {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== MessageRole.USER) continue;
     if (typeof msg.content === "string") return { text: msg.content };
+    const unsupported = [
+      ...new Set(
+        msg.content
+          .filter((part) => UNSUPPORTED_QUERY_PARTS.has(part.type))
+          .map((part) => part.type),
+      ),
+    ];
+    if (unsupported.length > 0) {
+      throw new ThalamusError(
+        `Gemini Enterprise streamAssist only accepts text. This turn includes ${unsupported.join(", ")}.`,
+        { provider: GOOGLE, isRetryable: false },
+      );
+    }
     const text = msg.content
       .filter(
         (part): part is { type: "text"; text: string } => part.type === "text",

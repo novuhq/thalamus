@@ -76,7 +76,8 @@ function* emitTool(
 
 /**
  * Maps one `streamAssist` proto chunk to StreamParts.
- * Text: `answer.replies[].groundedContent.content.text` (skip `thought: true`).
+ * Text: `answer.replies[].groundedContent.content.text`.
+ * `thought: true` → `thinking`; otherwise `text-delta`.
  * Tools: `invocationTools`, `invokedSkills`, and web-grounding references.
  */
 export function* mapChunk(
@@ -98,9 +99,13 @@ export function* mapChunk(
   for (const reply of chunk.answer?.replies ?? []) {
     const grounded = reply.groundedContent;
     const content = grounded?.content;
-    if (content?.text && !content.thought) {
-      acc.text += content.text;
-      yield { type: "text-delta", text: content.text };
+    if (content?.text) {
+      if (content.thought) {
+        yield { type: "thinking", text: content.text };
+      } else {
+        acc.text += content.text;
+        yield { type: "text-delta", text: content.text };
+      }
     }
 
     const refs = grounded?.textGroundingMetadata?.references ?? [];

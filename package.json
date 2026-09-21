@@ -31,6 +31,9 @@
       "google": [
         "./dist/google/index.d.ts"
       ],
+      "google/parser": [
+        "./dist/google/parser.d.ts"
+      ],
       "vault": [
         "./dist/vault/index.d.ts"
       ],
@@ -72,6 +75,11 @@
       "types": "./dist/google/index.d.ts",
       "import": "./dist/google/index.js",
       "require": "./dist/google/index.cjs"
+    },
+    "./google/parser": {
+      "types": "./dist/google/parser.d.ts",
+      "import": "./dist/google/parser.js",
+      "require": "./dist/google/parser.cjs"
     },
     "./vault": {
       "types": "./dist/vault/index.d.ts",

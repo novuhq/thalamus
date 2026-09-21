@@ -26,10 +26,14 @@ import {
 afterEach(() => vi.clearAllMocks());
 
 describe("mapChunk — text fragments", () => {
-  it("appends groundedContent.text and skips thought fragments", () => {
+  it("emits thinking for thought fragments and text-delta for answer text", () => {
     const acc = new ResponseAccumulator();
-    const thought = [...mapChunk(replyText("hidden", true), acc)];
-    expect(thought).toEqual([]);
+    const thought = [
+      ...mapChunk(replyText("I will search the web.", true), acc),
+    ];
+    expect(thought).toEqual([
+      { type: "thinking", text: "I will search the web." },
+    ]);
     expect(acc.text).toBe("");
 
     const parts = [...mapChunk(replyText("Hell"), acc)];
@@ -37,6 +41,15 @@ describe("mapChunk — text fragments", () => {
     const more = [...mapChunk(replyText("o"), acc)];
     expect(more).toContainEqual({ type: "text-delta", text: "o" });
     expect(acc.text).toBe("Hello");
+  });
+
+  it("does not include thought text in the final message", () => {
+    const acc = new ResponseAccumulator();
+    [...mapChunk(replyText("planning", true), acc)];
+    [...mapChunk(replyText("pong"), acc)];
+    const parts = [...mapChunk(succeeded(), acc)];
+    expect(parts).toContainEqual({ type: "message", text: "pong" });
+    expect(acc.messages).toEqual(["pong"]);
   });
 
   it("emits message and marks done on SUCCEEDED", () => {

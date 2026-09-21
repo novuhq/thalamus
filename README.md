@@ -11,7 +11,7 @@ Thalamus gives you a single `Provider` interface that normalizes all of it, so y
 ## Quick Start
 
 ```bash
-npm install @novu/thalamus @anthropic-ai/sdk  # or: openai
+npm install @novu/thalamus @anthropic-ai/sdk  # or: openai / @google-cloud/discoveryengine
 ```
 
 ```typescript
@@ -57,6 +57,8 @@ const provider = createOpenAIProvider({
 Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth, or `awsCredentials` (access key + secret + optional session token) for SigV4 signing. SigV4 requires the additional peer deps listed above.
 
 Anthropic via AWS requires an explicit `apiKey` (AWS Console API key) when `awsRegion` is set. Thalamus does not fall back to the host default AWS credential chain or IAM SigV4 signing.
+
+Gemini Enterprise uses Application Default Credentials (ADC), not an API key. Authenticate with `gcloud auth application-default login` and pass `projectId` (or set `GOOGLE_CLOUD_PROJECT`).
 
 ## Core API
 
@@ -245,7 +247,7 @@ onToolUseDone: ({ toolName }) => {
 | `onPart` | all | Fires for every event, before type-specific callbacks |
 | `onMessage` | `message` | One complete assistant message (all providers) |
 | `onTextDelta` | `text-delta` | Incremental text output (OpenAI and Google) |
-| `onThinking` | `thinking` | Model reasoning content |
+| `onThinking` | `thinking` | Model reasoning content (OpenAI and Google) |
 | `onRefusal` | `refusal` | Model refused to respond |
 | `onToolUseStart` | `tool-use-start` | Tool call initiated |
 | `onToolUseDelta` | `tool-use-delta` | Streaming tool call arguments |

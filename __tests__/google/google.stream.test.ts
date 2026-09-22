@@ -226,6 +226,55 @@ describe("GoogleProvider — continuing session", () => {
     expect(request.toolsSpec).toEqual({ webGroundingSpec: {} });
   });
 
+  it("routes to a configured agent via agentsSpec", async () => {
+    const streamAssist = vi
+      .fn()
+      .mockReturnValue(streamOf(succeeded(GE_SESSION)));
+    const provider = createGoogleProvider({
+      ...config,
+      agentId: "deep_research",
+      streamAssist,
+    });
+    await provider.send({
+      messages: [{ role: MessageRole.USER, content: "research this" }],
+    });
+    const request = streamAssist.mock.calls[0][0];
+    expect(request.agentsSpec).toEqual({
+      agentSpecs: [{ agentId: "deep_research" }],
+    });
+  });
+
+  it("omits agentsSpec when no agent is configured", async () => {
+    const streamAssist = vi
+      .fn()
+      .mockReturnValue(streamOf(succeeded(GE_SESSION)));
+    const provider = createGoogleProvider({ ...config, streamAssist });
+    await provider.send({
+      messages: [{ role: MessageRole.USER, content: "plain" }],
+    });
+    const request = streamAssist.mock.calls[0][0];
+    expect(request.agentsSpec).toBeUndefined();
+  });
+
+  it("does not let providerOptions overwrite agentsSpec", async () => {
+    const streamAssist = vi
+      .fn()
+      .mockReturnValue(streamOf(succeeded(GE_SESSION)));
+    const provider = createGoogleProvider({
+      ...config,
+      agentId: "deep_research",
+      streamAssist,
+    });
+    await provider.send({
+      messages: [{ role: MessageRole.USER, content: "keep me" }],
+      providerOptions: { agentsSpec: { agentSpecs: [{ agentId: "evil" }] } },
+    });
+    const request = streamAssist.mock.calls[0][0];
+    expect(request.agentsSpec).toEqual({
+      agentSpecs: [{ agentId: "deep_research" }],
+    });
+  });
+
   it("joins text parts on the last user message and does not reuse older turns", async () => {
     const streamAssist = vi
       .fn()

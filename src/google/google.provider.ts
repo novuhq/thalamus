@@ -73,6 +73,12 @@ export interface GoogleProviderConfig {
   /** Gemini Enterprise assistant ID. Defaults to `"default_assistant"`. */
   assistantId?: string;
   /**
+   * Registered agent ID within the assistant (Discovery Engine console →
+   * App → Agents). Routes the request to that specific agent instead of
+   * the assistant's default behavior. Omit to use the assistant directly.
+   */
+  agentId?: string;
+  /**
    * Billing/quota project for `x-goog-user-project`.
    * Defaults to `projectId`.
    */
@@ -148,16 +154,19 @@ function streamAssistRequest(
   messages: Message[],
   sessionId: string | undefined,
   providerOptions?: Record<string, unknown>,
+  agentId?: string,
 ): StreamAssistRequest {
   const extras = { ...(providerOptions ?? {}) } as StreamAssistRequest;
   delete extras.name;
   delete extras.query;
   delete extras.session;
+  delete extras.agentsSpec;
   return {
     ...extras,
     name,
     query: toQuery(messages),
     ...(sessionId ? { session: sessionId } : {}),
+    ...(agentId ? { agentsSpec: { agentSpecs: [{ agentId }] } } : {}),
   };
 }
 
@@ -486,6 +495,7 @@ class GoogleProvider {
         params.messages,
         sessionId,
         params.providerOptions,
+        this.config.agentId,
       );
 
       yield { type: "status-change", status: "running" };

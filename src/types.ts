@@ -332,3 +332,4 @@ export type Provider = StreamingProvider | WebhookProvider;
 
 export const ANTHROPIC = "anthropic" as const;
 export const OPENAI = "openai" as const;
+export const GOOGLE = "google" as const;

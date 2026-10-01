@@ -242,7 +242,8 @@ onToolUseDone: ({ toolName }) => {
 |---|---|---|
 | `onPart` | all | Fires for every event, before type-specific callbacks |
 | `onMessage` | `message` | One complete assistant message (all providers) |
-| `onTextDelta` | `text-delta` | Incremental text output (OpenAI only) |
+| `onTextStart` | `text-start` | A keyed message preview started (Anthropic) |
+| `onTextDelta` | `text-delta` | Incremental text output (OpenAI, Anthropic) |
 | `onThinking` | `thinking` | Model reasoning content |
 | `onRefusal` | `refusal` | Model refused to respond |
 | `onToolUseStart` | `tool-use-start` | Tool call initiated |
@@ -257,7 +258,7 @@ onToolUseDone: ({ toolName }) => {
 | `onError` | `error` | Error occurred |
 | `onProviderEvent` | `provider-event` | Unmapped provider-specific event (escape hatch) |
 
-> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted **only** by providers that stream tokens (OpenAI); Anthropic does not emit `text-delta`. The final `Response.messages` holds every `message` of the turn.
+> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted **only** by providers that stream tokens. OpenAI streams tokens; Anthropic streams Managed Agents message previews (`event_deltas[]=agent.message`, always requested). Ignore `text-start` / `text-delta` if you only need final text. Anthropic previews are keyed: `text-start` and every `text-delta` carry the `messageId` of the final `message`. They are best effort: deltas can stop early (shed under load, not replayed on reconnect), and an interrupted or failed model request produces previews with no final `message`. The final `Response.messages` holds every `message` of the turn and never includes preview text.
 
 </details>
 

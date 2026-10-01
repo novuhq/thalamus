@@ -145,10 +145,18 @@ export interface Response {
 export type AgentStatus = "running" | "queued" | "retrying" | "idle";
 
 export type StreamPart =
-  /** One complete assistant message. The atomic text unit across all providers. */
-  | { type: "message"; text: string }
-  /** Incremental token chunk. Only emitted by providers that stream (e.g. OpenAI). */
-  | { type: "text-delta"; text: string }
+  /** One complete assistant message. `messageId`, when present, matches its `text-start` / `text-delta` parts. */
+  | { type: "message"; text: string; messageId?: string }
+  /**
+   * A message preview started (Anthropic). The `message` with the same
+   * `messageId` follows, unless the model request is interrupted or fails.
+   */
+  | { type: "text-start"; messageId: string }
+  /**
+   * Incremental text, best effort and never in `Response.messages`.
+   * Keyed by `messageId` on Anthropic, unkeyed on OpenAI.
+   */
+  | { type: "text-delta"; text: string; messageId?: string }
   | { type: "refusal"; text: string }
   | { type: "thinking"; text: string }
   | {
@@ -207,6 +215,9 @@ export interface StreamCallbacks {
   /** Fires once per complete assistant message. The atomic text unit across all providers. */
   onMessage?: (
     part: Extract<StreamPart, { type: "message" }>,
+  ) => void | Promise<void>;
+  onTextStart?: (
+    part: Extract<StreamPart, { type: "text-start" }>,
   ) => void | Promise<void>;
   onTextDelta?: (
     part: Extract<StreamPart, { type: "text-delta" }>,

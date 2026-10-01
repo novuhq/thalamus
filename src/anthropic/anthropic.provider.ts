@@ -4,6 +4,7 @@ import type {
   BetaManagedAgentsUserCustomToolResultEventParams,
   BetaManagedAgentsUserToolConfirmationEventParams,
   EventSendParams,
+  EventStreamParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import type { CloudflareEdgeObserver } from "../durable/cloudflare";
@@ -49,6 +50,14 @@ import { AnthropicVault } from "./anthropic.vault";
 import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
 import { buildSessionAgentUpdate } from "./session-overrides";
 import { toAnthropicToolResultContent } from "./tool-result";
+
+/** Request `agent.message` previews on every stream connection. */
+const STREAM_PARAMS = {
+  event_deltas: ["agent.message"],
+} satisfies EventStreamParams;
+
+/** The same request for the edge observer, which fetches the raw SSE URL itself. */
+const STREAM_QUERY = `?${new URLSearchParams(STREAM_PARAMS.event_deltas.map((t) => ["event_deltas[]", t]))}`;
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   if (err instanceof APIUserAbortError) {
@@ -428,7 +437,7 @@ class AnthropicProvider {
       sessionId,
       runId,
       turnId,
-      streamUrl: `${baseUrl}/v1/sessions/${sessionId}/events/stream`,
+      streamUrl: `${baseUrl}/v1/sessions/${sessionId}/events/stream${STREAM_QUERY}`,
       headers: this.buildApiHeaders(client),
       provider: ANTHROPIC,
       webhook: {
@@ -513,16 +522,20 @@ class AnthropicProvider {
    * Optional onEvent callback fires after each new event (used for checkpointing).
    */
   private async *consumeEvents(
-    source: AsyncIterable<{ id: string }>,
+    source: AsyncIterable<BetaManagedAgentsStreamSessionEvents>,
     seenIds: Set<string>,
     acc: ResponseAccumulator,
     onEvent?: (eventId: string) => Promise<void>,
   ): AsyncGenerator<StreamPart> {
     for await (const raw of source) {
-      if (seenIds.has(raw.id)) continue;
-      seenIds.add(raw.id);
-      yield* mapEvent(raw as BetaManagedAgentsStreamSessionEvents, acc);
-      if (onEvent) await onEvent(raw.id);
+      // Previews have no id and are not in history: never dedup or checkpoint them.
+      const id = "id" in raw ? raw.id : undefined;
+      if (id) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
+      yield* mapEvent(raw, acc);
+      if (id && onEvent) await onEvent(id);
       if (acc.done) return;
     }
   }
@@ -564,7 +577,7 @@ class AnthropicProvider {
       try {
         const sseStream = await client.beta.sessions.events.stream(
           sessionId,
-          undefined,
+          STREAM_PARAMS,
           { signal },
         );
 
@@ -696,7 +709,7 @@ class AnthropicProvider {
     yield { type: "run-start", sessionId };
 
     const sseStream = stillRunning
-      ? await client.beta.sessions.events.stream(sessionId)
+      ? await client.beta.sessions.events.stream(sessionId, STREAM_PARAMS)
       : undefined;
 
     const allEvents = await client.beta.sessions.events.list(sessionId);

@@ -674,8 +674,8 @@ const handler = createWebhookHandler({
         case 'message': // complete assistant message — replaces the preview with the same messageId
           pushToClient(sessionId, part.text, part.messageId);
           break;
-        case 'text-start': // live text via the observer; don't await, later webhooks wait on it
-          void thread.post(observer.live(sessionId, part.messageId));
+        case 'text-start': // live text via the observer; don't await (later webhooks wait on it), but catch drops
+          thread.post(observer.live(sessionId, part.messageId)).catch(console.warn);
           break;
         case 'finish':
           saveResponse(sessionId, part.response);
@@ -908,7 +908,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `encodeLiveEvent()`, `DurabilityBackend`, `EdgeObserver`, `LiveEvent` |
 | `@novu/thalamus/webhook` | `createWebhookHandler`, `createProviderWebhookHandler` — HMAC-verified webhook receiver |
 
 ## Key Design Notes

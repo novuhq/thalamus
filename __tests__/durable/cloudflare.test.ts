@@ -184,10 +184,17 @@ describe("cloudflare() edge observer", () => {
   });
 });
 
-/** One network read per chunk; `open` leaves the body hanging after the chunks. */
+/**
+ * One network read per chunk; `open` leaves the body hanging after the chunks.
+ * Like real fetch, aborting `signal` errors the body with an AbortError.
+ */
 function sseResponse(
   chunks: (string | Uint8Array)[],
-  { open = false, onCancel = () => {} } = {},
+  {
+    open = false,
+    onCancel = () => {},
+    signal,
+  }: { open?: boolean; onCancel?: () => void; signal?: AbortSignal } = {},
 ) {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -198,6 +205,7 @@ function sseResponse(
         );
       }
       if (!open) controller.close();
+      signal?.addEventListener("abort", () => controller.error(signal.reason));
     },
     cancel: onCancel,
   });
@@ -321,12 +329,14 @@ describe("cloudflare() live text stream", () => {
     ).rejects.toThrow("cloudflare live stream closed before end");
   });
 
-  it("stops reading and rejects with AbortError when the signal aborts", async () => {
-    const onCancel = vi.fn();
-    mockFetch.mockResolvedValueOnce(
-      sseResponse([textEvent("Hel")], { open: true, onCancel }),
-    );
+  it("passes the signal to fetch and rejects with its AbortError", async () => {
     const controller = new AbortController();
+    mockFetch.mockResolvedValueOnce(
+      sseResponse([textEvent("Hel")], {
+        open: true,
+        signal: controller.signal,
+      }),
+    );
 
     const stream = cloudflare(defaultOptions)
       .live("sess_1", "sevt_a", { signal: controller.signal })
@@ -339,7 +349,6 @@ describe("cloudflare() live text stream", () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(onCancel).toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ signal: controller.signal }),
@@ -364,12 +373,17 @@ describe("cloudflare() live text stream", () => {
 });
 
 describe("encodeLiveEvent", () => {
-  it("writes the SSE frames the live client reads", () => {
-    expect(encodeLiveEvent({ type: "text", text: 'say "hi"\n' })).toBe(
-      'event: text\ndata: {"text":"say \\"hi\\"\\n"}\n\n',
+  it("writes frames that live() reads back unchanged", async () => {
+    const texts = ['say "hi"\n\n', "line\r\nbreak", "data: event: end", "é🙂"];
+    mockFetch.mockResolvedValueOnce(
+      sseResponse([
+        ...texts.map((text) => encodeLiveEvent({ type: "text", text })),
+        encodeLiveEvent({ type: "end", reason: "interrupted" }),
+      ]),
     );
-    expect(encodeLiveEvent({ type: "end", reason: "interrupted" })).toBe(
-      'event: end\ndata: {"reason":"interrupted"}\n\n',
-    );
+
+    await expect(
+      collect(cloudflare(defaultOptions).live("sess_1", "sevt_a")),
+    ).resolves.toEqual(texts);
   });
 });

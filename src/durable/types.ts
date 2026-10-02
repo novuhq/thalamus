@@ -20,7 +20,6 @@ export interface DurabilityBackend {
 /* ------------------------------------------------------------------ */
 
 import type { AgentSessionConfig, Message, ToolResult } from "../types";
-import type { LiveOptions } from "./live";
 
 /** Subset of RequestParams safe to serialize (no AbortSignal, no functions). */
 export interface SerializedRequestParams {
@@ -75,12 +74,6 @@ export interface EdgeObserver {
   /** Connect to the event stream. Resolve only when it is ready to receive events. */
   observe(params: EdgeObserveParams): Promise<void>;
   stop(sessionId: string): Promise<void>;
-  /** Live text of one reply (`text-start` messageId) while the observer streams it. */
-  live?(
-    sessionId: string,
-    messageId: string,
-    opts?: LiveOptions,
-  ): AsyncIterable<string>;
 }
 
 /* ------------------------------------------------------------------ */

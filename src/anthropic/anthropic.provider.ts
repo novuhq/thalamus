@@ -532,7 +532,7 @@ class AnthropicProvider {
     onEvent?: (eventId: string) => Promise<void>,
   ): AsyncGenerator<StreamPart> {
     for await (const raw of source) {
-      // Previews have no id and are not in history: never dedup or checkpoint them.
+      // Previews have no id and are not in history: never record or checkpoint them.
       const id = "id" in raw ? raw.id : undefined;
       if (id) {
         if (seenIds.has(id)) continue;

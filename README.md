@@ -525,7 +525,8 @@ const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — trace webhook ingress
   onSessionEvents: (sessionId, runId, metadata) => ({
-    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+    // Webhooks carry no per-token text-delta; see "Live text in webhook mode" below.
+    onMessage: ({ text }) => pushToClient(sessionId, text),
 
     // Async callbacks are awaited — the webhook handler only responds 200
     // after this completes, so the Observer won't send the next event until
@@ -584,8 +585,9 @@ const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   onSessionEvents: ({ sessionId }) => ({
     // Do not await: the observer holds later webhooks until this callback returns.
+    // Catch: live() throws if the connection drops, and an unhandled rejection exits Node.
     onTextStart: ({ messageId }) => {
-      void thread.post(observer.live(sessionId, messageId));
+      thread.post(observer.live(sessionId, messageId)).catch(console.warn);
     },
     // Authoritative text for the same messageId.
     onMessage: ({ messageId, text }) => saveMessage(sessionId, messageId, text),

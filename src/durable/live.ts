@@ -34,17 +34,13 @@ function parseFrame(frame: string): LiveEvent | undefined {
 /** Reads live events from an SSE body. Comments and unknown events are skipped. */
 export async function* readLiveEvents(
   body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
 ): AsyncGenerator<LiveEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const onAbort = () => void reader.cancel(signal?.reason).catch(() => {});
-  signal?.addEventListener("abort", onAbort, { once: true });
   let buffer = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
-      signal?.throwIfAborted();
       if (done) return;
       buffer = (buffer + decoder.decode(value, { stream: true })).replace(
         /\r\n/g,
@@ -58,7 +54,6 @@ export async function* readLiveEvents(
       }
     }
   } finally {
-    signal?.removeEventListener("abort", onAbort);
     await reader.cancel().catch(() => {});
   }
 }

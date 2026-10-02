@@ -86,7 +86,7 @@ export function cloudflare(
       if (!res.ok || !res.body) {
         throw new Error(`cloudflare live failed: ${res.status}`);
       }
-      for await (const event of readLiveEvents(res.body, opts.signal)) {
+      for await (const event of readLiveEvents(res.body)) {
         if (event.type === "end") return;
         yield event.text;
       }

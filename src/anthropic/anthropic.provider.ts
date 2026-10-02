@@ -47,7 +47,11 @@ import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
 import { buildSendEvents } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
-import { mapEvent, ResponseAccumulator } from "./anthropic-parser";
+import {
+  mapEvent,
+  previewMessageId,
+  ResponseAccumulator,
+} from "./anthropic-parser";
 import { buildSessionAgentUpdate } from "./session-overrides";
 import { toAnthropicToolResultContent } from "./tool-result";
 
@@ -533,6 +537,10 @@ class AnthropicProvider {
       if (id) {
         if (seenIds.has(id)) continue;
         seenIds.add(id);
+      } else {
+        // After a reconnect, history can deliver a message before its buffered previews.
+        const previewOf = previewMessageId(raw);
+        if (previewOf && seenIds.has(previewOf)) continue;
       }
       yield* mapEvent(raw, acc);
       if (id && onEvent) await onEvent(id);

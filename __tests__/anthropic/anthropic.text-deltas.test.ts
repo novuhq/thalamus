@@ -275,4 +275,45 @@ describe("anthropic text deltas — durability", () => {
     const checkpointIds = save.mock.calls.map(([cp]) => cp.lastEventId);
     expect(checkpointIds).toEqual(["sevt_1", "sevt_2", "evt_idle"]);
   });
+
+  it("drops stale previews of a message already delivered from history after a reconnect", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_rc" });
+    mockSend.mockResolvedValue({});
+    mockSseStream.mockResolvedValueOnce({
+      [Symbol.asyncIterator]: async function* () {
+        yield start("sevt_a");
+        yield delta("sevt_a", "Hel");
+        throw new TypeError("socket hang up");
+      },
+    });
+    // The message finished while disconnected: history has it, and the new
+    // stream still carries a buffered delta from before it finished.
+    mockList.mockResolvedValueOnce(mockSse([message("sevt_a", "Hello")]));
+    mockSseStream.mockResolvedValueOnce(
+      mockSse([
+        delta("sevt_a", "lo"),
+        message("sevt_a", "Hello"),
+        idle("evt_idle"),
+      ]),
+    );
+
+    const parts: StreamPart[] = [];
+    await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onPart: (p) => parts.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "hi" }] });
+
+    expect(
+      parts.filter(
+        (p) =>
+          p.type === "text-start" ||
+          p.type === "text-delta" ||
+          p.type === "message",
+      ),
+    ).toEqual([
+      { type: "text-start", messageId: "sevt_a" },
+      { type: "text-delta", messageId: "sevt_a", text: "Hel" },
+      { type: "message", messageId: "sevt_a", text: "Hello" },
+    ]);
+  });
 });

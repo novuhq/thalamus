@@ -36,6 +36,15 @@ export function isPreviewEvent(event: { type: string }): boolean {
   return event.type === "event_start" || event.type === "event_delta";
 }
 
+/** Id of the event a preview frame belongs to; `undefined` for other events. */
+export function previewMessageId(
+  event: BetaManagedAgentsStreamSessionEvents,
+): string | undefined {
+  if (event.type === "event_start") return event.event.id;
+  if (event.type === "event_delta") return event.event_id;
+  return undefined;
+}
+
 export function mapStopReason(reason: StopReason): Response["finishReason"] {
   switch (reason.type) {
     case "end_turn":

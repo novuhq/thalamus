@@ -669,11 +669,11 @@ const handler = createWebhookHandler({
   onSessionEvents: ({ sessionId, turnId, runId, metadata }) => ({
     onPart(part) {
       switch (part.type) {
-        case 'message': // complete assistant message — all providers
-          pushToClient(sessionId, part.text);
+        case 'message': // complete assistant message — replaces the preview with the same messageId
+          pushToClient(sessionId, part.text, part.messageId);
           break;
-        case 'text-delta': // incremental text — OpenAI and Anthropic
-          pushDeltaToClient(sessionId, part.text);
+        case 'text-delta': // incremental preview text — OpenAI and Anthropic
+          pushDeltaToClient(sessionId, part.text, part.messageId);
           break;
         case 'finish':
           saveResponse(sessionId, part.response);

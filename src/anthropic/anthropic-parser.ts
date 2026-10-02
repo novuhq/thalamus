@@ -27,15 +27,6 @@ import {
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
 
-/**
- * `event_start` / `event_delta` preview frames. They carry no top-level `id`
- * and never appear in `events.list` history, so callers must not dedup or
- * checkpoint on them.
- */
-export function isPreviewEvent(event: { type: string }): boolean {
-  return event.type === "event_start" || event.type === "event_delta";
-}
-
 /** Id of the event a preview frame belongs to; `undefined` for other events. */
 export function previewMessageId(
   event: BetaManagedAgentsStreamSessionEvents,

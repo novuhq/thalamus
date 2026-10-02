@@ -575,6 +575,26 @@ const handler = createWebhookHandler({
 });
 ```
 
+**Live text in webhook mode:** webhooks carry `text-start`, not per-token `text-delta`. To show a reply while it is written, open the observer's live stream for that `messageId` and pass it to anything that takes an async iterable of strings, such as the chat SDK's `thread.post()`:
+
+```typescript
+const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
+
+const handler = createWebhookHandler({
+  secret: process.env.WEBHOOK_SECRET,
+  onSessionEvents: ({ sessionId }) => ({
+    // Do not await: the observer holds later webhooks until this callback returns.
+    onTextStart: ({ messageId }) => {
+      void thread.post(observer.live(sessionId, messageId));
+    },
+    // Authoritative text for the same messageId.
+    onMessage: ({ messageId, text }) => saveMessage(sessionId, messageId, text),
+  }),
+});
+```
+
+`live()` first yields the text received so far, then each new piece, and ends when the reply completes, is interrupted, or the observer stops. It ends with no text when another reader already owns the reply (one reader per reply), and throws if the connection drops. Live text is best effort and never replayed, so fall back to `message`. Observer implementations serve `GET /live/:sessionId?messageId=…` as `text/event-stream` and write frames with `encodeLiveEvent()`.
+
 For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 
 ### Custom backend
@@ -702,7 +722,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `encodeLiveEvent()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver`, `LiveEvent` |
 | `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver (optional `logger`) |
 
 Tree-shakeable — install and import only the provider you use. Zero runtime dependencies; only peer deps for the provider SDKs.

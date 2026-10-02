@@ -660,9 +660,11 @@ const { sessionId, runId, turnId } = await provider.send({
 
 ### Webhook handler
 
-Receives events from the Cloudflare edge observer. HMAC-verified.
+Receives events from the Cloudflare edge observer. HMAC-verified. Webhooks carry `text-start`, not per-token deltas; `observer.live(sessionId, messageId)` (on the `cloudflare()` client) streams that reply's text as an `AsyncIterable<string>`. It ends with no text if another reader owns the reply, and throws if the connection drops, so the `message` stays authoritative.
 
 ```typescript
+const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
+
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — same adapter as provider
@@ -672,8 +674,8 @@ const handler = createWebhookHandler({
         case 'message': // complete assistant message — replaces the preview with the same messageId
           pushToClient(sessionId, part.text, part.messageId);
           break;
-        case 'text-delta': // incremental preview text — OpenAI and Anthropic
-          pushDeltaToClient(sessionId, part.text, part.messageId);
+        case 'text-start': // live text via the observer; don't await, later webhooks wait on it
+          void thread.post(observer.live(sessionId, part.messageId));
           break;
         case 'finish':
           saveResponse(sessionId, part.response);

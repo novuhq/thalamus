@@ -12,8 +12,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       '@anthropic-ai/sdk':
-        specifier: ^0.98.0
-        version: 0.98.0
+        specifier: ^0.109.1
+        version: 0.109.1
       '@aws-crypto/sha256-js':
         specifier: ^5.2.0
         version: 5.2.0
@@ -121,6 +121,19 @@ packages:
     transitivePeerDependencies:
       - aws-crt
       - zod
+    dev: true
+
+  /@anthropic-ai/sdk@0.109.1:
+    resolution: {integrity: sha512-q9OnEKLr5H9nxSuXdgDgJhxfYMiE+AaUEBze2Gk91UcaaLnsN+Lx5fbCYywiqurU/APLdwv23x03Wm6WN3EBsg==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+    dependencies:
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.0.0
     dev: true
 
   /@anthropic-ai/sdk@0.98.0:

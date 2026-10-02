@@ -86,7 +86,7 @@ describe("send — abort signal", () => {
 
     expect(mockSseStream).toHaveBeenCalledWith(
       "sess_sig",
-      undefined,
+      { event_deltas: ["agent.message"] },
       expect.objectContaining({ signal: controller.signal }),
     );
     expect(mockSend).toHaveBeenCalledWith(

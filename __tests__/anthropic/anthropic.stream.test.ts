@@ -137,7 +137,7 @@ describe("send — resume session", () => {
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockSseStream).toHaveBeenCalledWith(
       "sess_existing",
-      undefined,
+      { event_deltas: ["agent.message"] },
       expect.objectContaining({}),
     );
   });

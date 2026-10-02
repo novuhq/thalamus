@@ -5,9 +5,11 @@ import type {
   BetaManagedAgentsAgentMessageEvent,
   BetaManagedAgentsAgentToolResultEvent,
   BetaManagedAgentsAgentToolUseEvent,
+  BetaManagedAgentsDeltaEvent,
   BetaManagedAgentsSessionErrorEvent,
   BetaManagedAgentsSessionStatusIdleEvent,
   BetaManagedAgentsSpanModelRequestEndEvent,
+  BetaManagedAgentsStartEvent,
   BetaManagedAgentsStreamSessionEvents,
 } from "@anthropic-ai/sdk/resources/beta/sessions";
 import { ThalamusError } from "../errors";
@@ -24,6 +26,15 @@ import {
 } from "./tool-result";
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
+
+/** Id of the event a preview frame belongs to; `undefined` for other events. */
+export function previewMessageId(
+  event: BetaManagedAgentsStreamSessionEvents,
+): string | undefined {
+  if (event.type === "event_start") return event.event.id;
+  if (event.type === "event_delta") return event.event_id;
+  return undefined;
+}
 
 export function mapStopReason(reason: StopReason): Response["finishReason"] {
   switch (reason.type) {
@@ -80,7 +91,25 @@ export function* mapEvent(
       }
       if (text) {
         acc.messages.push(text);
-        yield { type: "message", text };
+        yield { type: "message", text, messageId: e.id };
+      }
+      break;
+    }
+
+    // Previews never touch `acc.messages`; the buffered `agent.message` is authoritative.
+    case "event_start": {
+      const e = event as BetaManagedAgentsStartEvent;
+      if (e.event.type === "agent.message") {
+        yield { type: "text-start", messageId: e.event.id };
+      }
+      break;
+    }
+
+    case "event_delta": {
+      const e = event as BetaManagedAgentsDeltaEvent;
+      const content = e.delta.content;
+      if (content.type === "text" && content.text) {
+        yield { type: "text-delta", text: content.text, messageId: e.event_id };
       }
       break;
     }

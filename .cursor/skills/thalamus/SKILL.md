@@ -311,8 +311,9 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 
 | Type | Key fields |
 |---|---|
-| `message` | `text` (one complete assistant message — the atomic text unit across all providers) |
-| `text-delta` | `text` (incremental token chunk; only emitted by providers that stream, e.g. OpenAI) |
+| `message` | `text`, `messageId?` (one complete assistant message — the atomic text unit across all providers) |
+| `text-start` | `messageId` (a keyed message preview started; Anthropic) |
+| `text-delta` | `text`, `messageId?` (incremental text; OpenAI unkeyed, Anthropic keyed by `messageId`) |
 | `thinking` | `text` |
 | `refusal` | `text` |
 | `tool-use-start` | `toolName`, `toolUseId`, `source?` |
@@ -327,7 +328,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `error` | `error: Error` |
 | `provider-event` | `provider`, `event`, `data` (escape hatch) |
 
-> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing and is **only** emitted by providers that stream tokens (OpenAI); Anthropic does not emit `text-delta`. `Response.messages` collects every `message` of the turn.
+> **`message` vs `text-delta`:** `message` fires once per complete assistant message and is emitted by **all** providers — use `onMessage` for provider-agnostic code. `text-delta` is a streaming-only enhancement for live typing, emitted **only** by providers that stream tokens. OpenAI streams tokens; Anthropic streams Managed Agents message previews (`event_deltas[]=agent.message`, always requested). Ignore `text-start` / `text-delta` if you only need final text. Anthropic previews are keyed: `text-start` and every `text-delta` carry the `messageId` of the final `message`. They are best effort: deltas can stop early (shed under load, not replayed on reconnect), and an interrupted or failed model request produces previews with no final `message`. `Response.messages` collects every `message` of the turn and never includes preview text.
 
 ### StreamCallbacks
 
@@ -337,7 +338,8 @@ One callback per StreamPart type, plus `onPart` which fires for every part befor
 interface StreamCallbacks {
   onPart?: (part: StreamPart) => void;
   onMessage?: ...;   // one complete assistant message (all providers)
-  onTextDelta?: ...; // incremental tokens (OpenAI only)
+  onTextStart?: ...; // keyed message preview started (Anthropic)
+  onTextDelta?: ...; // incremental text (OpenAI, Anthropic)
   onThinking?: ...;
   onRefusal?: ...;
   onToolUseStart?: ...;
@@ -658,20 +660,22 @@ const { sessionId, runId, turnId } = await provider.send({
 
 ### Webhook handler
 
-Receives events from the Cloudflare edge observer. HMAC-verified.
+Receives events from the Cloudflare edge observer. HMAC-verified. Webhooks carry `text-start`, not per-token deltas; `observer.live(sessionId, messageId)` (on the `cloudflare()` client) streams that reply's text as an `AsyncIterable<string>`. It ends with no text if another reader owns the reply, and throws if the connection drops, so the `message` stays authoritative.
 
 ```typescript
+const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
+
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — same adapter as provider
   onSessionEvents: ({ sessionId, turnId, runId, metadata }) => ({
     onPart(part) {
       switch (part.type) {
-        case 'message': // complete assistant message — all providers
-          pushToClient(sessionId, part.text);
+        case 'message': // complete assistant message — replaces the preview with the same messageId
+          pushToClient(sessionId, part.text, part.messageId);
           break;
-        case 'text-delta': // incremental tokens — OpenAI only
-          pushDeltaToClient(sessionId, part.text);
+        case 'text-start': // live text via the observer; don't await (later webhooks wait on it), but catch drops
+          thread.post(observer.live(sessionId, part.messageId)).catch(console.warn);
           break;
         case 'finish':
           saveResponse(sessionId, part.response);
@@ -904,7 +908,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `encodeLiveEvent()`, `DurabilityBackend`, `EdgeObserver`, `LiveEvent` |
 | `@novu/thalamus/webhook` | `createWebhookHandler`, `createProviderWebhookHandler` — HMAC-verified webhook receiver |
 
 ## Key Design Notes

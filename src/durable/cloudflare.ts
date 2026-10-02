@@ -1,3 +1,4 @@
+import { type LiveOptions, readLiveEvents } from "./live";
 import type {
   EdgeEnqueueParams,
   EdgeObserveParams,
@@ -17,16 +18,21 @@ export interface CloudflareBackendOptions {
 
 export interface CloudflareEdgeObserver extends EdgeObserver {
   readonly webhook: WebhookConfig;
+  live(
+    sessionId: string,
+    messageId: string,
+    opts?: LiveOptions,
+  ): AsyncIterable<string>;
 }
 
 export function cloudflare(
   options: CloudflareBackendOptions,
 ): CloudflareEdgeObserver {
   const base = options.url.replace(/\/+$/, "");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
-  };
+  const auth: Record<string, string> = options.apiKey
+    ? { Authorization: `Bearer ${options.apiKey}` }
+    : {};
+  const headers = { "Content-Type": "application/json", ...auth };
 
   return {
     webhook: options.webhook,
@@ -62,6 +68,29 @@ export function cloudflare(
       if (!res.ok && res.status !== 404) {
         throw new Error(`cloudflare stop failed: ${res.status}`);
       }
+    },
+
+    async *live(sessionId, messageId, opts = {}) {
+      const res = await fetch(
+        `${base}/live/${encodeURIComponent(sessionId)}?messageId=${encodeURIComponent(messageId)}`,
+        {
+          headers: { Accept: "text/event-stream", ...auth },
+          signal: opts.signal,
+        },
+      );
+      // Another reader owns this reply; the durable message still arrives by webhook.
+      if (res.status === 409) {
+        await res.body?.cancel();
+        return;
+      }
+      if (!res.ok || !res.body) {
+        throw new Error(`cloudflare live failed: ${res.status}`);
+      }
+      for await (const event of readLiveEvents(res.body)) {
+        if (event.type === "end") return;
+        yield event.text;
+      }
+      throw new Error("cloudflare live stream closed before end");
     },
   };
 }

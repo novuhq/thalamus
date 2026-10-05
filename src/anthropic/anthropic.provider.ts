@@ -48,6 +48,7 @@ import { createProviderWebhookHandler } from "../webhook/index";
 import { buildSendEvents } from "./anthropic.transformer";
 import { AnthropicVault } from "./anthropic.vault";
 import {
+  isPreviewEvent,
   mapEvent,
   previewMessageId,
   ResponseAccumulator,
@@ -60,7 +61,6 @@ const STREAM_PARAMS = {
   event_deltas: ["agent.message"],
 } satisfies EventStreamParams;
 
-/** The same request for the edge observer, which fetches the raw SSE URL itself. */
 const STREAM_QUERY = `?${new URLSearchParams(STREAM_PARAMS.event_deltas.map((t) => ["event_deltas[]", t]))}`;
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
@@ -532,18 +532,16 @@ class AnthropicProvider {
     onEvent?: (eventId: string) => Promise<void>,
   ): AsyncGenerator<StreamPart> {
     for await (const raw of source) {
-      // Previews have no id and are not in history: never record or checkpoint them.
-      const id = "id" in raw ? raw.id : undefined;
-      if (id) {
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
+      // After a reconnect, history can deliver a message before its buffered previews.
+      const preview = isPreviewEvent(raw);
+      if (preview) {
+        if (seenIds.has(previewMessageId(raw))) continue;
       } else {
-        // After a reconnect, history can deliver a message before its buffered previews.
-        const previewOf = previewMessageId(raw);
-        if (previewOf && seenIds.has(previewOf)) continue;
+        if (seenIds.has(raw.id)) continue;
+        seenIds.add(raw.id);
       }
       yield* mapEvent(raw, acc);
-      if (id && onEvent) await onEvent(id);
+      if (!preview && onEvent) await onEvent(raw.id);
       if (acc.done) return;
     }
   }

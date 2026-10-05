@@ -2,12 +2,6 @@ export {
   type CloudflareBackendOptions,
   cloudflare,
 } from "./durable/cloudflare";
-export {
-  encodeLiveEvent,
-  type LiveEndReason,
-  type LiveEvent,
-  type LiveOptions,
-} from "./durable/live";
 export type {
   EdgeEnqueueParams,
   EdgeObserveParams,

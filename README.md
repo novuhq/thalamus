@@ -525,8 +525,7 @@ const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — trace webhook ingress
   onSessionEvents: (sessionId, runId, metadata) => ({
-    // Webhooks carry no per-token text-delta; see "Live text in webhook mode" below.
-    onMessage: ({ text }) => pushToClient(sessionId, text),
+    onTextDelta: ({ text }) => pushToClient(sessionId, text),
 
     // Async callbacks are awaited — the webhook handler only responds 200
     // after this completes, so the Observer won't send the next event until
@@ -557,6 +556,8 @@ The factory receives `runId` and `metadata` (from `webhookMetadata` on `send()`)
 
 Events never overlap. Your callbacks always see the previous callback's side effects. No distributed locks, no in-memory queues, no retry coordination on your side.
 
+**Live text in webhook mode:** `text-delta` parts are not sent as webhooks. Set `webhookMetadata.textSnapshotIntervalMs` and the reference observer sends `text-snapshot` parts instead: the full text of the message so far, at most once per interval, merging deltas while the previous webhook is in flight. They arrive before the `message` with the same `messageId`, so one handler can post the text once, edit it on each snapshot and finalize it on `message`.
+
 **Type safety:** With `durable` + webhook configured, TypeScript narrows `send()` to `Promise<WebhookSendResult>`.
 
 **Multi-node safe:** No in-memory state, works behind any load balancer. The Observer guarantees ordering regardless of which node receives the request.
@@ -575,27 +576,6 @@ const handler = createWebhookHandler({
   },
 });
 ```
-
-**Live text in webhook mode:** webhooks carry `text-start`, not per-token `text-delta`. To show a reply while it is written, open the observer's live stream for that `messageId` and pass it to anything that takes an async iterable of strings, such as the chat SDK's `thread.post()`:
-
-```typescript
-const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
-
-const handler = createWebhookHandler({
-  secret: process.env.WEBHOOK_SECRET,
-  onSessionEvents: ({ sessionId }) => ({
-    // Do not await: the observer holds later webhooks until this callback returns.
-    // Catch: live() throws if the connection drops, and an unhandled rejection exits Node.
-    onTextStart: ({ messageId }) => {
-      thread.post(observer.live(sessionId, messageId)).catch(console.warn);
-    },
-    // Authoritative text for the same messageId.
-    onMessage: ({ messageId, text }) => saveMessage(sessionId, messageId, text),
-  }),
-});
-```
-
-`live()` first yields the text received so far, then each new piece, and ends when the reply completes, is interrupted, or the observer stops. It ends with no text when another reader already owns the reply (one reader per reply), and throws if the connection drops. Live text is best effort and never replayed, so fall back to `message`. Observer implementations serve `GET /live/:sessionId?messageId=…` as `text/event-stream` and write frames with `encodeLiveEvent()`.
 
 For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 
@@ -724,7 +704,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `encodeLiveEvent()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver`, `LiveEvent` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurableBackend`, `DurabilityBackend`, `EdgeObserver` |
 | `@novu/thalamus/webhook` | `createWebhookHandler` — HMAC-verified webhook receiver (optional `logger`) |
 
 Tree-shakeable — install and import only the provider you use. Zero runtime dependencies; only peer deps for the provider SDKs.

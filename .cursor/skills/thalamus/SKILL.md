@@ -314,6 +314,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `message` | `text`, `messageId?` (one complete assistant message — the atomic text unit across all providers) |
 | `text-start` | `messageId` (a keyed message preview started; Anthropic) |
 | `text-delta` | `text`, `messageId?` (incremental text; OpenAI unkeyed, Anthropic keyed by `messageId`) |
+| `text-snapshot` | `text`, `messageId` (full text so far; webhook mode only, when `webhookMetadata.textSnapshotIntervalMs` is set) |
 | `thinking` | `text` |
 | `refusal` | `text` |
 | `tool-use-start` | `toolName`, `toolUseId`, `source?` |
@@ -660,11 +661,9 @@ const { sessionId, runId, turnId } = await provider.send({
 
 ### Webhook handler
 
-Receives events from the Cloudflare edge observer. HMAC-verified. Webhooks carry `text-start`, not per-token deltas; `observer.live(sessionId, messageId)` (on the `cloudflare()` client) streams that reply's text as an `AsyncIterable<string>`. It ends with no text if another reader owns the reply, and throws if the connection drops, so the `message` stays authoritative.
+Receives events from the Cloudflare edge observer. HMAC-verified.
 
 ```typescript
-const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
-
 const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — same adapter as provider
@@ -674,8 +673,8 @@ const handler = createWebhookHandler({
         case 'message': // complete assistant message — replaces the preview with the same messageId
           pushToClient(sessionId, part.text, part.messageId);
           break;
-        case 'text-start': // live text via the observer; don't await (later webhooks wait on it), but catch drops
-          thread.post(observer.live(sessionId, part.messageId)).catch(console.warn);
+        case 'text-snapshot': // text so far — set webhookMetadata.textSnapshotIntervalMs to receive these
+          showPreviewToClient(sessionId, part.text, part.messageId);
           break;
         case 'finish':
           saveResponse(sessionId, part.response);
@@ -908,7 +907,7 @@ try {
 | `@novu/thalamus/anthropic` | `createAnthropicProvider` |
 | `@novu/thalamus/openai` | `createOpenAIProvider` |
 | `@novu/thalamus/vault` | Vault types and `VaultStore` interface |
-| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `encodeLiveEvent()`, `DurabilityBackend`, `EdgeObserver`, `LiveEvent` |
+| `@novu/thalamus/durable` | `redis()`, `cloudflare()`, `DurabilityBackend`, `EdgeObserver` |
 | `@novu/thalamus/webhook` | `createWebhookHandler`, `createProviderWebhookHandler` — HMAC-verified webhook receiver |
 
 ## Key Design Notes

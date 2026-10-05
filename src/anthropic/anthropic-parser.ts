@@ -27,13 +27,17 @@ import {
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
 
-/** Id of the event a preview frame belongs to; `undefined` for other events. */
-export function previewMessageId(
+/** Preview frames have no `id` and are not in history: never dedup or checkpoint them. */
+export function isPreviewEvent(
   event: BetaManagedAgentsStreamSessionEvents,
-): string | undefined {
-  if (event.type === "event_start") return event.event.id;
-  if (event.type === "event_delta") return event.event_id;
-  return undefined;
+): event is BetaManagedAgentsStartEvent | BetaManagedAgentsDeltaEvent {
+  return event.type === "event_start" || event.type === "event_delta";
+}
+
+export function previewMessageId(
+  event: BetaManagedAgentsStartEvent | BetaManagedAgentsDeltaEvent,
+): string {
+  return event.type === "event_start" ? event.event.id : event.event_id;
 }
 
 export function mapStopReason(reason: StopReason): Response["finishReason"] {
@@ -96,7 +100,6 @@ export function* mapEvent(
       break;
     }
 
-    // Previews never touch `acc.messages`; the buffered `agent.message` is authoritative.
     case "event_start": {
       const e = event as BetaManagedAgentsStartEvent;
       if (e.event.type === "agent.message") {

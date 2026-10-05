@@ -1,4 +1,4 @@
-import { type LiveOptions, readLiveEvents } from "./live";
+import { type LiveOptions, type LiveReply, readLiveEvents } from "./live";
 import type {
   EdgeEnqueueParams,
   EdgeObserveParams,
@@ -18,11 +18,8 @@ export interface CloudflareBackendOptions {
 
 export interface CloudflareEdgeObserver extends EdgeObserver {
   readonly webhook: WebhookConfig;
-  live(
-    sessionId: string,
-    messageId: string,
-    opts?: LiveOptions,
-  ): AsyncIterable<string>;
+  /** Streams a reply's preview text; its `message` webhook then has `streamed: true`. */
+  live(sessionId: string, messageId: string, opts?: LiveOptions): LiveReply;
 }
 
 export function cloudflare(
@@ -70,27 +67,51 @@ export function cloudflare(
       }
     },
 
-    async *live(sessionId, messageId, opts = {}) {
-      const res = await fetch(
-        `${base}/live/${encodeURIComponent(sessionId)}?messageId=${encodeURIComponent(messageId)}`,
-        {
-          headers: { Accept: "text/event-stream", ...auth },
-          signal: opts.signal,
-        },
-      );
-      // Another reader owns this reply; the durable message still arrives by webhook.
-      if (res.status === 409) {
-        await res.body?.cancel();
-        return;
+    live(sessionId, messageId, opts = {}) {
+      let settle!: (text: string | undefined) => void;
+      let fail!: (err: unknown) => void;
+      const final = new Promise<string | undefined>((resolve, reject) => {
+        settle = resolve;
+        fail = reject;
+      });
+      final.catch(() => {});
+
+      async function* text(): AsyncGenerator<string> {
+        try {
+          const res = await fetch(
+            `${base}/live/${encodeURIComponent(sessionId)}?messageId=${encodeURIComponent(messageId)}`,
+            {
+              headers: { Accept: "text/event-stream", ...auth },
+              signal: opts.signal,
+            },
+          );
+          // No preview for this reader; the durable message still arrives by webhook.
+          if (res.status === 404 || res.status === 409) {
+            await res.body?.cancel();
+            settle(undefined);
+            return;
+          }
+          if (!res.ok || !res.body) {
+            throw new Error(`cloudflare live failed: ${res.status}`);
+          }
+          for await (const event of readLiveEvents(res.body)) {
+            if (event.type === "text") {
+              yield event.text;
+            } else {
+              settle(event.reason === "complete" ? event.text : undefined);
+              return;
+            }
+          }
+          throw new Error("cloudflare live stream closed before end");
+        } catch (err) {
+          fail(err);
+        } finally {
+          // A consumer that stopped early never reached the end.
+          fail(new Error("cloudflare live stream closed before end"));
+        }
       }
-      if (!res.ok || !res.body) {
-        throw new Error(`cloudflare live failed: ${res.status}`);
-      }
-      for await (const event of readLiveEvents(res.body)) {
-        if (event.type === "end") return;
-        yield event.text;
-      }
-      throw new Error("cloudflare live stream closed before end");
+
+      return Object.assign(text(), { final });
     },
   };
 }

@@ -1,13 +1,26 @@
 /** Why a live text stream ended. */
 export type LiveEndReason = "complete" | "interrupted" | "aborted";
 
-/** One SSE event on the edge observer's `/live` stream. */
+/**
+ * One SSE event on the edge observer's `/live` stream. `text` events are a best-effort
+ * preview; a `complete` end carries the authoritative `agent.message` text.
+ */
 export type LiveEvent =
   | { type: "text"; text: string }
-  | { type: "end"; reason: LiveEndReason };
+  | { type: "end"; reason: "complete"; text: string }
+  | { type: "end"; reason: Exclude<LiveEndReason, "complete"> };
 
 export interface LiveOptions {
   signal?: AbortSignal;
+}
+
+/**
+ * Preview text of a reply being generated. Iterating it settles `final`: the reply's
+ * `agent.message` text, or `undefined` when there is nothing to preview or no message came.
+ * The iterable ends instead of throwing; `final` rejects when the stream failed.
+ */
+export interface LiveReply extends AsyncIterable<string> {
+  final: Promise<string | undefined>;
 }
 
 /** Serializes one live event as an SSE frame (`event:` + JSON `data:`). */

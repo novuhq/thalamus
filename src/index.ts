@@ -7,6 +7,7 @@ export {
   type LiveEndReason,
   type LiveEvent,
   type LiveOptions,
+  type LiveReply,
 } from "./durable/live";
 export type {
   EdgeEnqueueParams,

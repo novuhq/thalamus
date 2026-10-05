@@ -655,7 +655,8 @@ const provider = createAnthropicProvider({
 // In webhook mode, send() returns Promise<WebhookSendResult>
 const { sessionId, runId, turnId } = await provider.send({
   messages: [{ role: MessageRole.USER, content: 'Hello' }],
-  webhookMetadata: { userId: 'u_123' }, // forwarded in webhook payloads
+  // forwarded in webhook payloads; textSnapshotIntervalMs turns on text-snapshot previews
+  webhookMetadata: { userId: 'u_123', textSnapshotIntervalMs: '1000' },
 });
 ```
 

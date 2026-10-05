@@ -525,7 +525,9 @@ const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   logger: adaptPinoLogger(pino), // optional — trace webhook ingress
   onSessionEvents: (sessionId, runId, metadata) => ({
-    onTextDelta: ({ text }) => pushToClient(sessionId, text),
+    // Webhooks carry no text-delta; see "Live text in webhook mode" below.
+    onTextSnapshot: ({ messageId, text }) => showPreview(sessionId, messageId, text),
+    onMessage: ({ messageId, text }) => pushToClient(sessionId, messageId, text),
 
     // Async callbacks are awaited — the webhook handler only responds 200
     // after this completes, so the Observer won't send the next event until

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.0-alpha.19 (2026-10-05)
+
+### 🚀 Features
+
+- **anthropic:** emit text-start/text-delta from managed agents event_deltas ([#20](https://github.com/novuhq/thalamus/pull/20))
+- live() final text and streamed messages for webhook consumers ([#21](https://github.com/novuhq/thalamus/pull/21))
+
+### ⚠️ Breaking Changes
+
+- The `@anthropic-ai/sdk` peer dependency is now `>=0.109.0` (the preview event types and `event_deltas` param first ship there).
+- Anthropic streams now emit `text-start` / `text-delta` parts. Edge workers on an older thalamus map unknown frames to `provider-event`, so upgrade the edge worker before the API that dispatches to it.
+- `cloudflare().live()` returns a `LiveReply` (`AsyncIterable<string>` plus `final: Promise<string | undefined>`) instead of an async generator.
+- The `isAnthropicPreviewEvent` export is removed.
+
+### ❤️ Thank You
+
+- Adam Chmara
+
 ## v0.1.0-alpha.18 (2026-08-12)
 
 ### 🩹 Fixes

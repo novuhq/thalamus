@@ -590,7 +590,8 @@ const handler = createWebhookHandler({
       thread
         .post(live)
         .then(async (preview) => {
-          const text = await live.final;
+          // Rejects when the stream dropped; the message webhook then delivers the reply.
+          const text = await live.final.catch(() => undefined);
           if (text === undefined) await preview.delete();
           else await saveMessageOnce(sessionId, messageId, text, { replace: preview });
         })

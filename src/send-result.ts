@@ -9,7 +9,6 @@ export const CALLBACK_MAP: Record<StreamPart["type"], keyof StreamCallbacks> = {
   message: "onMessage",
   "text-start": "onTextStart",
   "text-delta": "onTextDelta",
-  "text-snapshot": "onTextSnapshot",
   thinking: "onThinking",
   refusal: "onRefusal",
   "tool-use-start": "onToolUseStart",

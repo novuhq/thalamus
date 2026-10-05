@@ -145,14 +145,15 @@ export interface Response {
 export type AgentStatus = "running" | "queued" | "retrying" | "idle";
 
 export type StreamPart =
-  /** One complete assistant message. `messageId` matches its preview parts. */
-  | { type: "message"; text: string; messageId?: string }
+  /**
+   * One complete assistant message. `messageId` matches its preview parts. `streamed`: an edge
+   * observer sent this text to the message's `live()` reader, which delivers it.
+   */
+  | { type: "message"; text: string; messageId?: string; streamed?: boolean }
   /** A message preview started (Anthropic); its `message` follows unless the request fails. */
   | { type: "text-start"; messageId: string }
   /** Incremental preview text, best effort. Keyed by `messageId` on Anthropic. */
   | { type: "text-delta"; text: string; messageId?: string }
-  /** Full text so far of a message being generated; webhook delivery sends these instead of deltas. */
-  | { type: "text-snapshot"; text: string; messageId: string }
   | { type: "refusal"; text: string }
   | { type: "thinking"; text: string }
   | {
@@ -217,9 +218,6 @@ export interface StreamCallbacks {
   ) => void | Promise<void>;
   onTextDelta?: (
     part: Extract<StreamPart, { type: "text-delta" }>,
-  ) => void | Promise<void>;
-  onTextSnapshot?: (
-    part: Extract<StreamPart, { type: "text-snapshot" }>,
   ) => void | Promise<void>;
   onThinking?: (
     part: Extract<StreamPart, { type: "thinking" }>,

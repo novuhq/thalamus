@@ -660,7 +660,7 @@ const { sessionId, runId, turnId } = await provider.send({
 
 ### Webhook handler
 
-Receives events from the Cloudflare edge observer. HMAC-verified. Webhooks carry `text-start`, not per-token deltas; `observer.live(sessionId, messageId)` (on the `cloudflare()` client) streams that reply's text as an `AsyncIterable<string>`. It yields preview text and returns the final `agent.message` text; the `message` webhook then has `streamed: true`. It ends with no text if another reader owns the reply, and throws if the connection drops; `message` then arrives without `streamed`.
+Receives events from the Cloudflare edge observer. HMAC-verified. Webhooks carry `text-start`, not per-token deltas; `observer.live(sessionId, messageId)` (on the `cloudflare()` client) streams that reply's text as an `AsyncIterable<string>`. It yields preview text, and `live.final` resolves with the final `agent.message` text; the `message` webhook then has `streamed: true` (dedupe by `messageId`, the reader delivers it). It ends with no text if another reader owns the reply; if the connection drops, `final` rejects and `message` arrives without `streamed`.
 
 ```typescript
 const observer = cloudflare({ url, apiKey, webhook: { url, secret } });
@@ -672,9 +672,9 @@ const handler = createWebhookHandler({
     onPart(part) {
       switch (part.type) {
         case 'message': // complete assistant message; a `streamed` one is delivered by its live reader
-          if (!part.streamed) pushToClient(sessionId, part.text, part.messageId);
+          pushToClientOnce(sessionId, part.messageId, part.text, { waitForLiveReader: part.streamed });
           break;
-        case 'text-start': // live text via the observer; don't await (later webhooks wait on it), but catch drops
+        case 'text-start': // live text via the observer; don't await (later webhooks wait on it)
           streamReply(sessionId, part.messageId, observer.live(sessionId, part.messageId)).catch(console.warn);
           break;
         case 'finish':

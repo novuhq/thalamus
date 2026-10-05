@@ -14,6 +14,15 @@ export interface LiveOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Preview text of a reply being generated. Iterating it settles `final`: the reply's
+ * `agent.message` text, or `undefined` when there is nothing to preview or no message came.
+ * The iterable ends instead of throwing; `final` rejects when the stream failed.
+ */
+export interface LiveReply extends AsyncIterable<string> {
+  final: Promise<string | undefined>;
+}
+
 /** Serializes one live event as an SSE frame (`event:` + JSON `data:`). */
 export function encodeLiveEvent(event: LiveEvent): string {
   const { type, ...data } = event;

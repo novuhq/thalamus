@@ -147,7 +147,7 @@ export type AgentStatus = "running" | "queued" | "retrying" | "idle";
 export type StreamPart =
   /**
    * One complete assistant message. `messageId` matches its preview parts. `streamed`: an edge
-   * observer sent this text to the message's `live()` reader, which delivers it.
+   * observer sent this text to the message's `live()` reader, which delivers it (dedupe by id).
    */
   | { type: "message"; text: string; messageId?: string; streamed?: boolean }
   /** A message preview started (Anthropic); its `message` follows unless the request fails. */

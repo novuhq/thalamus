@@ -585,19 +585,25 @@ const handler = createWebhookHandler({
   secret: process.env.WEBHOOK_SECRET,
   onSessionEvents: ({ sessionId }) => ({
     // Do not await: the observer holds later webhooks until this callback returns.
-    // Catch: live() throws if the connection drops, and an unhandled rejection exits Node.
     onTextStart: ({ messageId }) => {
-      streamReply(sessionId, messageId, observer.live(sessionId, messageId)).catch(console.warn);
+      const live = observer.live(sessionId, messageId);
+      thread
+        .post(live)
+        .then(async (preview) => {
+          const text = await live.final;
+          if (text === undefined) await preview.delete();
+          else await saveMessageOnce(sessionId, messageId, text, { replace: preview });
+        })
+        .catch(console.warn);
     },
-    // A streamed message is delivered by its live reader.
-    onMessage: ({ messageId, text, streamed }) => {
-      if (!streamed) saveMessage(sessionId, messageId, text);
-    },
+    // A streamed message is delivered by its live reader; deliver here only if that reader did not.
+    onMessage: ({ messageId, text, streamed }) =>
+      saveMessageOnce(sessionId, messageId, text, { waitForLiveReader: streamed }),
   }),
 });
 ```
 
-`live()` first yields the text received so far, then each new piece. The yielded text is a preview: deltas can be shed under load and are never replayed. When the reply completes, the generator returns the authoritative `agent.message` text, so replace the preview with it. It returns `undefined` when the reply was interrupted or the observer stopped (discard the preview), and without yielding when the reply is unknown or already finished (404) or another reader owns it (409, one reader per reply). It throws if the connection drops; `message` still arrives by webhook. The `message` webhook has `streamed: true` when the observer sent its final text to a live reader, which then delivers the reply; otherwise deliver it from the webhook. Observer implementations serve `GET /live/:sessionId?messageId=…` as `text/event-stream` and write frames with `encodeLiveEvent()`.
+`live()` yields the text received so far, then each new piece. It is a preview: deltas can be shed under load and are never replayed. Iterating it settles `live.final` with the authoritative `agent.message` text, so replace the preview with it; `undefined` means discard the preview (interrupted, unknown or finished reply (404), or another reader owns it (409, one per reply)). The iterable ends instead of throwing; `final` rejects if the connection drops. The `message` webhook has `streamed: true` when its text reached a live reader, which then delivers the reply; deduplicate by `messageId` and deliver from the webhook only if that reader did not. Observer implementations serve `GET /live/:sessionId?messageId=…` as `text/event-stream` and write frames with `encodeLiveEvent()`.
 
 For a production reference implementation of the companion Cloudflare Worker, see [`enterprise/workers/thalamus-observer`](https://github.com/novuhq/novu/tree/next/enterprise/workers/thalamus-observer) in the Novu platform repository.
 

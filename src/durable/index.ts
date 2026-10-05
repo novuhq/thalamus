@@ -9,6 +9,7 @@ export {
   type LiveEndReason,
   type LiveEvent,
   type LiveOptions,
+  type LiveReply,
 } from "./live";
 export { type RedisLike, redis } from "./redis";
 export { sanitizeAgentForSerialization } from "./serialize-agent";

@@ -2,6 +2,7 @@ import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 import type {
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsUserCustomToolResultEventParams,
+  BetaManagedAgentsUserMessageEventParams,
   BetaManagedAgentsUserToolConfirmationEventParams,
   EventSendParams,
   EventStreamParams,
@@ -62,6 +63,12 @@ const STREAM_PARAMS = {
 } satisfies EventStreamParams;
 
 const STREAM_QUERY = `?${new URLSearchParams(STREAM_PARAMS.event_deltas.map((t) => ["event_deltas[]", t]))}`;
+
+/** `sessions.create` rejects more `initial_events` than this. */
+const MAX_INITIAL_EVENTS = 50;
+
+/** `seeded`: this turn's messages were sent as `initial_events`, so the turn is already running. */
+type TurnSession = { sessionId: string; seeded: boolean };
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   if (err instanceof APIUserAbortError) {
@@ -181,7 +188,7 @@ class AnthropicProvider {
   private readonly log: ThalamusLogger;
   private readonly turnLock = new SessionMutex();
   /** While set, a new session is being created and its turn lock is being acquired. */
-  private sessionBootstrap: Promise<string> | null = null;
+  private sessionBootstrap: Promise<TurnSession> | null = null;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
@@ -234,28 +241,35 @@ class AnthropicProvider {
    * Ensures a sessionId is available, deduplicating concurrent first-message calls.
    * If params already has a sessionId, returns it (after any in-flight bootstrap settles).
    * Otherwise creates a new session via a shared promise so concurrent sends
-   * don't each create their own session.
+   * don't each create their own session. Only the creator's turn can be seeded.
    */
-  private async ensureSession(params: RequestParams): Promise<string> {
+  private async ensureSession(params: RequestParams): Promise<TurnSession> {
     if (params.sessionId) {
       if (this.sessionBootstrap) await this.sessionBootstrap;
-      return params.sessionId;
+      return { sessionId: params.sessionId, seeded: false };
     }
 
+    let isCreator = false;
     if (!this.sessionBootstrap) {
+      isCreator = true;
       this.sessionBootstrap = this.createNewSession(params).finally(() => {
         this.sessionBootstrap = null;
       });
     }
-    return this.sessionBootstrap;
+    const { sessionId, seeded } = await this.sessionBootstrap;
+    return { sessionId, seeded: isCreator && seeded };
   }
 
-  private async createNewSession(params: RequestParams): Promise<string> {
-    await this.getClient();
-    return this.createSession({
-      vaultIds: params.vaultIds,
-      providerOptions: params.providerOptions,
-    });
+  /** Sends the turn's messages as `initial_events` so create and dispatch are one call. */
+  private async createNewSession(params: RequestParams): Promise<TurnSession> {
+    const events = buildSendEvents(params);
+    const seeded =
+      !params.agent && events.length > 0 && events.length <= MAX_INITIAL_EVENTS;
+    const sessionId = await this.startSession(
+      { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
+      seeded ? events : undefined,
+    );
+    return { sessionId, seeded };
   }
 
   /**
@@ -268,9 +282,9 @@ class AnthropicProvider {
   ): AsyncIterable<StreamPart> {
     let release: (() => void) | undefined;
     try {
-      let sessionId: string;
+      let session: TurnSession;
       try {
-        sessionId = await this.ensureSession(params);
+        session = await this.ensureSession(params);
       } catch (err) {
         yield { type: "error", error: mapStreamError(err, params.sessionId) };
         return;
@@ -280,10 +294,17 @@ class AnthropicProvider {
         yield { type: "status-change", status: "queued" };
       }
 
-      release = await this.turnLock.acquire(sessionId, params.abortSignal);
+      release = await this.turnLock.acquire(
+        session.sessionId,
+        params.abortSignal,
+      );
 
       yield* this.withTurnRelease(
-        this.runStream({ ...params, sessionId }, runId),
+        this.runStream(
+          { ...params, sessionId: session.sessionId },
+          runId,
+          session.seeded,
+        ),
         release,
       );
     } catch (err) {
@@ -554,6 +575,9 @@ class AnthropicProvider {
    * @param onConnected Called once after the first SSE connection opens.
    *   Callers pass dispatch() here so events are sent only after SSE is live,
    *   avoiding the race where dispatch fires before the stream is open.
+   *   Omit it when the turn is already running (seeded via `initial_events`):
+   *   the stream only delivers events emitted after it opens, so the first
+   *   connection then catches up from history like a reconnect does.
    */
   private async *resilientObserve(
     client: Anthropic,
@@ -587,22 +611,27 @@ class AnthropicProvider {
           { signal },
         );
 
-        if (!connected) {
-          if (onConnected) await onConnected();
-          connected = true;
+        if (!connected && onConnected) {
+          await onConnected();
         } else {
+          let missed:
+            | AsyncIterable<BetaManagedAgentsStreamSessionEvents>
+            | undefined;
           try {
-            const missed = await client.beta.sessions.events.list(sessionId);
+            missed = await client.beta.sessions.events.list(sessionId);
+          } catch {
+            // List failed — still worth tailing SSE
+          }
+          if (missed) {
             yield* this.consumeEvents(missed, seenIds, acc, onEvent);
             if (acc.done) {
               if (backend) await backend.remove(sessionId);
               yield { type: "finish", response: acc.toResponse(sessionId) };
               return;
             }
-          } catch {
-            // List failed — still worth tailing SSE
           }
         }
+        connected = true;
 
         yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
         if (backend) await backend.remove(sessionId);
@@ -766,6 +795,7 @@ class AnthropicProvider {
   private async *runStream(
     params: RequestParams,
     runId: string,
+    seeded = false,
   ): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
@@ -783,8 +813,14 @@ class AnthropicProvider {
       }
 
       const signal = params.abortSignal ?? undefined;
-      yield* this.resilientObserve(client, sessionId, runId, signal, () =>
-        this.dispatch(client, sessionId, params, signal),
+      yield* this.resilientObserve(
+        client,
+        sessionId,
+        runId,
+        signal,
+        seeded
+          ? undefined
+          : () => this.dispatch(client, sessionId, params, signal),
       );
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
@@ -805,11 +841,19 @@ class AnthropicProvider {
   }
 
   async createSession(options?: SessionOptions): Promise<string> {
+    return this.startSession(options);
+  }
+
+  private async startSession(
+    options?: SessionOptions,
+    initialEvents?: BetaManagedAgentsUserMessageEventParams[],
+  ): Promise<string> {
     const client = await this.getClient();
     const params: SessionCreateParams = {
       agent: this.agentId,
       environment_id: this.environmentId,
       ...(options?.vaultIds?.length ? { vault_ids: options.vaultIds } : {}),
+      ...(initialEvents ? { initial_events: initialEvents } : {}),
       ...options?.providerOptions,
     };
     const session = await client.beta.sessions.create(params);
@@ -819,6 +863,7 @@ class AnthropicProvider {
       provider: ANTHROPIC,
       sessionId: session.id,
       vaultIdCount: options?.vaultIds?.length ?? 0,
+      initialEventCount: initialEvents?.length ?? 0,
     });
 
     return session.id;

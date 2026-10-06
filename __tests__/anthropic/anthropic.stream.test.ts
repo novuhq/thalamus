@@ -10,6 +10,7 @@ import { config, mockSse } from "./_helpers.js";
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
+const mockList = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
@@ -19,7 +20,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend },
+          events: { stream: mockSseStream, send: mockSend, list: mockList },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -75,7 +76,14 @@ describe("stream — new session", () => {
     });
 
     expect(mockCreate).toHaveBeenCalledOnce();
-    expect(mockSend).toHaveBeenCalledOnce();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initial_events: [
+          { type: "user.message", content: [{ type: "text", text: "Hi" }] },
+        ],
+      }),
+    );
+    expect(mockSend).not.toHaveBeenCalled();
     expect(parts.find((p) => p.type === "run-start")).toMatchObject({
       sessionId: "sess_new",
     });
@@ -87,6 +95,60 @@ describe("stream — new session", () => {
     expect(response.messages).toEqual(["Hello!"]);
     expect(response.sessionId).toBe("sess_new");
     expect(response.finishReason).toBe("stop");
+  });
+
+  it("recovers a turn that ran before the stream opened from history", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_fast" });
+    const neverYields = {
+      [Symbol.asyncIterator]: async function* () {
+        await new Promise(() => {});
+      },
+    };
+    mockSseStream.mockResolvedValue(neverYields);
+    mockList.mockResolvedValue(
+      mockSse([
+        { type: "user.message", id: "evt_0", content: [] },
+        { type: "session.status_running", id: "evt_1" },
+        {
+          type: "agent.message",
+          id: "evt_2",
+          content: [{ type: "text", text: "Done already." }],
+        },
+        {
+          type: "session.status_idle",
+          id: "evt_3",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+
+    const rt = createAnthropicProvider(config);
+    const response = await rt.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(mockList).toHaveBeenCalledWith("sess_fast");
+    expect(response.messages).toEqual(["Done already."]);
+    expect(response.finishReason).toBe("stop");
+  });
+
+  it("surfaces a session error that happened before the stream opened", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_err" });
+    mockSseStream.mockResolvedValue(mockSse([]));
+    mockList.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.error",
+          id: "evt_1",
+          error: { type: "billing_error", message: "Credit balance too low" },
+        },
+      ]),
+    );
+
+    const rt = createAnthropicProvider(config);
+    await expect(
+      rt.send({ messages: [{ role: MessageRole.USER, content: "Hi" }] }),
+    ).rejects.toThrow("Credit balance too low");
   });
 });
 

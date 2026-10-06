@@ -443,8 +443,25 @@ describe("sequential turns (queue)", () => {
     ]);
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(r1.messages).toBeDefined();
-    expect(r2.messages).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initial_events: [
+          { type: "user.message", content: [{ type: "text", text: "A" }] },
+        ],
+      }),
+    );
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_shared",
+      {
+        events: [
+          { type: "user.message", content: [{ type: "text", text: "B" }] },
+        ],
+      },
+      expect.anything(),
+    );
+    expect(r1.messages).toEqual(["msg1"]);
+    expect(r2.messages).toEqual(["msg2"]);
   });
 
   it("emits status-change queued when message is waiting", async () => {

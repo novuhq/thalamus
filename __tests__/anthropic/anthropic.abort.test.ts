@@ -60,7 +60,6 @@ describe("send — abort signal", () => {
   });
 
   it("passes abort signal to events.stream and events.send", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_sig" });
     mockSseStream.mockResolvedValue(
       mockSse([
         {
@@ -81,6 +80,7 @@ describe("send — abort signal", () => {
     const rt = createAnthropicProvider(config);
     await rt.send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
+      sessionId: "sess_sig",
       abortSignal: controller.signal,
     });
 

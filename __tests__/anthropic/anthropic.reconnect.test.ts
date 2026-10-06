@@ -57,7 +57,6 @@ function failingAsyncIter(events: object[], failAfter: number) {
 
 describe("send — resilient observation (auto-reconnect)", () => {
   it("reconnects after SSE drop, fetches missed events, and delivers all events", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_rc" });
     mockSend.mockResolvedValue({});
 
     // First SSE: delivers event 1 and 2, then drops
@@ -115,6 +114,7 @@ describe("send — resilient observation (auto-reconnect)", () => {
     });
     const response = await provider.send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
+      sessionId: "sess_rc",
     });
 
     expect(response.messages).toEqual(["Hello", " world"]);

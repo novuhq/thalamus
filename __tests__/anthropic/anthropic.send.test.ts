@@ -103,10 +103,9 @@ describe("send() — basic behavior", () => {
       ],
     });
 
-    expect(mockSend).toHaveBeenCalledWith(
-      "sess_new",
-      {
-        events: [
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initial_events: [
           {
             type: "user.message",
             content: [
@@ -117,8 +116,7 @@ describe("send() — basic behavior", () => {
             ],
           },
         ],
-      },
-      expect.objectContaining({}),
+      }),
     );
   });
 

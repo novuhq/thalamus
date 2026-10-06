@@ -57,6 +57,8 @@ describe("send — abort signal", () => {
       isRetryable: false,
       provider: "anthropic",
     });
+    expect(mockCreate.mock.calls[0][0].initial_events).toBeUndefined();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it("passes abort signal to events.stream and events.send", async () => {

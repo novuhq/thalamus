@@ -186,6 +186,37 @@ describe("send() with agent.mcpServers override", () => {
     expect(mockRetrieve).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
   });
+
+  it("updates before dispatch when providerOptions sets the create agent", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_1" });
+    mockIdleSession("sess_1", agentTools, agentMcpServers);
+    mockUpdate.mockResolvedValue({});
+    setupStream();
+
+    const provider = createAnthropicProvider(config);
+    await provider.send({
+      messages: [{ role: MessageRole.USER, content: "hello" }],
+      agent: githubOnly,
+      providerOptions: {
+        agent: { type: "agent", id: "agent_abc", version: 2 },
+      },
+    });
+
+    const createParams = mockCreate.mock.calls[0][0];
+    expect(createParams.agent).toEqual({
+      type: "agent",
+      id: "agent_abc",
+      version: 2,
+    });
+    expect(createParams.initial_events).toBeUndefined();
+    expect(mockUpdate).toHaveBeenCalledWith(
+      "sess_1",
+      expect.objectContaining({ agent: expect.any(Object) }),
+    );
+    expect(mockUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSend.mock.invocationCallOrder[0],
+    );
+  });
 });
 
 describe("send() with tools + providerTools override", () => {

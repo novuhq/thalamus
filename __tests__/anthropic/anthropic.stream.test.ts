@@ -1,9 +1,11 @@
+import { APIUserAbortError } from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import {
   mapEvent,
   ResponseAccumulator,
 } from "../../src/anthropic/anthropic-parser.js";
+import { AbortedError } from "../../src/errors.js";
 import { MessageRole } from "../../src/types.js";
 import { config, emptyHistory, mockSse } from "./_helpers.js";
 
@@ -128,7 +130,7 @@ describe("stream — new session", () => {
       messages: [{ role: MessageRole.USER, content: "Hi" }],
     });
 
-    expect(mockList).toHaveBeenCalledWith("sess_fast");
+    expect(mockList.mock.calls[0][0]).toBe("sess_fast");
     expect(response.messages).toEqual(["Done already."]);
     expect(response.finishReason).toBe("stop");
   });
@@ -169,6 +171,64 @@ describe("stream — new session", () => {
     expect(mockSseStream).toHaveBeenCalledTimes(2);
     expect(first.controller.signal.aborted).toBe(true);
     expect(second.controller.signal.aborted).toBe(true);
+  });
+
+  it("abort stops a seeded turn stuck on the history catch-up", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_stuck" });
+    mockSseStream.mockResolvedValue(mockSse([]));
+    mockList.mockImplementationOnce(
+      (_id: string, _query: unknown, opts: { signal: AbortSignal }) =>
+        new Promise((_, reject) =>
+          opts.signal.addEventListener("abort", () =>
+            reject(new APIUserAbortError()),
+          ),
+        ),
+    );
+    const controller = new AbortController();
+
+    const rejected = expect(
+      createAnthropicProvider(config).send({
+        messages: [{ role: MessageRole.USER, content: "Hi" }],
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow(AbortedError);
+    await vi.waitFor(() => expect(mockList).toHaveBeenCalled());
+    controller.abort();
+
+    await rejected;
+  });
+
+  it("sends the turn's messages via events.send when providerOptions sets initial_events", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_po" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.status_idle",
+          id: "evt_1",
+          stop_reason: { type: "end_turn" },
+        },
+      ]),
+    );
+    mockSend.mockResolvedValue({});
+    const callerEvents = [
+      { type: "user.define_outcome", description: "ship it" },
+    ];
+
+    await createAnthropicProvider(config).send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+      providerOptions: { initial_events: callerEvents },
+    });
+
+    expect(mockCreate.mock.calls[0][0].initial_events).toEqual(callerEvents);
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_po",
+      {
+        events: [
+          { type: "user.message", content: [{ type: "text", text: "Hi" }] },
+        ],
+      },
+      expect.anything(),
+    );
   });
 
   it("surfaces a session error that happened before the stream opened", async () => {

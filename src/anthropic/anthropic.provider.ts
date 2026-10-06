@@ -76,6 +76,15 @@ const MAX_INITIAL_EVENTS = 50;
  */
 type TurnSession = { sessionId: string; seeded: boolean };
 
+function hasProviderOption(params: RequestParams, key: string): boolean {
+  return !!params.providerOptions && key in params.providerOptions;
+}
+
+/** `providerOptions.agent` replaces the create `agent`, so overrides then go through `sessions.update`. */
+function overridesAtCreate(params: RequestParams): boolean {
+  return !!params.agent && !hasProviderOption(params, "agent");
+}
+
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
   if (err instanceof APIUserAbortError) {
     return new AbortedError({ provider: ANTHROPIC, sessionId, cause: err });
@@ -267,10 +276,19 @@ class AnthropicProvider {
     return { sessionId, seeded: isCreator && seeded };
   }
 
-  /** Sends the turn's messages as `initial_events` so create and dispatch are one call. */
+  /**
+   * Sends the turn's messages as `initial_events` so create and dispatch are one call.
+   * Falls back to create then dispatch when the caller already aborted or owns
+   * `initial_events` / `agent` through `providerOptions`.
+   */
   private async createNewSession(params: RequestParams): Promise<TurnSession> {
     const events = buildSendEvents(params);
-    const seeded = events.length > 0 && events.length <= MAX_INITIAL_EVENTS;
+    const seeded =
+      events.length > 0 &&
+      events.length <= MAX_INITIAL_EVENTS &&
+      !params.abortSignal?.aborted &&
+      !hasProviderOption(params, "initial_events") &&
+      (!params.agent || overridesAtCreate(params));
     const sessionId = await this.startSession(
       { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
       seeded ? { initialEvents: events, agent: params.agent } : undefined,
@@ -378,7 +396,7 @@ class AnthropicProvider {
       params.sessionId ??
       (await this.startSession(
         { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
-        { agent: params.agent },
+        { agent: overridesAtCreate(params) ? params.agent : undefined },
       ));
 
     const request: SerializedRequestParams = {
@@ -460,7 +478,7 @@ class AnthropicProvider {
     params: RequestParams,
   ): Promise<void> {
     // Without params.sessionId, sendViaWebhook created the session with the overrides.
-    if (params.agent && params.sessionId) {
+    if (params.agent && (params.sessionId || !overridesAtCreate(params))) {
       await this.applyAgentOverrides(client, sessionId, params.agent);
     }
 
@@ -622,7 +640,11 @@ class AnthropicProvider {
           await onConnected();
         } else {
           try {
-            const missed = await client.beta.sessions.events.list(sessionId);
+            const missed = await client.beta.sessions.events.list(
+              sessionId,
+              null,
+              { signal },
+            );
             yield* this.consumeEvents(missed, seenIds, acc, onEvent);
           } catch (err) {
             // A seeded turn may have finished before the stream opened, so its

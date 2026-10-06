@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { SessionExpiredError, ThalamusError } from "../../src/errors.js";
 import { MessageRole } from "../../src/types.js";
-import { config, mockSse } from "./_helpers.js";
+import { config, emptyHistory, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend },
+          events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },

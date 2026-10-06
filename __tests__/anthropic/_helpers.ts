@@ -1,10 +1,14 @@
 export function mockSse(events: object[]) {
   return {
+    controller: new AbortController(),
     [Symbol.asyncIterator]: async function* () {
       for (const e of events) yield e;
     },
   };
 }
+
+/** `events.list` for a session with no prior events. */
+export const emptyHistory = async () => mockSse([]);
 
 export const config = {
   apiKey: "sk-test",

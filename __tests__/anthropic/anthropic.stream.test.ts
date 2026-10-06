@@ -5,12 +5,12 @@ import {
   ResponseAccumulator,
 } from "../../src/anthropic/anthropic-parser.js";
 import { MessageRole } from "../../src/types.js";
-import { config, mockSse } from "./_helpers.js";
+import { config, emptyHistory, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
-const mockList = vi.fn();
+const mockList = vi.fn(emptyHistory);
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
@@ -100,6 +100,7 @@ describe("stream — new session", () => {
   it("recovers a turn that ran before the stream opened from history", async () => {
     mockCreate.mockResolvedValue({ id: "sess_fast" });
     const neverYields = {
+      controller: new AbortController(),
       [Symbol.asyncIterator]: async function* () {
         await new Promise(() => {});
       },
@@ -130,6 +131,44 @@ describe("stream — new session", () => {
     expect(mockList).toHaveBeenCalledWith("sess_fast");
     expect(response.messages).toEqual(["Done already."]);
     expect(response.finishReason).toBe("stop");
+  });
+
+  it("retries the first history catch-up instead of tailing a stream that already went quiet", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_flaky" });
+    const quietStream = () => ({
+      controller: new AbortController(),
+      [Symbol.asyncIterator]: async function* () {
+        await new Promise(() => {});
+      },
+    });
+    const first = quietStream();
+    const second = quietStream();
+    mockSseStream.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    mockList
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockResolvedValueOnce(
+        mockSse([
+          {
+            type: "agent.message",
+            id: "evt_1",
+            content: [{ type: "text", text: "Done already." }],
+          },
+          {
+            type: "session.status_idle",
+            id: "evt_2",
+            stop_reason: { type: "end_turn" },
+          },
+        ]),
+      );
+
+    const response = await createAnthropicProvider(config).send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(response.messages).toEqual(["Done already."]);
+    expect(mockSseStream).toHaveBeenCalledTimes(2);
+    expect(first.controller.signal.aborted).toBe(true);
+    expect(second.controller.signal.aborted).toBe(true);
   });
 
   it("surfaces a session error that happened before the stream opened", async () => {

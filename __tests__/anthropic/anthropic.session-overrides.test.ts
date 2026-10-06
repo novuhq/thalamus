@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { config, mockSse } from "./_helpers.js";
+import { config, emptyHistory, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockRetrieve = vi.fn();
@@ -9,7 +9,7 @@ const mockUpdate = vi.fn();
 const mockAgentRetrieve = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
-const mockList = vi.fn();
+const mockList = vi.fn(emptyHistory);
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();

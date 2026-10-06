@@ -3,7 +3,7 @@ import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.
 import { cloudflare } from "../../src/durable/cloudflare.js";
 import type { ThalamusLogger } from "../../src/logger.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig } from "./_helpers.js";
+import { awsConfig, emptyHistory } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSend = vi.fn();
@@ -18,7 +18,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: vi.fn(), send: mockSend },
+          events: { stream: vi.fn(), send: mockSend, list: emptyHistory },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -45,7 +45,7 @@ mockAnthropicAws.mockImplementation(function (
     beta: {
       sessions: {
         create: mockCreate,
-        events: { stream: vi.fn(), send: mockSend },
+        events: { stream: vi.fn(), send: mockSend, list: emptyHistory },
       },
       vaults: { create: vi.fn(), retrieve: vi.fn() },
     },

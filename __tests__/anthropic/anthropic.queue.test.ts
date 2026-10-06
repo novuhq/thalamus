@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { ThalamusError } from "../../src/errors.js";
 import { MessageRole } from "../../src/types.js";
-import { config, mockSse } from "./_helpers.js";
+import { config, emptyHistory, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -16,7 +16,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend },
+          events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -462,6 +462,29 @@ describe("sequential turns (queue)", () => {
     );
     expect(r1.messages).toEqual(["msg1"]);
     expect(r2.messages).toEqual(["msg2"]);
+  });
+
+  it("a failed create does not fail a concurrent send to an existing session", async () => {
+    const provider = createAnthropicProvider(config);
+    mockCreate.mockRejectedValueOnce(new Error("initial_events rejected"));
+    mockSend.mockResolvedValue({});
+    mockSseStream.mockImplementation(() => simpleStream("existing", "ex"));
+
+    const [created, existing] = await Promise.allSettled([
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "bad attachment" }],
+      }),
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+        sessionId: "sess_existing",
+      }),
+    ]);
+
+    expect(created.status).toBe("rejected");
+    expect(existing).toMatchObject({
+      status: "fulfilled",
+      value: { messages: ["existing"] },
+    });
   });
 
   it("emits status-change queued when message is waiting", async () => {

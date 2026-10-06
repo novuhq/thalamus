@@ -5,7 +5,7 @@ import type {
   SessionCheckpoint,
 } from "../../src/durable/types.js";
 import type { StreamPart } from "../../src/types.js";
-import { config } from "./_helpers.js";
+import { config, emptyHistory } from "./_helpers.js";
 
 function mockBackend(): DurabilityBackend {
   const sessions = new Map<string, SessionCheckpoint>();
@@ -23,7 +23,7 @@ function mockBackend(): DurabilityBackend {
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
-const mockList = vi.fn();
+const mockList = vi.fn(emptyHistory);
 const mockRetrieve = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
@@ -56,6 +56,7 @@ afterEach(() => vi.clearAllMocks());
 
 function asyncIter(events: object[]) {
   return {
+    controller: new AbortController(),
     [Symbol.asyncIterator]: async function* () {
       for (const e of events) yield e;
     },

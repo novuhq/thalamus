@@ -251,7 +251,8 @@ class AnthropicProvider {
    */
   private async ensureSession(params: RequestParams): Promise<TurnSession> {
     if (params.sessionId) {
-      if (this.sessionBootstrap) await this.sessionBootstrap;
+      // Another conversation's failed create must not fail this send.
+      if (this.sessionBootstrap) await this.sessionBootstrap.catch(() => {});
       return { sessionId: params.sessionId, seeded: false };
     }
 
@@ -620,21 +621,22 @@ class AnthropicProvider {
         if (!connected && onConnected) {
           await onConnected();
         } else {
-          let missed:
-            | AsyncIterable<BetaManagedAgentsStreamSessionEvents>
-            | undefined;
           try {
-            missed = await client.beta.sessions.events.list(sessionId);
-          } catch {
-            // List failed — still worth tailing SSE
-          }
-          if (missed) {
+            const missed = await client.beta.sessions.events.list(sessionId);
             yield* this.consumeEvents(missed, seenIds, acc, onEvent);
-            if (acc.done) {
-              if (backend) await backend.remove(sessionId);
-              yield { type: "finish", response: acc.toResponse(sessionId) };
-              return;
+          } catch (err) {
+            // A seeded turn may have finished before the stream opened, so its
+            // first catch-up must retry or surface; reconnects still tail SSE.
+            if (!connected) {
+              sseStream.controller.abort();
+              throw err;
             }
+          }
+          if (acc.done) {
+            sseStream.controller.abort();
+            if (backend) await backend.remove(sessionId);
+            yield { type: "finish", response: acc.toResponse(sessionId) };
+            return;
           }
         }
         connected = true;

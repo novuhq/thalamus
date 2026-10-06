@@ -6,8 +6,10 @@ import { config, mockSse } from "./_helpers.js";
 const mockCreate = vi.fn();
 const mockRetrieve = vi.fn();
 const mockUpdate = vi.fn();
+const mockAgentRetrieve = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
+const mockList = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
@@ -15,11 +17,12 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const MockAnthropic = function () {
     return {
       beta: {
+        agents: { retrieve: mockAgentRetrieve },
         sessions: {
           create: mockCreate,
           retrieve: mockRetrieve,
           update: mockUpdate,
-          events: { stream: mockSseStream, send: mockSend },
+          events: { stream: mockSseStream, send: mockSend, list: mockList },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -37,6 +40,23 @@ vi.mock("@anthropic-ai/aws-sdk", () => ({
 }));
 
 afterEach(() => vi.clearAllMocks());
+
+const agentTools = [
+  { type: "agent_toolset_20260401" },
+  { type: "mcp_toolset", mcp_server_name: "slack" },
+  { type: "mcp_toolset", mcp_server_name: "github" },
+  { type: "mcp_toolset", mcp_server_name: "linear" },
+];
+
+const agentMcpServers = [
+  { type: "url", name: "slack", url: "https://mcp.slack.com/sse" },
+  { type: "url", name: "github", url: "https://api.githubcopilot.com/mcp/" },
+  { type: "url", name: "linear", url: "https://mcp.linear.app/sse" },
+];
+
+const githubOnly = {
+  mcpServers: [{ name: "github", url: "https://api.githubcopilot.com/mcp/" }],
+};
 
 function mockIdleSession(
   sessionId: string,
@@ -69,37 +89,62 @@ function setupStream() {
 }
 
 describe("send() with agent.mcpServers override", () => {
-  it("calls sessions.update() before dispatch to filter MCPs", async () => {
+  it("applies overrides natively at create for a new session", async () => {
+    mockAgentRetrieve.mockResolvedValue({
+      id: "agent_abc",
+      version: 7,
+      tools: agentTools,
+      mcp_servers: agentMcpServers,
+    });
     mockCreate.mockResolvedValue({ id: "sess_1" });
-    mockIdleSession(
-      "sess_1",
-      [
-        { type: "agent_toolset_20260401" },
-        { type: "mcp_toolset", mcp_server_name: "slack" },
-        { type: "mcp_toolset", mcp_server_name: "github" },
-        { type: "mcp_toolset", mcp_server_name: "linear" },
-      ],
-      [
-        { type: "url", name: "slack", url: "https://mcp.slack.com/sse" },
-        {
-          type: "url",
-          name: "github",
-          url: "https://api.githubcopilot.com/mcp/",
+    setupStream();
+
+    const provider = createAnthropicProvider(config);
+    const response = await provider.send({
+      messages: [{ role: MessageRole.USER, content: "hello" }],
+      agent: githubOnly,
+    });
+
+    expect(mockAgentRetrieve).toHaveBeenCalledWith("agent_abc");
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          type: "agent_with_overrides",
+          id: "agent_abc",
+          version: 7,
+          tools: [
+            { type: "agent_toolset_20260401" },
+            { type: "mcp_toolset", mcp_server_name: "github" },
+          ],
+          mcp_servers: [
+            {
+              type: "url",
+              name: "github",
+              url: "https://api.githubcopilot.com/mcp/",
+            },
+          ],
         },
-        { type: "url", name: "linear", url: "https://mcp.linear.app/sse" },
-      ],
+        initial_events: [
+          { type: "user.message", content: [{ type: "text", text: "hello" }] },
+        ],
+      }),
     );
+    expect(mockRetrieve).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(response.messages).toEqual(["Hello!"]);
+  });
+
+  it("calls sessions.update() before dispatch on a resumed session", async () => {
+    mockIdleSession("sess_1", agentTools, agentMcpServers);
     mockUpdate.mockResolvedValue({});
     setupStream();
 
     const provider = createAnthropicProvider(config);
     await provider.send({
       messages: [{ role: MessageRole.USER, content: "hello" }],
-      agent: {
-        mcpServers: [
-          { name: "github", url: "https://api.githubcopilot.com/mcp/" },
-        ],
-      },
+      sessionId: "sess_1",
+      agent: githubOnly,
     });
 
     expect(mockUpdate).toHaveBeenCalledWith("sess_1", {
@@ -118,13 +163,14 @@ describe("send() with agent.mcpServers override", () => {
       },
     });
 
+    expect(mockAgentRetrieve).not.toHaveBeenCalled();
     expect(mockSend).toHaveBeenCalled();
     expect(mockUpdate.mock.invocationCallOrder[0]).toBeLessThan(
       mockSend.mock.invocationCallOrder[0],
     );
   });
 
-  it("skips sessions.update() when agent is not provided", async () => {
+  it("skips overrides when agent is not provided", async () => {
     mockCreate.mockResolvedValue({ id: "sess_2" });
     setupStream();
 
@@ -133,6 +179,10 @@ describe("send() with agent.mcpServers override", () => {
       messages: [{ role: MessageRole.USER, content: "hello" }],
     });
 
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "agent_abc" }),
+    );
+    expect(mockAgentRetrieve).not.toHaveBeenCalled();
     expect(mockRetrieve).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -140,7 +190,6 @@ describe("send() with agent.mcpServers override", () => {
 
 describe("send() with tools + providerTools override", () => {
   it("replaces non-MCP tools and preserves specified MCPs", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_3" });
     mockIdleSession(
       "sess_3",
       [
@@ -167,6 +216,7 @@ describe("send() with tools + providerTools override", () => {
     const provider = createAnthropicProvider(config);
     await provider.send({
       messages: [{ role: MessageRole.USER, content: "hello" }],
+      sessionId: "sess_3",
       agent: {
         tools: [
           {

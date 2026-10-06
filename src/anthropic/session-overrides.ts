@@ -1,4 +1,5 @@
 import type {
+  BetaManagedAgentsAgent,
   BetaManagedAgentsCustomToolInputSchema,
   BetaManagedAgentsCustomToolParams,
   BetaManagedAgentsMCPToolset,
@@ -6,7 +7,7 @@ import type {
   BetaManagedAgentsURLMCPServerParams,
 } from "@anthropic-ai/sdk/resources/beta/agents/agents";
 import type {
-  BetaManagedAgentsSession,
+  BetaManagedAgentsAgentWithOverridesParams,
   BetaManagedAgentsSessionAgentUpdate,
 } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import type {
@@ -15,7 +16,10 @@ import type {
   McpServerConfig,
 } from "../types";
 
-type SessionAgentTool = BetaManagedAgentsSession["agent"]["tools"][number];
+/** The tool config an override is applied on top of: an agent or a session's agent snapshot. */
+type AgentToolsSnapshot = Pick<BetaManagedAgentsAgent, "tools" | "mcp_servers">;
+
+type SessionAgentTool = AgentToolsSnapshot["tools"][number];
 
 type SessionAgentToolParams = NonNullable<
   BetaManagedAgentsSessionAgentUpdate["tools"]
@@ -51,19 +55,19 @@ function toUrlMcpServerParams(
 }
 
 /**
- * Map Thalamus session agent config + current session snapshot into an Anthropic
+ * Map Thalamus session agent config + current tool config into an Anthropic
  * session agent update payload. Returns null when no overrides were requested.
  */
 export function buildSessionAgentUpdate(
   agentConfig: AgentSessionConfig,
-  session: BetaManagedAgentsSession,
+  current: AgentToolsSnapshot,
 ): BetaManagedAgentsSessionAgentUpdate | null {
   const hasToolsOverride = agentConfig.tools || agentConfig.providerTools;
   const hasMcpOverride = !!agentConfig.mcpServers;
 
   if (!hasToolsOverride && !hasMcpOverride) return null;
 
-  const currentTools = session.agent.tools;
+  const currentTools = current.tools;
 
   const nonMcpTools: SessionAgentToolParams[] = hasToolsOverride
     ? [
@@ -82,6 +86,26 @@ export function buildSessionAgentUpdate(
     tools: [...nonMcpTools, ...mcpToolsets],
     mcp_servers: mcpServers
       ? mcpServers.map(toUrlMcpServerParams)
-      : session.agent.mcp_servers,
+      : current.mcp_servers,
+  };
+}
+
+/**
+ * Session-create `agent` param applying the overrides natively, pinned to the
+ * agent version they were computed against. Returns null when no overrides
+ * were requested.
+ */
+export function buildAgentWithOverrides(
+  agentConfig: AgentSessionConfig,
+  agent: BetaManagedAgentsAgent,
+): BetaManagedAgentsAgentWithOverridesParams | null {
+  const update = buildSessionAgentUpdate(agentConfig, agent);
+  if (!update) return null;
+
+  return {
+    type: "agent_with_overrides",
+    id: agent.id,
+    version: agent.version,
+    ...update,
   };
 }

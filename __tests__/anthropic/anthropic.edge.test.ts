@@ -6,6 +6,8 @@ import { awsConfig } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSend = vi.fn();
+const mockUpdate = vi.fn();
+const mockAgentRetrieve = vi.fn();
 const mockFetch = vi.fn<typeof globalThis.fetch>();
 const mockAnthropicAws = vi.hoisted(() => vi.fn());
 
@@ -42,8 +44,10 @@ mockAnthropicAws.mockImplementation(function (
     baseURL: `https://aws-external-anthropic.${clientConfig.awsRegion}.api.aws`,
     apiKey: clientConfig.apiKey,
     beta: {
+      agents: { retrieve: mockAgentRetrieve },
       sessions: {
         create: mockCreate,
+        update: mockUpdate,
         events: { stream: vi.fn(), send: mockSend },
       },
       vaults: { create: vi.fn(), retrieve: vi.fn() },
@@ -128,6 +132,56 @@ describe("EdgeObserver dispatch ordering", () => {
       messages: [{ role: MessageRole.USER, content: "hi" }],
     });
 
+    expect(order).toEqual(["observe", "dispatch"]);
+  });
+
+  it("creates a new session with native agent overrides, then observes and dispatches", async () => {
+    const order: string[] = [];
+    mockAgentRetrieve.mockResolvedValue({
+      id: "agent_abc",
+      version: 3,
+      tools: [{ type: "mcp_toolset", mcp_server_name: "slack" }],
+      mcp_servers: [
+        { type: "url", name: "slack", url: "https://mcp.slack.com/sse" },
+      ],
+    });
+    mockCreate.mockResolvedValue({ id: "sess_overrides" });
+    mockSend.mockImplementation(async () => {
+      order.push("dispatch");
+      return {};
+    });
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/enqueue")) return enqueueResponse();
+      if (url.includes("/observe")) order.push("observe");
+      return new Response(null, { status: 204 });
+    });
+
+    await edgeProvider().send({
+      messages: [{ role: MessageRole.USER, content: "hi" }],
+      agent: {
+        mcpServers: [
+          { name: "github", url: "https://api.githubcopilot.com/mcp/" },
+        ],
+      },
+    });
+
+    const createParams = mockCreate.mock.calls[0][0];
+    expect(createParams.agent).toEqual({
+      type: "agent_with_overrides",
+      id: "agent_abc",
+      version: 3,
+      tools: [{ type: "mcp_toolset", mcp_server_name: "github" }],
+      mcp_servers: [
+        {
+          type: "url",
+          name: "github",
+          url: "https://api.githubcopilot.com/mcp/",
+        },
+      ],
+    });
+    expect(createParams.initial_events).toBeUndefined();
+    expect(mockUpdate).not.toHaveBeenCalled();
     expect(order).toEqual(["observe", "dispatch"]);
   });
 

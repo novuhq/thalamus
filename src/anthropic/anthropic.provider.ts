@@ -54,7 +54,10 @@ import {
   previewMessageId,
   ResponseAccumulator,
 } from "./anthropic-parser";
-import { buildSessionAgentUpdate } from "./session-overrides";
+import {
+  buildAgentWithOverrides,
+  buildSessionAgentUpdate,
+} from "./session-overrides";
 import { toAnthropicToolResultContent } from "./tool-result";
 
 /** Request `agent.message` previews on every stream connection. */
@@ -67,7 +70,10 @@ const STREAM_QUERY = `?${new URLSearchParams(STREAM_PARAMS.event_deltas.map((t) 
 /** `sessions.create` rejects more `initial_events` than this. */
 const MAX_INITIAL_EVENTS = 50;
 
-/** `seeded`: this turn's messages were sent as `initial_events`, so the turn is already running. */
+/**
+ * `seeded`: this turn's messages (and agent overrides) were sent with
+ * `sessions.create`, so the turn is already running.
+ */
 type TurnSession = { sessionId: string; seeded: boolean };
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
@@ -263,11 +269,10 @@ class AnthropicProvider {
   /** Sends the turn's messages as `initial_events` so create and dispatch are one call. */
   private async createNewSession(params: RequestParams): Promise<TurnSession> {
     const events = buildSendEvents(params);
-    const seeded =
-      !params.agent && events.length > 0 && events.length <= MAX_INITIAL_EVENTS;
+    const seeded = events.length > 0 && events.length <= MAX_INITIAL_EVENTS;
     const sessionId = await this.startSession(
       { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
-      seeded ? events : undefined,
+      seeded ? { initialEvents: events, agent: params.agent } : undefined,
     );
     return { sessionId, seeded };
   }
@@ -370,10 +375,10 @@ class AnthropicProvider {
 
     const sessionId =
       params.sessionId ??
-      (await this.createSession({
-        vaultIds: params.vaultIds,
-        providerOptions: params.providerOptions,
-      }));
+      (await this.startSession(
+        { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
+        { agent: params.agent },
+      ));
 
     const request: SerializedRequestParams = {
       messages: params.messages,
@@ -453,7 +458,8 @@ class AnthropicProvider {
     turnId: string,
     params: RequestParams,
   ): Promise<void> {
-    if (params.agent) {
+    // Without params.sessionId, sendViaWebhook created the session with the overrides.
+    if (params.agent && params.sessionId) {
       await this.applyAgentOverrides(client, sessionId, params.agent);
     }
 
@@ -808,7 +814,7 @@ class AnthropicProvider {
 
       yield { type: "run-start", sessionId };
 
-      if (params.agent) {
+      if (params.agent && !seeded) {
         await this.applyAgentOverrides(client, sessionId, params.agent);
       }
 
@@ -834,10 +840,20 @@ class AnthropicProvider {
     agentConfig: AgentSessionConfig,
   ): Promise<void> {
     const session = await client.beta.sessions.retrieve(sessionId);
-    const agentUpdate = buildSessionAgentUpdate(agentConfig, session);
+    const agentUpdate = buildSessionAgentUpdate(agentConfig, session.agent);
     if (!agentUpdate) return;
 
     await client.beta.sessions.update(sessionId, { agent: agentUpdate });
+  }
+
+  /** Overrides replace the agent's values in full, so they are computed against its current config. */
+  private async resolveSessionAgent(
+    client: Anthropic,
+    agentConfig?: AgentSessionConfig,
+  ): Promise<SessionCreateParams["agent"]> {
+    if (!agentConfig) return this.agentId;
+    const agent = await client.beta.agents.retrieve(this.agentId);
+    return buildAgentWithOverrides(agentConfig, agent) ?? this.agentId;
   }
 
   async createSession(options?: SessionOptions): Promise<string> {
@@ -846,14 +862,17 @@ class AnthropicProvider {
 
   private async startSession(
     options?: SessionOptions,
-    initialEvents?: BetaManagedAgentsUserMessageEventParams[],
+    turn?: {
+      initialEvents?: BetaManagedAgentsUserMessageEventParams[];
+      agent?: AgentSessionConfig;
+    },
   ): Promise<string> {
     const client = await this.getClient();
     const params: SessionCreateParams = {
-      agent: this.agentId,
+      agent: await this.resolveSessionAgent(client, turn?.agent),
       environment_id: this.environmentId,
       ...(options?.vaultIds?.length ? { vault_ids: options.vaultIds } : {}),
-      ...(initialEvents ? { initial_events: initialEvents } : {}),
+      ...(turn?.initialEvents ? { initial_events: turn.initialEvents } : {}),
       ...options?.providerOptions,
     };
     const session = await client.beta.sessions.create(params);
@@ -863,7 +882,8 @@ class AnthropicProvider {
       provider: ANTHROPIC,
       sessionId: session.id,
       vaultIdCount: options?.vaultIds?.length ?? 0,
-      initialEventCount: initialEvents?.length ?? 0,
+      initialEventCount: turn?.initialEvents?.length ?? 0,
+      agentOverrides: typeof params.agent !== "string",
     });
 
     return session.id;

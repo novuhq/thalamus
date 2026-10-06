@@ -153,7 +153,21 @@ describe("error mapping", () => {
 });
 
 describe("refusal handling", () => {
-  it("emits a refusal part with the stop_details explanation and finishes as refused", async () => {
+  it.each([
+    {
+      name: "the stop_details explanation",
+      stopDetails: {
+        type: "refusal",
+        category: "cyber",
+        explanation: "This request was declined by a safety classifier.",
+      },
+      text: "This request was declined by a safety classifier.",
+    },
+    { name: "empty text without stop_details", stopDetails: null, text: "" },
+  ])("emits a refusal part with $name and finishes as refused", async ({
+    stopDetails,
+    text,
+  }) => {
     mockCreate.mockResolvedValue({ id: "sess_refused" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -161,11 +175,7 @@ describe("refusal handling", () => {
           type: "session.status_idle",
           id: "evt_1",
           stop_reason: { type: "refusal" },
-          stop_details: {
-            type: "refusal",
-            category: "cyber",
-            explanation: "This request was declined by a safety classifier.",
-          },
+          stop_details: stopDetails,
         },
       ]),
     );
@@ -176,35 +186,7 @@ describe("refusal handling", () => {
       onSessionEvents: () => ({ onRefusal: (p) => refusals.push(p) }),
     }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
 
-    expect(refusals).toEqual([
-      {
-        type: "refusal",
-        text: "This request was declined by a safety classifier.",
-      },
-    ]);
-    expect(response.finishReason).toBe("refused");
-  });
-
-  it("emits an empty refusal when stop_details has no explanation", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_refused_bare" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "session.status_idle",
-          id: "evt_1",
-          stop_reason: { type: "refusal" },
-          stop_details: null,
-        },
-      ]),
-    );
-
-    const refusals: any[] = [];
-    const response = await createAnthropicProvider({
-      ...config,
-      onSessionEvents: () => ({ onRefusal: (p) => refusals.push(p) }),
-    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
-
-    expect(refusals).toEqual([{ type: "refusal", text: "" }]);
+    expect(refusals).toEqual([{ type: "refusal", text }]);
     expect(response.finishReason).toBe("refused");
   });
 });

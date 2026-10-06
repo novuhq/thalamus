@@ -193,22 +193,6 @@ export type StreamPart =
       serverName: string;
       message: string;
     }
-  /**
-   * A session repository could not be mounted. Non-fatal — the session
-   * continues without it. `repositoryUrl` is null when the provider could not
-   * identify the repository.
-   */
-  | {
-      type: "repository-failure";
-      reason:
-        | "authentication"
-        | "forbidden"
-        | "not-found"
-        | "checkout"
-        | "clone";
-      repositoryUrl: string | null;
-      message: string;
-    }
   | { type: "step-start"; stepIndex: number }
   | { type: "step-done"; stepIndex: number }
   | { type: "status-change"; status: AgentStatus }
@@ -258,9 +242,6 @@ export interface StreamCallbacks {
   ) => void | Promise<void>;
   onMcpServerFailure?: (
     part: Extract<StreamPart, { type: "mcp-server-failure" }>,
-  ) => void | Promise<void>;
-  onRepositoryFailure?: (
-    part: Extract<StreamPart, { type: "repository-failure" }>,
   ) => void | Promise<void>;
   onStepStart?: (
     part: Extract<StreamPart, { type: "step-start" }>,

@@ -27,16 +27,6 @@ import {
 
 type StopReason = BetaManagedAgentsSessionStatusIdleEvent["stop_reason"];
 
-type RepositoryFailure = Extract<StreamPart, { type: "repository-failure" }>;
-
-const REPOSITORY_FAILURE_REASONS = {
-  repository_authentication_error: "authentication",
-  repository_forbidden_error: "forbidden",
-  repository_not_found_error: "not-found",
-  repository_checkout_error: "checkout",
-  repository_clone_error: "clone",
-} as const satisfies Record<string, RepositoryFailure["reason"]>;
-
 /** Preview frames have no `id` and are not in history: never dedup or checkpoint them. */
 export function isPreviewEvent(
   event: BetaManagedAgentsStreamSessionEvents,
@@ -274,18 +264,6 @@ export function* mapEvent(
             type: "mcp-server-failure",
             reason: "connection",
             serverName: error.mcp_server_name,
-            message: error.message,
-          };
-          break;
-        case "repository_authentication_error":
-        case "repository_forbidden_error":
-        case "repository_not_found_error":
-        case "repository_checkout_error":
-        case "repository_clone_error":
-          yield {
-            type: "repository-failure",
-            reason: REPOSITORY_FAILURE_REASONS[error.type],
-            repositoryUrl: error.repository_url,
             message: error.message,
           };
           break;

@@ -252,7 +252,6 @@ onToolUseDone: ({ toolName }) => {
 | `onToolUseResult` | `tool-use-result` | Tool execution result (`content` blocks) |
 | `onMcpToolsDiscovered` | `mcp-tools-discovered` | MCP server tools discovered |
 | `onMcpServerFailure` | `mcp-server-failure` | MCP init failed (auth/connection); non-fatal, session continues without that server |
-| `onRepositoryFailure` | `repository-failure` | Session repository could not be mounted (auth/forbidden/not-found/checkout/clone); non-fatal, session continues without it |
 | `onStatusChange` | `status-change` | Agent status changed |
 | `onRunStart` | `run-start` | Run started, includes `sessionId` when known |
 | `onFinish` | `finish` | Stream complete, includes final `Response` |

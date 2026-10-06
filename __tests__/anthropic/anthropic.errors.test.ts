@@ -150,56 +150,6 @@ describe("error mapping", () => {
     expect(parts.some((p) => p.type === "finish")).toBe(true);
     expect(response.finishReason).toBe("stop");
   });
-
-  it("emits repository-failure and keeps the turn running", async () => {
-    mockCreate.mockResolvedValue({ id: "sess_repo" });
-    mockSseStream.mockResolvedValue(
-      mockSse([
-        {
-          type: "session.error",
-          id: "evt_1",
-          error: {
-            type: "repository_not_found_error",
-            repository_url: "https://github.com/acme/missing",
-            message: "Repository not found",
-            retry_status: { type: "retrying" },
-          },
-        },
-        {
-          type: "agent.message",
-          id: "evt_2",
-          content: [{ type: "text", text: "I couldn't access the repo." }],
-        },
-        {
-          type: "session.status_idle",
-          id: "evt_3",
-          stop_reason: { type: "end_turn" },
-        },
-      ]),
-    );
-
-    const parts: any[] = [];
-    const repoFailures: any[] = [];
-    const response = await createAnthropicProvider({
-      ...config,
-      onSessionEvents: () => ({
-        onPart: (p) => parts.push(p),
-        onRepositoryFailure: (p) => repoFailures.push(p),
-      }),
-    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
-
-    expect(parts.find((p) => p.type === "error")).toBeUndefined();
-    expect(repoFailures).toEqual([
-      {
-        type: "repository-failure",
-        reason: "not-found",
-        repositoryUrl: "https://github.com/acme/missing",
-        message: "Repository not found",
-      },
-    ]);
-    expect(response.messages).toEqual(["I couldn't access the repo."]);
-    expect(response.finishReason).toBe("stop");
-  });
 });
 
 describe("refusal handling", () => {

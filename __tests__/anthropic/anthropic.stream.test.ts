@@ -171,7 +171,7 @@ describe("stream — new session", () => {
     expect(second.controller.signal.aborted).toBe(true);
   });
 
-  it("sends the turn's messages via events.send when providerOptions sets initial_events", async () => {
+  it("seeds the turn's messages after initial_events from providerOptions", async () => {
     mockCreate.mockResolvedValue({ id: "sess_po" });
     mockSseStream.mockResolvedValue(
       mockSse([
@@ -182,26 +182,19 @@ describe("stream — new session", () => {
         },
       ]),
     );
-    mockSend.mockResolvedValue({});
-    const callerEvents = [
-      { type: "user.define_outcome", description: "ship it" },
-    ];
+    const callerEvent = { type: "user.define_outcome", description: "ship it" };
 
     await createAnthropicProvider(config).send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
-      providerOptions: { initial_events: callerEvents },
+      providerOptions: { initial_events: [callerEvent] },
     });
 
-    expect(mockCreate.mock.calls[0][0].initial_events).toEqual(callerEvents);
-    expect(mockSend).toHaveBeenCalledWith(
-      "sess_po",
-      {
-        events: [
-          { type: "user.message", content: [{ type: "text", text: "Hi" }] },
-        ],
-      },
-      expect.anything(),
-    );
+    expect(mockCreate.mock.calls[0][0].initial_events).toEqual([
+      callerEvent,
+      { type: "user.message", content: [{ type: "text", text: "Hi" }] },
+    ]);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockList).toHaveBeenCalled();
   });
 
   it("surfaces a session error that happened before the stream opened", async () => {

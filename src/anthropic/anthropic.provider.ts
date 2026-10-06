@@ -2,7 +2,6 @@ import Anthropic, { APIError, APIUserAbortError } from "@anthropic-ai/sdk";
 import type {
   BetaManagedAgentsStreamSessionEvents,
   BetaManagedAgentsUserCustomToolResultEventParams,
-  BetaManagedAgentsUserMessageEventParams,
   BetaManagedAgentsUserToolConfirmationEventParams,
   EventSendParams,
   EventStreamParams,
@@ -75,6 +74,8 @@ const MAX_INITIAL_EVENTS = 50;
  * `sessions.create`, so the turn is already running.
  */
 type TurnSession = { sessionId: string; seeded: boolean };
+
+type InitialEvents = NonNullable<SessionCreateParams["initial_events"]>;
 
 function hasProviderOption(params: RequestParams, key: string): boolean {
   return !!params.providerOptions && key in params.providerOptions;
@@ -277,17 +278,19 @@ class AnthropicProvider {
   }
 
   /**
-   * Sends the turn's messages as `initial_events` so create and dispatch are one call.
-   * Falls back to create then dispatch when the caller already aborted or owns
-   * `initial_events` / `agent` through `providerOptions`.
+   * Sends the turn's messages as `initial_events` (after any the caller passed
+   * through `providerOptions`) so create and dispatch are one call. Falls back
+   * to create then dispatch when the caller already aborted or owns `agent`
+   * through `providerOptions`.
    */
   private async createNewSession(params: RequestParams): Promise<TurnSession> {
-    const events = buildSendEvents(params);
+    const callerEvents = (params.providerOptions?.initial_events ??
+      []) as InitialEvents;
+    const events = [...callerEvents, ...buildSendEvents(params)];
     const seeded =
-      events.length > 0 &&
+      events.length > callerEvents.length &&
       events.length <= MAX_INITIAL_EVENTS &&
       !params.abortSignal?.aborted &&
-      !hasProviderOption(params, "initial_events") &&
       (!params.agent || overridesAtCreate(params));
     const sessionId = await this.startSession(
       { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
@@ -887,7 +890,7 @@ class AnthropicProvider {
   private async startSession(
     options?: SessionOptions,
     turn?: {
-      initialEvents?: BetaManagedAgentsUserMessageEventParams[];
+      initialEvents?: InitialEvents;
       agent?: AgentSessionConfig;
     },
   ): Promise<string> {
@@ -896,8 +899,8 @@ class AnthropicProvider {
       agent: await this.resolveSessionAgent(client, turn?.agent),
       environment_id: this.environmentId,
       ...(options?.vaultIds?.length ? { vault_ids: options.vaultIds } : {}),
-      ...(turn?.initialEvents ? { initial_events: turn.initialEvents } : {}),
       ...options?.providerOptions,
+      ...(turn?.initialEvents ? { initial_events: turn.initialEvents } : {}),
     };
     const session = await client.beta.sessions.create(params);
 

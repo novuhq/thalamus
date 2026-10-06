@@ -322,6 +322,7 @@ This applies to both streaming mode and webhook mode — same callbacks, same or
 | `tool-use-result` | `toolUseId`, `content` (`ToolResultContent[]`), `isError?`, `source?` |
 | `mcp-tools-discovered` | `serverName`, `tools: McpToolDef[]` |
 | `mcp-server-failure` | `reason` (`authentication` \| `connection`), `serverName`, `message` (non-fatal; MCP init failed) |
+| `repository-failure` | `reason` (`authentication` \| `forbidden` \| `not-found` \| `checkout` \| `clone`), `repositoryUrl` (nullable), `message` (non-fatal; repository mount failed) |
 | `status-change` | `status: 'running' \| 'queued' \| 'retrying' \| 'idle'` |
 | `run-start` | `sessionId?` |
 | `finish` | `response: Response` |
@@ -348,6 +349,7 @@ interface StreamCallbacks {
   onToolUseResult?: ...;
   onMcpToolsDiscovered?: ...;
   onMcpServerFailure?: ...;
+  onRepositoryFailure?: ...;
   onStatusChange?: ...;
   onRunStart?: ...;
   onFinish?: ...;

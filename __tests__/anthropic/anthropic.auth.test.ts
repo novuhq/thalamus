@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig, config, emptyHistory, mockSse } from "./_helpers.js";
+import { awsConfig, config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -16,7 +16,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
+          events: { stream: mockSseStream, send: mockSend },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -41,7 +41,7 @@ mockAnthropicAws.mockImplementation(function (
     beta: {
       sessions: {
         create: mockCreate,
-        events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
+        events: { stream: mockSseStream, send: mockSend },
       },
       vaults: { create: vi.fn(), retrieve: vi.fn() },
     },

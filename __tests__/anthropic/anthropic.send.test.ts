@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { config, emptyHistory, mockSse } from "./_helpers.js";
+import { config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -15,7 +15,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
+          events: { stream: mockSseStream, send: mockSend },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -103,9 +103,10 @@ describe("send() — basic behavior", () => {
       ],
     });
 
-    expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initial_events: [
+    expect(mockSend).toHaveBeenCalledWith(
+      "sess_new",
+      {
+        events: [
           {
             type: "user.message",
             content: [
@@ -116,7 +117,8 @@ describe("send() — basic behavior", () => {
             ],
           },
         ],
-      }),
+      },
+      expect.objectContaining({}),
     );
   });
 

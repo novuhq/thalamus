@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { MessageRole } from "../../src/types.js";
-import { config, emptyHistory, mockSse } from "./_helpers.js";
+import { config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockRetrieve = vi.fn();
@@ -9,7 +9,6 @@ const mockUpdate = vi.fn();
 const mockAgentRetrieve = vi.fn();
 const mockSseStream = vi.fn();
 const mockSend = vi.fn();
-const mockList = vi.fn(emptyHistory);
 
 vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@anthropic-ai/sdk")>();
@@ -22,7 +21,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
           create: mockCreate,
           retrieve: mockRetrieve,
           update: mockUpdate,
-          events: { stream: mockSseStream, send: mockSend, list: mockList },
+          events: { stream: mockSseStream, send: mockSend },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -124,14 +123,11 @@ describe("send() with agent.mcpServers override", () => {
             },
           ],
         },
-        initial_events: [
-          { type: "user.message", content: [{ type: "text", text: "hello" }] },
-        ],
       }),
     );
     expect(mockRetrieve).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
-    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockSend).toHaveBeenCalledOnce();
     expect(response.messages).toEqual(["Hello!"]);
   });
 
@@ -208,7 +204,6 @@ describe("send() with agent.mcpServers override", () => {
       id: "agent_abc",
       version: 2,
     });
-    expect(createParams.initial_events).toBeUndefined();
     expect(mockUpdate).toHaveBeenCalledWith(
       "sess_1",
       expect.objectContaining({ agent: expect.any(Object) }),

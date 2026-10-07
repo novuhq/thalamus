@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { AbortedError } from "../../src/errors.js";
 import { MessageRole } from "../../src/types.js";
-import { config, emptyHistory, mockSse } from "./_helpers.js";
+import { config, mockSse } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSseStream = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: mockSseStream, send: mockSend, list: emptyHistory },
+          events: { stream: mockSseStream, send: mockSend },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -57,11 +57,10 @@ describe("send — abort signal", () => {
       isRetryable: false,
       provider: "anthropic",
     });
-    expect(mockCreate.mock.calls[0][0].initial_events).toBeUndefined();
-    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it("passes abort signal to events.stream and events.send", async () => {
+    mockCreate.mockResolvedValue({ id: "sess_sig" });
     mockSseStream.mockResolvedValue(
       mockSse([
         {
@@ -82,7 +81,6 @@ describe("send — abort signal", () => {
     const rt = createAnthropicProvider(config);
     await rt.send({
       messages: [{ role: MessageRole.USER, content: "Hi" }],
-      sessionId: "sess_sig",
       abortSignal: controller.signal,
     });
 

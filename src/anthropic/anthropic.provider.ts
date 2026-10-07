@@ -66,24 +66,15 @@ const STREAM_PARAMS = {
 
 const STREAM_QUERY = `?${new URLSearchParams(STREAM_PARAMS.event_deltas.map((t) => ["event_deltas[]", t]))}`;
 
-/** `sessions.create` rejects more `initial_events` than this. */
-const MAX_INITIAL_EVENTS = 50;
-
-/**
- * `seeded`: this turn's messages (and agent overrides) were sent with
- * `sessions.create`, so the turn is already running.
- */
-type TurnSession = { sessionId: string; seeded: boolean };
-
-type InitialEvents = NonNullable<SessionCreateParams["initial_events"]>;
-
-function hasProviderOption(params: RequestParams, key: string): boolean {
-  return !!params.providerOptions && key in params.providerOptions;
-}
+/** `agentApplied`: the session was created with this turn's agent overrides. */
+type TurnSession = { sessionId: string; agentApplied: boolean };
 
 /** `providerOptions.agent` replaces the create `agent`, so overrides then go through `sessions.update`. */
 function overridesAtCreate(params: RequestParams): boolean {
-  return !!params.agent && !hasProviderOption(params, "agent");
+  return (
+    !!params.agent &&
+    !(params.providerOptions && "agent" in params.providerOptions)
+  );
 }
 
 function mapStreamError(err: unknown, sessionId?: string): ThalamusError {
@@ -204,7 +195,7 @@ class AnthropicProvider {
   private readonly log: ThalamusLogger;
   private readonly turnLock = new SessionMutex();
   /** While set, a new session is being created and its turn lock is being acquired. */
-  private sessionBootstrap: Promise<TurnSession> | null = null;
+  private sessionBootstrap: Promise<string> | null = null;
 
   constructor(config: AnthropicProviderConfig) {
     this.config = config;
@@ -257,13 +248,14 @@ class AnthropicProvider {
    * Ensures a sessionId is available, deduplicating concurrent first-message calls.
    * If params already has a sessionId, returns it (after any in-flight bootstrap settles).
    * Otherwise creates a new session via a shared promise so concurrent sends
-   * don't each create their own session. Only the creator's turn can be seeded.
+   * don't each create their own session. Only the creator's agent overrides
+   * are applied at create.
    */
   private async ensureSession(params: RequestParams): Promise<TurnSession> {
     if (params.sessionId) {
       // Another conversation's failed create must not fail this send.
       if (this.sessionBootstrap) await this.sessionBootstrap.catch(() => {});
-      return { sessionId: params.sessionId, seeded: false };
+      return { sessionId: params.sessionId, agentApplied: false };
     }
 
     let isCreator = false;
@@ -273,30 +265,15 @@ class AnthropicProvider {
         this.sessionBootstrap = null;
       });
     }
-    const { sessionId, seeded } = await this.sessionBootstrap;
-    return { sessionId, seeded: isCreator && seeded };
+    const sessionId = await this.sessionBootstrap;
+    return { sessionId, agentApplied: isCreator && overridesAtCreate(params) };
   }
 
-  /**
-   * Sends the turn's messages as `initial_events` (after any the caller passed
-   * through `providerOptions`) so create and dispatch are one call. Falls back
-   * to create then dispatch when the caller already aborted or owns `agent`
-   * through `providerOptions`.
-   */
-  private async createNewSession(params: RequestParams): Promise<TurnSession> {
-    const callerEvents = (params.providerOptions?.initial_events ??
-      []) as InitialEvents;
-    const events = [...callerEvents, ...buildSendEvents(params)];
-    const seeded =
-      events.length > callerEvents.length &&
-      events.length <= MAX_INITIAL_EVENTS &&
-      !params.abortSignal?.aborted &&
-      (!params.agent || overridesAtCreate(params));
-    const sessionId = await this.startSession(
+  private async createNewSession(params: RequestParams): Promise<string> {
+    return this.startSession(
       { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
-      seeded ? { initialEvents: events, agent: params.agent } : undefined,
+      overridesAtCreate(params) ? params.agent : undefined,
     );
-    return { sessionId, seeded };
   }
 
   /**
@@ -330,7 +307,7 @@ class AnthropicProvider {
         this.runStream(
           { ...params, sessionId: session.sessionId },
           runId,
-          session.seeded,
+          session.agentApplied,
         ),
         release,
       );
@@ -399,7 +376,7 @@ class AnthropicProvider {
       params.sessionId ??
       (await this.startSession(
         { vaultIds: params.vaultIds, providerOptions: params.providerOptions },
-        { agent: overridesAtCreate(params) ? params.agent : undefined },
+        overridesAtCreate(params) ? params.agent : undefined,
       ));
 
     const request: SerializedRequestParams = {
@@ -603,9 +580,6 @@ class AnthropicProvider {
    * @param onConnected Called once after the first SSE connection opens.
    *   Callers pass dispatch() here so events are sent only after SSE is live,
    *   avoiding the race where dispatch fires before the stream is open.
-   *   Omit it when the turn is already running (seeded via `initial_events`):
-   *   the stream only delivers events emitted after it opens, so the first
-   *   connection then catches up from history like a reconnect does.
    */
   private async *resilientObserve(
     client: Anthropic,
@@ -639,32 +613,22 @@ class AnthropicProvider {
           { signal },
         );
 
-        if (!connected && onConnected) {
-          await onConnected();
+        if (!connected) {
+          if (onConnected) await onConnected();
+          connected = true;
         } else {
           try {
-            const missed = await client.beta.sessions.events.list(
-              sessionId,
-              null,
-              { signal },
-            );
+            const missed = await client.beta.sessions.events.list(sessionId);
             yield* this.consumeEvents(missed, seenIds, acc, onEvent);
-          } catch (err) {
-            // A seeded turn may have finished before the stream opened, so its
-            // first catch-up must retry or surface; reconnects still tail SSE.
-            if (!connected) {
-              sseStream.controller.abort();
-              throw err;
+            if (acc.done) {
+              if (backend) await backend.remove(sessionId);
+              yield { type: "finish", response: acc.toResponse(sessionId) };
+              return;
             }
-          }
-          if (acc.done) {
-            sseStream.controller.abort();
-            if (backend) await backend.remove(sessionId);
-            yield { type: "finish", response: acc.toResponse(sessionId) };
-            return;
+          } catch {
+            // List failed — still worth tailing SSE
           }
         }
-        connected = true;
 
         yield* this.consumeEvents(sseStream, seenIds, acc, onEvent);
         if (backend) await backend.remove(sessionId);
@@ -828,7 +792,7 @@ class AnthropicProvider {
   private async *runStream(
     params: RequestParams,
     runId: string,
-    seeded = false,
+    agentApplied = false,
   ): AsyncIterable<StreamPart> {
     try {
       const client = await this.getClient();
@@ -841,19 +805,13 @@ class AnthropicProvider {
 
       yield { type: "run-start", sessionId };
 
-      if (params.agent && !seeded) {
+      if (params.agent && !agentApplied) {
         await this.applyAgentOverrides(client, sessionId, params.agent);
       }
 
       const signal = params.abortSignal ?? undefined;
-      yield* this.resilientObserve(
-        client,
-        sessionId,
-        runId,
-        signal,
-        seeded
-          ? undefined
-          : () => this.dispatch(client, sessionId, params, signal),
+      yield* this.resilientObserve(client, sessionId, runId, signal, () =>
+        this.dispatch(client, sessionId, params, signal),
       );
     } catch (err) {
       const error = mapStreamError(err, params.sessionId);
@@ -889,18 +847,14 @@ class AnthropicProvider {
 
   private async startSession(
     options?: SessionOptions,
-    turn?: {
-      initialEvents?: InitialEvents;
-      agent?: AgentSessionConfig;
-    },
+    agentConfig?: AgentSessionConfig,
   ): Promise<string> {
     const client = await this.getClient();
     const params: SessionCreateParams = {
-      agent: await this.resolveSessionAgent(client, turn?.agent),
+      agent: await this.resolveSessionAgent(client, agentConfig),
       environment_id: this.environmentId,
       ...(options?.vaultIds?.length ? { vault_ids: options.vaultIds } : {}),
       ...options?.providerOptions,
-      ...(turn?.initialEvents ? { initial_events: turn.initialEvents } : {}),
     };
     const session = await client.beta.sessions.create(params);
 
@@ -909,7 +863,6 @@ class AnthropicProvider {
       provider: ANTHROPIC,
       sessionId: session.id,
       vaultIdCount: options?.vaultIds?.length ?? 0,
-      initialEventCount: turn?.initialEvents?.length ?? 0,
       agentOverrides: typeof params.agent !== "string",
     });
 

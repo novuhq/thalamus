@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicProvider } from "../../src/anthropic/anthropic.provider.js";
 import { cloudflare } from "../../src/durable/cloudflare.js";
 import { MessageRole } from "../../src/types.js";
-import { awsConfig, emptyHistory } from "./_helpers.js";
+import { awsConfig } from "./_helpers.js";
 
 const mockCreate = vi.fn();
 const mockSend = vi.fn();
@@ -19,7 +19,7 @@ vi.mock("@anthropic-ai/sdk", async (importOriginal) => {
       beta: {
         sessions: {
           create: mockCreate,
-          events: { stream: vi.fn(), send: mockSend, list: emptyHistory },
+          events: { stream: vi.fn(), send: mockSend },
         },
         vaults: { create: vi.fn(), retrieve: vi.fn() },
       },
@@ -48,7 +48,7 @@ mockAnthropicAws.mockImplementation(function (
       sessions: {
         create: mockCreate,
         update: mockUpdate,
-        events: { stream: vi.fn(), send: mockSend, list: emptyHistory },
+        events: { stream: vi.fn(), send: mockSend },
       },
       vaults: { create: vi.fn(), retrieve: vi.fn() },
     },
@@ -163,7 +163,6 @@ describe("EdgeObserver dispatch ordering", () => {
 
     const createParams = mockCreate.mock.calls[0][0];
     expect(createParams.agent.type).toBe("agent_with_overrides");
-    expect(createParams.initial_events).toBeUndefined();
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockSend).toHaveBeenCalledOnce();
   });

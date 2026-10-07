@@ -1,5 +1,6 @@
 import type {
   BetaManagedAgentsDocumentBlock,
+  BetaManagedAgentsEventParams,
   BetaManagedAgentsImageBlock,
   BetaManagedAgentsTextBlock,
   BetaManagedAgentsUserMessageEventParams,
@@ -95,7 +96,7 @@ function packUserMessage(context: Message[], user: Message): ContentBlock[] {
  */
 export function buildSendEvents(
   params: RequestParams,
-): BetaManagedAgentsUserMessageEventParams[] {
+): BetaManagedAgentsEventParams[] {
   const events: BetaManagedAgentsUserMessageEventParams[] = [];
   let context: Message[] = [];
 

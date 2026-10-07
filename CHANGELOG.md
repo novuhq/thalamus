@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.0-alpha.20 (2026-10-07)
+
+### 🚀 Features
+
+- **anthropic:** native agent overrides, refusal stop reason (part of NV-8926, part of NV-8924) ([#22](https://github.com/novuhq/thalamus/pull/22))
+
+### ⚠️ Breaking Changes
+
+- The `@anthropic-ai/sdk` peer dependency is now `>=0.130.0` (the `refusal` stop reason and `stop_details` first ship there).
+
+### ❤️ Thank You
+
+- Adam Chmara
+
 ## v0.1.0-alpha.19 (2026-10-05)
 
 ### 🚀 Features

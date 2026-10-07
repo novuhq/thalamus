@@ -152,6 +152,45 @@ describe("error mapping", () => {
   });
 });
 
+describe("refusal handling", () => {
+  it.each([
+    {
+      name: "the stop_details explanation",
+      stopDetails: {
+        type: "refusal",
+        category: "cyber",
+        explanation: "This request was declined by a safety classifier.",
+      },
+      text: "This request was declined by a safety classifier.",
+    },
+    { name: "empty text without stop_details", stopDetails: null, text: "" },
+  ])("emits a refusal part with $name and finishes as refused", async ({
+    stopDetails,
+    text,
+  }) => {
+    mockCreate.mockResolvedValue({ id: "sess_refused" });
+    mockSseStream.mockResolvedValue(
+      mockSse([
+        {
+          type: "session.status_idle",
+          id: "evt_1",
+          stop_reason: { type: "refusal" },
+          stop_details: stopDetails,
+        },
+      ]),
+    );
+
+    const refusals: any[] = [];
+    const response = await createAnthropicProvider({
+      ...config,
+      onSessionEvents: () => ({ onRefusal: (p) => refusals.push(p) }),
+    }).send({ messages: [{ role: MessageRole.USER, content: "x" }] });
+
+    expect(refusals).toEqual([{ type: "refusal", text }]);
+    expect(response.finishReason).toBe("refused");
+  });
+});
+
 describe("session expiry detection", () => {
   it("throws SessionExpiredError when SSE stream returns 404 on resume", async () => {
     const notFoundError = new APIError(404, undefined, "Not Found", undefined);

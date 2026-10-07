@@ -447,6 +447,29 @@ describe("sequential turns (queue)", () => {
     expect(r2.messages).toBeDefined();
   });
 
+  it("a failed create does not fail a concurrent send to an existing session", async () => {
+    const provider = createAnthropicProvider(config);
+    mockCreate.mockRejectedValueOnce(new Error("create rejected"));
+    mockSend.mockResolvedValue({});
+    mockSseStream.mockImplementation(() => simpleStream("existing", "ex"));
+
+    const [created, existing] = await Promise.allSettled([
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "new" }],
+      }),
+      provider.send({
+        messages: [{ role: MessageRole.USER, content: "hi" }],
+        sessionId: "sess_existing",
+      }),
+    ]);
+
+    expect(created.status).toBe("rejected");
+    expect(existing).toMatchObject({
+      status: "fulfilled",
+      value: { messages: ["existing"] },
+    });
+  });
+
   it("emits status-change queued when message is waiting", async () => {
     const onStatusChange = vi.fn();
     const provider = createAnthropicProvider({

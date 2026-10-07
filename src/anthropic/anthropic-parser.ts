@@ -48,6 +48,8 @@ export function mapStopReason(reason: StopReason): Response["finishReason"] {
       return "requires-action";
     case "retries_exhausted":
       return "error";
+    case "refusal":
+      return "refused";
     default:
       return "other";
   }
@@ -230,6 +232,9 @@ export function* mapEvent(
     }
     case "session.status_idle": {
       const e = event as BetaManagedAgentsSessionStatusIdleEvent;
+      if (e.stop_reason.type === "refusal") {
+        yield { type: "refusal", text: e.stop_details?.explanation ?? "" };
+      }
       yield { type: "status-change", status: "idle" };
       acc.finishReason = mapStopReason(e.stop_reason);
       acc.done = true;

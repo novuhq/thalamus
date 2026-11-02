@@ -100,6 +100,10 @@ describe("AWS EdgeObserver auth headers", () => {
     const observeBody = observeCall![1]?.body as string;
     expect(observeBody).toContain('"anthropic-workspace-id":"wrkspc_edge"');
     expect(observeBody).toContain('"x-api-key":"aws-api-key-abc123"');
+    expect(observeBody).toContain('"anthropic-version":"2026-10-21"');
+    expect(observeBody).toContain(
+      '"anthropic-beta":"managed-agents-2026-04-01"',
+    );
   });
 });
 

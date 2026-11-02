@@ -176,7 +176,7 @@ async function createClient(
       awsRegion: config.awsRegion,
       workspaceId: config.awsWorkspaceId,
       apiKey: config.apiKey,
-    }) as unknown as Anthropic;
+    });
   }
 
   return new Anthropic({ apiKey: config.apiKey });
@@ -781,7 +781,7 @@ class AnthropicProvider {
   private buildApiHeaders(client: Anthropic): Record<string, string> {
     return {
       "x-api-key": client.apiKey ?? "",
-      "anthropic-version": "2023-06-01",
+      "anthropic-version": "2026-10-21",
       "anthropic-beta": "managed-agents-2026-04-01",
       ...("awsRegion" in this.config && this.config.awsWorkspaceId
         ? { "anthropic-workspace-id": this.config.awsWorkspaceId }

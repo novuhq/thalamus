@@ -1,4 +1,4 @@
-import OpenAI, { APIError, APIUserAbortError } from "openai";
+import { APIError, APIUserAbortError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
@@ -54,6 +54,12 @@ import type {
 import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
 import { openaiTransformer } from "./openai.transformer";
+import {
+  type OpenedClient,
+  openOpenAIClient,
+  type ResolvedAuth,
+  resolveAuth,
+} from "./openai-client";
 import { mapEvent, ResponseAccumulator } from "./openai-parser";
 import { toOpenAIToolResultOutput } from "./tool-result";
 
@@ -179,50 +185,6 @@ const MAX_RECONNECT_RETRIES = 3;
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 
-type ResolvedAuth =
-  | { kind: "direct"; apiKey: string }
-  | { kind: "bedrock-api-key"; region: string; apiKey: string }
-  | {
-      kind: "bedrock-sigv4";
-      region: string;
-      credentials: OpenAIBedrockSigV4Config["awsCredentials"];
-    };
-
-type OpenedClient = { client: OpenAI; authorization: string };
-
-function isDirectConfig(
-  config: OpenAIProviderConfig,
-): config is OpenAIBaseConfig & OpenAIDirectConfig {
-  return !("awsRegion" in config) || !config.awsRegion;
-}
-
-function resolveAuth(config: OpenAIProviderConfig): ResolvedAuth {
-  if (isDirectConfig(config)) {
-    return { kind: "direct", apiKey: config.apiKey };
-  }
-
-  if ("awsBedrockApiKey" in config && config.awsBedrockApiKey) {
-    return {
-      kind: "bedrock-api-key",
-      region: config.awsRegion,
-      apiKey: config.awsBedrockApiKey,
-    };
-  }
-
-  if ("awsCredentials" in config && config.awsCredentials) {
-    return {
-      kind: "bedrock-sigv4",
-      region: config.awsRegion,
-      credentials: config.awsCredentials,
-    };
-  }
-
-  throw new ThalamusError(
-    "Bedrock requires awsBedrockApiKey or awsCredentials",
-    { provider: OPENAI, isRetryable: false },
-  );
-}
-
 class OpenAIProvider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
@@ -231,7 +193,6 @@ class OpenAIProvider {
   private opened?: Promise<OpenedClient>;
   private readonly model: string;
   private readonly instructions?: string;
-  private readonly useConversations: boolean;
   private readonly mcpServers: McpServerConfig[];
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
@@ -258,7 +219,6 @@ class OpenAIProvider {
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
-    this.useConversations = this.auth.kind === "direct";
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
@@ -274,85 +234,8 @@ class OpenAIProvider {
   }
 
   private open(): Promise<OpenedClient> {
-    this.opened ??= this.openClient();
+    this.opened ??= openOpenAIClient(this.auth);
     return this.opened;
-  }
-
-  private async openClient(): Promise<OpenedClient> {
-    // null stops the SDK from reading AWS_BEDROCK_BASE_URL
-    const baseURL = null;
-    try {
-      switch (this.auth.kind) {
-        case "direct": {
-          const { apiKey } = this.auth;
-          return {
-            client: new OpenAI({ apiKey }),
-            authorization: `Bearer ${apiKey}`,
-          };
-        }
-        case "bedrock-api-key": {
-          const { region, apiKey } = this.auth;
-          let imported: typeof import("openai/providers/bedrock");
-          try {
-            imported = await import("openai/providers/bedrock");
-          } catch (err) {
-            throw new ThalamusError(
-              "Amazon Bedrock bearer auth requires openai >= 6.45.0",
-              { provider: OPENAI, isRetryable: false, cause: err },
-            );
-          }
-          const { bedrock } = imported;
-          return {
-            client: new OpenAI({
-              provider: bedrock({
-                region,
-                apiKey,
-                baseURL,
-              }),
-            }),
-            authorization: `Bearer ${apiKey}`,
-          };
-        }
-        case "bedrock-sigv4": {
-          const { region, credentials } = this.auth;
-          let imported: typeof import("openai/providers/bedrock/aws");
-          try {
-            imported = await import("openai/providers/bedrock/aws");
-          } catch (err) {
-            throw new ThalamusError(
-              "SigV4 auth requires @aws-sdk/credential-provider-node, @smithy/hash-node, and @smithy/signature-v4",
-              { provider: OPENAI, isRetryable: false, cause: err },
-            );
-          }
-          const { bedrock } = imported;
-          const { accessKeyId, secretAccessKey, sessionToken } = credentials;
-          return {
-            client: new OpenAI({
-              provider: bedrock({
-                region,
-                accessKeyId,
-                secretAccessKey,
-                sessionToken,
-                baseURL,
-              }),
-            }),
-            authorization: "Bearer bedrock-sigv4",
-          };
-        }
-        default: {
-          const unreachable: never = this.auth;
-          throw unreachable;
-        }
-      }
-    } catch (err) {
-      if (err instanceof ThalamusError) throw err;
-      const message = err instanceof Error ? err.message : String(err);
-      throw new ThalamusError(message, {
-        provider: OPENAI,
-        isRetryable: false,
-        cause: err,
-      });
-    }
   }
 
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
@@ -592,7 +475,7 @@ class OpenAIProvider {
   }
 
   private async createNewSession(): Promise<string> {
-    if (!this.useConversations) {
+    if (this.auth.kind !== "direct") {
       return crypto.randomUUID();
     }
     const opened = await this.open();
@@ -606,7 +489,7 @@ class OpenAIProvider {
   }
 
   private resolveSessionParams(sessionId: string): Record<string, unknown> {
-    if (this.useConversations) {
+    if (this.auth.kind === "direct") {
       return { conversation: { id: sessionId } };
     }
     return { previous_response_id: sessionId };

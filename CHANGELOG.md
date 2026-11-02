@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### ⚠️ Breaking Changes
+
+- The `openai` peer dependency is now `>=6.45.0`.
+- Optional Amazon Bedrock SigV4 peers are `@aws-sdk/credential-provider-node` (`>=3.972.0 <4`), `@smithy/hash-node` (`>=4.3.0 <5`), and `@smithy/signature-v4` (`>=5.4.0 <6`). `@aws-crypto/sha256-js` is no longer a peer.
+
 ## v0.1.0-alpha.20 (2026-10-07)
 
 ### 🚀 Features

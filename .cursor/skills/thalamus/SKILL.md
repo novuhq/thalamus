@@ -80,7 +80,7 @@ const provider = createOpenAIProvider({
 
 ### OpenAI via AWS Bedrock (SigV4)
 
-Requires additional peer deps: `@smithy/signature-v4` and `@aws-crypto/sha256-js`.
+Requires additional peer deps: `@aws-sdk/credential-provider-node`, `@smithy/hash-node`, and `@smithy/signature-v4`.
 
 ```typescript
 const provider = createOpenAIProvider({

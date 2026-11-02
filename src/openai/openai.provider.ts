@@ -55,7 +55,6 @@ import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
 import { openaiTransformer } from "./openai.transformer";
 import { mapEvent, ResponseAccumulator } from "./openai-parser";
-import { createSigV4Fetch } from "./sigv4-fetch";
 import { toOpenAIToolResultOutput } from "./tool-result";
 
 export function mapError(error: unknown, provider: string): Error {
@@ -180,36 +179,56 @@ const MAX_RECONNECT_RETRIES = 3;
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 
-function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
-  if (!("awsRegion" in config) || !config.awsRegion) {
-    return new OpenAI({ apiKey: config.apiKey });
+type ResolvedAuth =
+  | { kind: "direct"; apiKey: string }
+  | { kind: "bedrock-api-key"; region: string; apiKey: string }
+  | {
+      kind: "bedrock-sigv4";
+      region: string;
+      credentials: OpenAIBedrockSigV4Config["awsCredentials"];
+    };
+
+type OpenedClient = { client: OpenAI; authorization: string };
+
+function isDirectConfig(
+  config: OpenAIProviderConfig,
+): config is OpenAIBaseConfig & OpenAIDirectConfig {
+  return !("awsRegion" in config) || !config.awsRegion;
+}
+
+function resolveAuth(config: OpenAIProviderConfig): ResolvedAuth {
+  if (isDirectConfig(config)) {
+    return { kind: "direct", apiKey: config.apiKey };
   }
 
-  const baseURL = `https://bedrock-mantle.${config.awsRegion}.api.aws/v1`;
-
   if ("awsBedrockApiKey" in config && config.awsBedrockApiKey) {
-    return new OpenAI({ baseURL, apiKey: config.awsBedrockApiKey });
+    return {
+      kind: "bedrock-api-key",
+      region: config.awsRegion,
+      apiKey: config.awsBedrockApiKey,
+    };
   }
 
   if ("awsCredentials" in config && config.awsCredentials) {
-    return new OpenAI({
-      baseURL,
-      apiKey: "bedrock-sigv4",
-      fetch: createSigV4Fetch({
-        region: config.awsRegion,
-        credentials: config.awsCredentials,
-      }),
-    });
+    return {
+      kind: "bedrock-sigv4",
+      region: config.awsRegion,
+      credentials: config.awsCredentials,
+    };
   }
 
-  return new OpenAI({ baseURL, apiKey: "bedrock" });
+  throw new ThalamusError(
+    "Bedrock requires awsBedrockApiKey or awsCredentials",
+    { provider: OPENAI, isRetryable: false },
+  );
 }
 
 class OpenAIProvider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
 
-  private readonly client: OpenAI;
+  private readonly auth: ResolvedAuth;
+  private opened?: Promise<OpenedClient>;
   private readonly model: string;
   private readonly instructions?: string;
   private readonly useConversations: boolean;
@@ -235,11 +254,11 @@ class OpenAIProvider {
 
   constructor(config: OpenAIProviderConfig) {
     this.config = config;
+    this.auth = resolveAuth(config);
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
-    this.client = buildOpenAIClient(config);
-    this.useConversations = !("awsRegion" in config && config.awsRegion);
+    this.useConversations = this.auth.kind === "direct";
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
@@ -251,6 +270,88 @@ class OpenAIProvider {
       !isEdgeObserver(config.durable)
     ) {
       this.recoverActiveSessions().catch(() => {});
+    }
+  }
+
+  private open(): Promise<OpenedClient> {
+    this.opened ??= this.openClient();
+    return this.opened;
+  }
+
+  private async openClient(): Promise<OpenedClient> {
+    // null stops the SDK from reading AWS_BEDROCK_BASE_URL
+    const baseURL = null;
+    try {
+      switch (this.auth.kind) {
+        case "direct": {
+          const { apiKey } = this.auth;
+          return {
+            client: new OpenAI({ apiKey }),
+            authorization: `Bearer ${apiKey}`,
+          };
+        }
+        case "bedrock-api-key": {
+          const { region, apiKey } = this.auth;
+          let imported: typeof import("openai/providers/bedrock");
+          try {
+            imported = await import("openai/providers/bedrock");
+          } catch (err) {
+            throw new ThalamusError(
+              "Amazon Bedrock bearer auth requires openai >= 6.45.0",
+              { provider: OPENAI, isRetryable: false, cause: err },
+            );
+          }
+          const { bedrock } = imported;
+          return {
+            client: new OpenAI({
+              provider: bedrock({
+                region,
+                apiKey,
+                baseURL,
+              }),
+            }),
+            authorization: `Bearer ${apiKey}`,
+          };
+        }
+        case "bedrock-sigv4": {
+          const { region, credentials } = this.auth;
+          let imported: typeof import("openai/providers/bedrock/aws");
+          try {
+            imported = await import("openai/providers/bedrock/aws");
+          } catch (err) {
+            throw new ThalamusError(
+              "SigV4 auth requires @aws-sdk/credential-provider-node, @smithy/hash-node, and @smithy/signature-v4",
+              { provider: OPENAI, isRetryable: false, cause: err },
+            );
+          }
+          const { bedrock } = imported;
+          const { accessKeyId, secretAccessKey, sessionToken } = credentials;
+          return {
+            client: new OpenAI({
+              provider: bedrock({
+                region,
+                accessKeyId,
+                secretAccessKey,
+                sessionToken,
+                baseURL,
+              }),
+            }),
+            authorization: "Bearer bedrock-sigv4",
+          };
+        }
+        default: {
+          const unreachable: never = this.auth;
+          throw unreachable;
+        }
+      }
+    } catch (err) {
+      if (err instanceof ThalamusError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new ThalamusError(message, {
+        provider: OPENAI,
+        isRetryable: false,
+        cause: err,
+      });
     }
   }
 
@@ -388,6 +489,7 @@ class OpenAIProvider {
     webhookMetadata: Record<string, string> | undefined,
   ): Promise<void> {
     const observer = this.edgeObserver!;
+    const { client, authorization } = await this.open();
 
     const createParams = {
       model: this.model,
@@ -398,7 +500,7 @@ class OpenAIProvider {
       ...providerOptions,
     };
 
-    const rawStream = await this.client.responses.create({
+    const rawStream = await client.responses.create({
       ...createParams,
       stream: true,
       background: true,
@@ -427,7 +529,7 @@ class OpenAIProvider {
       );
     }
 
-    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true${lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""}`;
+    const streamUrl = `${client.baseURL}/responses/${responseId}?stream=true${lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""}`;
 
     await observer.observe({
       sessionId,
@@ -435,7 +537,7 @@ class OpenAIProvider {
       turnId,
       streamUrl,
       headers: {
-        Authorization: `Bearer ${this.client.apiKey}`,
+        Authorization: authorization,
       },
       provider: "openai",
       webhook: {
@@ -493,7 +595,8 @@ class OpenAIProvider {
     if (!this.useConversations) {
       return crypto.randomUUID();
     }
-    const conversation = await this.client.conversations.create();
+    const opened = await this.open();
+    const conversation = await opened.client.conversations.create();
     this.log.debug("conversation.create", {
       stage: "conversation.create",
       provider: OPENAI,
@@ -540,7 +643,8 @@ class OpenAIProvider {
     afterSequenceNumber: number,
     signal?: AbortSignal,
   ): AsyncIterable<ResponseStreamEvent> {
-    const rawStream = (await this.client.responses.retrieve(
+    const opened = await this.open();
+    const rawStream = (await opened.client.responses.retrieve(
       responseId,
       {
         stream: true as const,
@@ -555,7 +659,8 @@ class OpenAIProvider {
   }
 
   private async getStatus(responseId: string): Promise<string | undefined> {
-    const response = await this.client.responses.retrieve(responseId);
+    const opened = await this.open();
+    const response = await opened.client.responses.retrieve(responseId);
     return response.status;
   }
 
@@ -600,6 +705,8 @@ class OpenAIProvider {
       ...params.providerOptions,
     };
 
+    const client = (await this.open()).client;
+
     while (retries <= MAX_RECONNECT_RETRIES) {
       try {
         let rawStream: AsyncIterable<ResponseStreamEvent>;
@@ -617,7 +724,7 @@ class OpenAIProvider {
             mode: "stream",
             runId,
           });
-          rawStream = await this.client.responses.create(
+          rawStream = await client.responses.create(
             {
               ...createParams,
               stream: true,

@@ -16,11 +16,7 @@ vi.mock("openai", async (importOriginal) => {
       conversations: { create: mockConversationsCreate },
     };
   };
-  return {
-    default: MockOpenAI,
-    APIError: actual.APIError,
-    APIUserAbortError: actual.APIUserAbortError,
-  };
+  return { ...actual, default: MockOpenAI };
 });
 
 afterEach(() => vi.clearAllMocks());

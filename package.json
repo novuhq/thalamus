@@ -94,9 +94,10 @@
   "peerDependencies": {
     "@anthropic-ai/aws-sdk": ">=0.86.0",
     "@anthropic-ai/sdk": ">=0.130.0",
-    "@aws-crypto/sha256-js": ">=5.0.0",
-    "@smithy/signature-v4": ">=3.0.0",
-    "openai": ">=4.87.0"
+    "@aws-sdk/credential-provider-node": ">=3.972.0 <4",
+    "@smithy/hash-node": ">=4.3.0 <5",
+    "@smithy/signature-v4": ">=5.4.0 <6",
+    "openai": ">=6.45.0"
   },
   "peerDependenciesMeta": {
     "@anthropic-ai/sdk": {
@@ -105,7 +106,10 @@
     "@anthropic-ai/aws-sdk": {
       "optional": true
     },
-    "@aws-crypto/sha256-js": {
+    "@aws-sdk/credential-provider-node": {
+      "optional": true
+    },
+    "@smithy/hash-node": {
       "optional": true
     },
     "@smithy/signature-v4": {
@@ -121,14 +125,15 @@
   "devDependencies": {
     "@anthropic-ai/aws-sdk": "^0.3.0",
     "@anthropic-ai/sdk": "^0.131.0",
-    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-provider-node": "^3.972.0",
     "@biomejs/biome": "latest",
+    "@smithy/hash-node": "^4.3.0",
     "@smithy/signature-v4": "^5.4.1",
     "@types/node": "^25.7.0",
     "dotenv": "^17.4.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.4",
-    "openai": "latest",
+    "openai": "^7.44.0",
     "tsup": "^8.5.0",
     "tsx": "^4.21.0",
     "typescript": "^5.8.0",

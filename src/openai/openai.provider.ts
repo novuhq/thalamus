@@ -1,4 +1,4 @@
-import OpenAI, { APIError, APIUserAbortError } from "openai";
+import { APIError, APIUserAbortError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
@@ -54,8 +54,13 @@ import type {
 import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
 import { openaiTransformer } from "./openai.transformer";
+import {
+  type OpenedClient,
+  openOpenAIClient,
+  type ResolvedAuth,
+  resolveAuth,
+} from "./openai-client";
 import { mapEvent, ResponseAccumulator } from "./openai-parser";
-import { createSigV4Fetch } from "./sigv4-fetch";
 import { toOpenAIToolResultOutput } from "./tool-result";
 
 export function mapError(error: unknown, provider: string): Error {
@@ -180,39 +185,14 @@ const MAX_RECONNECT_RETRIES = 3;
 export type OpenAIProviderConfig = OpenAIBaseConfig &
   (OpenAIDirectConfig | OpenAIBedrockApiKeyConfig | OpenAIBedrockSigV4Config);
 
-function buildOpenAIClient(config: OpenAIProviderConfig): OpenAI {
-  if (!("awsRegion" in config) || !config.awsRegion) {
-    return new OpenAI({ apiKey: config.apiKey });
-  }
-
-  const baseURL = `https://bedrock-mantle.${config.awsRegion}.api.aws/v1`;
-
-  if ("awsBedrockApiKey" in config && config.awsBedrockApiKey) {
-    return new OpenAI({ baseURL, apiKey: config.awsBedrockApiKey });
-  }
-
-  if ("awsCredentials" in config && config.awsCredentials) {
-    return new OpenAI({
-      baseURL,
-      apiKey: "bedrock-sigv4",
-      fetch: createSigV4Fetch({
-        region: config.awsRegion,
-        credentials: config.awsCredentials,
-      }),
-    });
-  }
-
-  return new OpenAI({ baseURL, apiKey: "bedrock" });
-}
-
 class OpenAIProvider {
   readonly provider = OPENAI;
   readonly runtimeId: string;
 
-  private readonly client: OpenAI;
+  private readonly auth: ResolvedAuth;
+  private opened?: Promise<OpenedClient>;
   private readonly model: string;
   private readonly instructions?: string;
-  private readonly useConversations: boolean;
   private readonly mcpServers: McpServerConfig[];
   private readonly vaultStore?: VaultStore;
   private readonly onSessionEvents?: SessionEventsFactory;
@@ -235,11 +215,10 @@ class OpenAIProvider {
 
   constructor(config: OpenAIProviderConfig) {
     this.config = config;
+    this.auth = resolveAuth(config);
     this.runtimeId = config.promptId ?? "inline";
     this.model = config.model ?? "gpt-4o";
     this.instructions = config.instructions;
-    this.client = buildOpenAIClient(config);
-    this.useConversations = !("awsRegion" in config && config.awsRegion);
     this.mcpServers = config.mcpServers ?? [];
     this.vaultStore = config.vaultStore;
     this.onSessionEvents = config.onSessionEvents;
@@ -252,6 +231,11 @@ class OpenAIProvider {
     ) {
       this.recoverActiveSessions().catch(() => {});
     }
+  }
+
+  private open(): Promise<OpenedClient> {
+    this.opened ??= openOpenAIClient(this.auth);
+    return this.opened;
   }
 
   send(params: RequestParams): SendResult | Promise<WebhookSendResult> {
@@ -388,6 +372,7 @@ class OpenAIProvider {
     webhookMetadata: Record<string, string> | undefined,
   ): Promise<void> {
     const observer = this.edgeObserver!;
+    const { client, authorization } = await this.open();
 
     const createParams = {
       model: this.model,
@@ -398,7 +383,7 @@ class OpenAIProvider {
       ...providerOptions,
     };
 
-    const rawStream = await this.client.responses.create({
+    const rawStream = await client.responses.create({
       ...createParams,
       stream: true,
       background: true,
@@ -427,7 +412,7 @@ class OpenAIProvider {
       );
     }
 
-    const streamUrl = `${this.client.baseURL}/responses/${responseId}?stream=true${lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""}`;
+    const streamUrl = `${client.baseURL}/responses/${responseId}?stream=true${lastSeqNo >= 0 ? `&starting_after=${lastSeqNo}` : ""}`;
 
     await observer.observe({
       sessionId,
@@ -435,7 +420,7 @@ class OpenAIProvider {
       turnId,
       streamUrl,
       headers: {
-        Authorization: `Bearer ${this.client.apiKey}`,
+        Authorization: authorization,
       },
       provider: "openai",
       webhook: {
@@ -490,10 +475,11 @@ class OpenAIProvider {
   }
 
   private async createNewSession(): Promise<string> {
-    if (!this.useConversations) {
+    if (this.auth.kind !== "direct") {
       return crypto.randomUUID();
     }
-    const conversation = await this.client.conversations.create();
+    const opened = await this.open();
+    const conversation = await opened.client.conversations.create();
     this.log.debug("conversation.create", {
       stage: "conversation.create",
       provider: OPENAI,
@@ -503,7 +489,7 @@ class OpenAIProvider {
   }
 
   private resolveSessionParams(sessionId: string): Record<string, unknown> {
-    if (this.useConversations) {
+    if (this.auth.kind === "direct") {
       return { conversation: { id: sessionId } };
     }
     return { previous_response_id: sessionId };
@@ -540,7 +526,8 @@ class OpenAIProvider {
     afterSequenceNumber: number,
     signal?: AbortSignal,
   ): AsyncIterable<ResponseStreamEvent> {
-    const rawStream = (await this.client.responses.retrieve(
+    const opened = await this.open();
+    const rawStream = (await opened.client.responses.retrieve(
       responseId,
       {
         stream: true as const,
@@ -555,7 +542,8 @@ class OpenAIProvider {
   }
 
   private async getStatus(responseId: string): Promise<string | undefined> {
-    const response = await this.client.responses.retrieve(responseId);
+    const opened = await this.open();
+    const response = await opened.client.responses.retrieve(responseId);
     return response.status;
   }
 
@@ -600,6 +588,8 @@ class OpenAIProvider {
       ...params.providerOptions,
     };
 
+    const client = (await this.open()).client;
+
     while (retries <= MAX_RECONNECT_RETRIES) {
       try {
         let rawStream: AsyncIterable<ResponseStreamEvent>;
@@ -617,7 +607,7 @@ class OpenAIProvider {
             mode: "stream",
             runId,
           });
-          rawStream = await this.client.responses.create(
+          rawStream = await client.responses.create(
             {
               ...createParams,
               stream: true,

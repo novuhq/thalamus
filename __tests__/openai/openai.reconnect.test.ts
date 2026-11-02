@@ -1,3 +1,8 @@
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIError,
+} from "openai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../../src/openai/openai.provider.js";
 import { MessageRole, type StreamPart } from "../../src/types.js";
@@ -19,14 +24,10 @@ vi.mock("openai", async (importOriginal) => {
       conversations: { create: mockConversationsCreate },
     };
   };
-  return {
-    default: MockOpenAI,
-    APIError: actual.APIError,
-    APIUserAbortError: actual.APIUserAbortError,
-  };
+  return { ...actual, default: MockOpenAI };
 });
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => vi.resetAllMocks());
 
 function asyncIter(events: object[]) {
   return {
@@ -188,6 +189,52 @@ describe("send — resilient observation (auto-reconnect)", () => {
       "A",
       "B",
     ]);
+  });
+
+  it.each([
+    ["APIConnectionError", new APIConnectionError({ message: "fetch failed" })],
+    ["APIConnectionTimeoutError", new APIConnectionTimeoutError()],
+    [
+      "5xx APIError",
+      new APIError(503, undefined, "Service Unavailable", new Headers()),
+    ],
+  ])("keeps reconnecting when the resume request fails with %s", async (_, error) => {
+    mockConversationsCreate.mockResolvedValue({ id: "conv_transient" });
+
+    mockResponsesCreate.mockReturnValueOnce(
+      failingAsyncIter(
+        [
+          {
+            type: "response.created",
+            sequence_number: 0,
+            response: { id: "resp_t", conversation: { id: "conv_transient" } },
+          },
+        ],
+        1,
+      ),
+    );
+
+    mockResponsesRetrieve.mockRejectedValueOnce(error).mockReturnValueOnce(
+      asyncIter([
+        {
+          type: "response.completed",
+          sequence_number: 1,
+          response: {
+            id: "resp_t",
+            output_text: "Recovered",
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      ]),
+    );
+
+    const provider = createOpenAIProvider(config);
+    const response = await provider.send({
+      messages: [{ role: MessageRole.USER, content: "Hi" }],
+    });
+
+    expect(response.messages).toEqual(["Recovered"]);
+    expect(mockResponsesRetrieve).toHaveBeenCalledTimes(2);
   });
 
   it("gives up after MAX_RECONNECT_RETRIES and yields error", async () => {

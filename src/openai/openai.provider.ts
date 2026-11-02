@@ -1,4 +1,4 @@
-import { APIError, APIUserAbortError } from "openai";
+import { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
@@ -14,14 +14,7 @@ import {
   type SerializedRequestParams,
   type SessionCheckpoint,
 } from "../durable/types";
-import {
-  AbortedError,
-  ProviderAuthError,
-  ProviderRateLimitError,
-  ProviderResponseError,
-  ProviderUnavailableError,
-  ThalamusError,
-} from "../errors";
+import { AbortedError, ThalamusError } from "../errors";
 import {
   logErrorMessage,
   resolveLogger,
@@ -60,35 +53,23 @@ import {
   type ResolvedAuth,
   resolveAuth,
 } from "./openai-client";
-import { mapEvent, ResponseAccumulator } from "./openai-parser";
+import {
+  classifyOpenAIFailure,
+  mapEvent,
+  ResponseAccumulator,
+} from "./openai-parser";
 import { toOpenAIToolResultOutput } from "./tool-result";
 
-export function mapError(error: unknown, provider: string): Error {
+export function mapError(error: unknown, provider: string): ThalamusError {
+  if (error instanceof ThalamusError) return error;
   if (error instanceof APIUserAbortError) {
     return new AbortedError({ provider, cause: error });
   }
 
-  const msg = error instanceof Error ? error.message : String(error);
-  const code = error instanceof APIError ? (error.code ?? "") : "";
-  if (
-    code === "invalid_api_key" ||
-    msg.toLowerCase().includes("unauthorized")
-  ) {
-    return new ProviderAuthError(msg, { provider, cause: error });
-  }
-  if (
-    code === "rate_limit_exceeded" ||
-    msg.toLowerCase().includes("rate limit")
-  ) {
-    return new ProviderRateLimitError(msg, { provider, cause: error });
-  }
-  if (
-    msg.toLowerCase().includes("unavailable") ||
-    msg.toLowerCase().includes("503")
-  ) {
-    return new ProviderUnavailableError(msg, { provider, cause: error });
-  }
-  return new ProviderResponseError(msg, { provider, cause: error });
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error instanceof APIError ? error.code : undefined;
+
+  return classifyOpenAIFailure(code, message, error, provider);
 }
 
 /**
@@ -96,14 +77,23 @@ export function mapError(error: unknown, provider: string): Error {
  * proxy timeouts, etc.) that can't be exhaustively listed. We invert the check:
  * only abort, application-level, and permanent API errors are terminal;
  * everything else is treated as a transient transport failure worth retrying.
+ *
+ * openai >= 7.6 throws a named SSE `event: error` as APIError with no HTTP
+ * status. That is a provider failure. APIConnectionError also has no status,
+ * including APIConnectionTimeoutError, so it is handled first and stays retryable.
  */
 function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
   if (err instanceof APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
-  if (err instanceof APIError && err.status >= 400 && err.status < 500) {
+  if (err instanceof APIConnectionError) return true;
+  if (
+    err instanceof APIError &&
+    (typeof err.status !== "number" || (err.status >= 400 && err.status < 500))
+  ) {
     return false;
   }
+
   return true;
 }
 
@@ -829,9 +819,7 @@ class OpenAIProvider {
       try {
         sessionId = await this.ensureSession(params);
       } catch (err) {
-        const mapped =
-          err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
-        yield { type: "error", error: mapped };
+        yield { type: "error", error: mapError(err, OPENAI) };
         return;
       }
 
@@ -921,8 +909,7 @@ class OpenAIProvider {
         signal,
       );
     } catch (err) {
-      const mapped =
-        err instanceof ThalamusError ? err : (mapError(err, OPENAI) as Error);
+      const mapped = mapError(err, OPENAI);
       this.log.error("stream.error", {
         stage: "stream.error",
         provider: OPENAI,

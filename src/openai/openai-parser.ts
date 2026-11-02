@@ -22,34 +22,44 @@ import {
 } from "../types";
 import { parseOpenAIToolResultOutput } from "./tool-result";
 
+export function classifyOpenAIFailure(
+  code: string | null | undefined,
+  message: string,
+  cause: unknown,
+  provider: string = OPENAI,
+): ThalamusError {
+  const normalizedCode = code ?? "";
+  if (
+    normalizedCode === "invalid_api_key" ||
+    message.toLowerCase().includes("unauthorized")
+  ) {
+    return new ProviderAuthError(message, { provider, cause });
+  }
+  if (
+    normalizedCode === "rate_limit_exceeded" ||
+    message.toLowerCase().includes("rate limit")
+  ) {
+    return new ProviderRateLimitError(message, { provider, cause });
+  }
+  if (
+    message.toLowerCase().includes("unavailable") ||
+    message.toLowerCase().includes("503")
+  ) {
+    return new ProviderUnavailableError(message, { provider, cause });
+  }
+
+  return new ProviderResponseError(message, { provider, cause });
+}
+
 function mapStreamErrorEvent(event: {
   code?: string | null;
   message?: string;
 }): Error {
-  const msg = event.message ?? "Stream error";
-  const code = event.code ?? "";
-  if (
-    code === "invalid_api_key" ||
-    msg.toLowerCase().includes("unauthorized")
-  ) {
-    return new ProviderAuthError(msg, { provider: OPENAI, cause: event });
-  }
-  if (
-    code === "rate_limit_exceeded" ||
-    msg.toLowerCase().includes("rate limit")
-  ) {
-    return new ProviderRateLimitError(msg, { provider: OPENAI, cause: event });
-  }
-  if (
-    msg.toLowerCase().includes("unavailable") ||
-    msg.toLowerCase().includes("503")
-  ) {
-    return new ProviderUnavailableError(msg, {
-      provider: OPENAI,
-      cause: event,
-    });
-  }
-  return new ProviderResponseError(msg, { provider: OPENAI, cause: event });
+  return classifyOpenAIFailure(
+    event.code,
+    event.message ?? "Stream error",
+    event,
+  );
 }
 
 export class ResponseAccumulator {

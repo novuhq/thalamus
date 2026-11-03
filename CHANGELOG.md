@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.1.0-alpha.21 (2026-11-03)
+
+### 🚀 Features
+
+- **anthropic:** peer SDK 1.x and send anthropic-version 2026-10-21 ([#26](https://github.com/novuhq/thalamus/pull/26))
+
+### 🩹 Fixes
+
+- **openai:** stop retrying streamed APIError events ([#25](https://github.com/novuhq/thalamus/pull/25))
+
+### 🔨 Refactors
+
+- **openai:** sign Bedrock with the SDK provider fixes NV-9271 ([#24](https://github.com/novuhq/thalamus/pull/24))
+
+### ⚠️ Breaking Changes
+
+- The `@anthropic-ai/sdk` and `@anthropic-ai/aws-sdk` peer dependencies are now `>=1.0.0 <2`. The edge observer sends `anthropic-version: 2026-10-21` to match SDK 1.x.
+- The `openai` peer dependency is now `>=6.45.0`.
+- Bedrock SigV4 needs the optional peers `@aws-sdk/credential-provider-node`, `@smithy/hash-node`, and `@smithy/signature-v4` (`>=5.4.0`). `@aws-crypto/sha256-js` is no longer used.
+- Bedrock requests use the OpenAI SDK's Mantle endpoint (`/openai/v1`), and SigV4 signs with service `bedrock-mantle`. The Bedrock config fields are unchanged.
+
+### 🧹 Chores
+
+- Add MIT License to the project ([#23](https://github.com/novuhq/thalamus/pull/23))
+
+### ❤️ Thank You
+
+- Adam Chmara
+- Dima Grossman
+
 ## v0.1.0-alpha.20 (2026-10-07)
 
 ### 🚀 Features

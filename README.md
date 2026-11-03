@@ -51,7 +51,7 @@ const provider = createOpenAIProvider({
 | Anthropic Managed Agents | `@novu/thalamus/anthropic` | `@anthropic-ai/sdk` |
 | Anthropic via AWS | `@novu/thalamus/anthropic` | `@anthropic-ai/aws-sdk` |
 | OpenAI Responses API | `@novu/thalamus/openai` | `openai` |
-| OpenAI via AWS Bedrock Mantle | `@novu/thalamus/openai` | `openai` (+ `@smithy/signature-v4` `@aws-crypto/sha256-js` for SigV4) |
+| OpenAI via AWS Bedrock Mantle | `@novu/thalamus/openai` | `openai` (+ `@aws-sdk/credential-provider-node` `@smithy/hash-node` `@smithy/signature-v4` for SigV4) |
 
 Bedrock Mantle supports two auth modes: pass `awsBedrockApiKey` for API key auth, or `awsCredentials` (access key + secret + optional session token) for SigV4 signing. SigV4 requires the additional peer deps listed above.
 

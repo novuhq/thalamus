@@ -1,7 +1,30 @@
-import OpenAI from "openai";
 import { ThalamusError } from "../errors";
 import { OPENAI } from "../types";
 import type { OpenAIProviderConfig } from "./openai.provider";
+
+type OpenAIModule = typeof import("openai");
+
+let sdk: OpenAIModule | undefined;
+
+export function loadedOpenAI(): OpenAIModule | undefined {
+  return sdk;
+}
+
+async function loadOpenAI(): Promise<OpenAIModule> {
+  if (sdk) return sdk;
+
+  try {
+    sdk = await import("openai");
+  } catch (err) {
+    throw new ThalamusError("openai >= 6.45.0 is required", {
+      provider: OPENAI,
+      isRetryable: false,
+      cause: err,
+    });
+  }
+
+  return sdk;
+}
 
 export type ResolvedAuth =
   | { kind: "direct"; apiKey: string }
@@ -16,7 +39,10 @@ export type ResolvedAuth =
       };
     };
 
-export type OpenedClient = { client: OpenAI; authorization: string };
+export type OpenedClient = {
+  client: import("openai").default;
+  authorization: string;
+};
 
 function isDirectConfig(
   config: OpenAIProviderConfig,
@@ -54,6 +80,7 @@ export function resolveAuth(config: OpenAIProviderConfig): ResolvedAuth {
 export async function openOpenAIClient(
   auth: ResolvedAuth,
 ): Promise<OpenedClient> {
+  const { default: OpenAI } = await loadOpenAI();
   // null stops the SDK from reading AWS_BEDROCK_BASE_URL
   const baseURL = null;
 

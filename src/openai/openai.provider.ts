@@ -1,4 +1,3 @@
-import { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseInput,
@@ -48,6 +47,7 @@ import type { WebhookHandler } from "../webhook/index";
 import { createProviderWebhookHandler } from "../webhook/index";
 import { openaiTransformer } from "./openai.transformer";
 import {
+  loadedOpenAI,
   type OpenedClient,
   openOpenAIClient,
   type ResolvedAuth,
@@ -62,12 +62,14 @@ import { toOpenAIToolResultOutput } from "./tool-result";
 
 export function mapError(error: unknown, provider: string): ThalamusError {
   if (error instanceof ThalamusError) return error;
-  if (error instanceof APIUserAbortError) {
+
+  const sdk = loadedOpenAI();
+  if (sdk && error instanceof sdk.APIUserAbortError) {
     return new AbortedError({ provider, cause: error });
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  const code = error instanceof APIError ? error.code : undefined;
+  const code = sdk && error instanceof sdk.APIError ? error.code : undefined;
 
   return classifyOpenAIFailure(code, message, error, provider);
 }
@@ -84,11 +86,14 @@ export function mapError(error: unknown, provider: string): ThalamusError {
  */
 function isTransientStreamError(err: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return false;
-  if (err instanceof APIUserAbortError) return false;
+
+  const sdk = loadedOpenAI();
+  if (sdk && err instanceof sdk.APIUserAbortError) return false;
   if (err instanceof ThalamusError) return false;
-  if (err instanceof APIConnectionError) return true;
+  if (sdk && err instanceof sdk.APIConnectionError) return true;
   if (
-    err instanceof APIError &&
+    sdk &&
+    err instanceof sdk.APIError &&
     (typeof err.status !== "number" || (err.status >= 400 && err.status < 500))
   ) {
     return false;

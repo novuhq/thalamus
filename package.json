@@ -82,7 +82,7 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node __tests__/build/prove-openai-optional.mjs",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",

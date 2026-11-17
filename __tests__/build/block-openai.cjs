@@ -1,16 +1,4 @@
-const Module = require("node:module");
-const { registerHooks } = Module;
-
-const orig = Module._resolveFilename;
-Module._resolveFilename = function (request, parent, isMain, options) {
-  if (request === "openai" || request.startsWith("openai/")) {
-    const err = new Error(`blocked resolve: ${request}`);
-    err.code = "MODULE_NOT_FOUND";
-    throw err;
-  }
-
-  return orig.call(this, request, parent, isMain, options);
-};
+const { registerHooks } = require("node:module");
 
 registerHooks({
   resolve(specifier, context, nextResolve) {

@@ -63,60 +63,15 @@ import { toOpenAIToolResultOutput } from "./tool-result";
 export function mapError(error: unknown, provider: string): ThalamusError {
   if (error instanceof ThalamusError) return error;
 
-  // Public callers can pass SDK errors before any Thalamus client opens.
-  // The cached module is empty then, so recognize the classes by prototype.
   const sdk = loadedOpenAI();
-  if (isOpenAIUserAbort(error, sdk)) {
+  if (sdk && error instanceof sdk.APIUserAbortError) {
     return new AbortedError({ provider, cause: error });
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  const code = openAIErrorCode(error, sdk);
+  const code = sdk && error instanceof sdk.APIError ? error.code : undefined;
 
   return classifyOpenAIFailure(code, message, error, provider);
-}
-
-function isOpenAIUserAbort(
-  error: unknown,
-  sdk: ReturnType<typeof loadedOpenAI>,
-): boolean {
-  if (sdk) return error instanceof sdk.APIUserAbortError;
-  return (
-    error instanceof Error &&
-    errorConstructorName(error) === "APIUserAbortError"
-  );
-}
-
-function openAIErrorCode(
-  error: unknown,
-  sdk: ReturnType<typeof loadedOpenAI>,
-): string | null | undefined {
-  if (sdk) return error instanceof sdk.APIError ? error.code : undefined;
-  if (!isUnloadedAPIError(error)) return undefined;
-  const { code } = error;
-  return typeof code === "string" || code === null ? code : undefined;
-}
-
-function isUnloadedAPIError(error: unknown): error is { code?: unknown } {
-  if (!(error instanceof Error)) return false;
-  if (!("code" in error) || !("status" in error) || !("headers" in error)) {
-    return false;
-  }
-
-  for (
-    let current: object | null = error;
-    current && current !== Object.prototype;
-    current = Object.getPrototypeOf(current)
-  ) {
-    if (errorConstructorName(current) === "APIError") return true;
-  }
-  return false;
-}
-
-function errorConstructorName(value: object): string | undefined {
-  const ctor = (value as { constructor?: unknown }).constructor;
-  if (typeof ctor !== "function" || !ctor.name) return undefined;
-  return ctor.name;
 }
 
 /**

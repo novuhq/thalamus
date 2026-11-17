@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { ThalamusError } from "../../src/errors.js";
-import { thalamus } from "../../src/index.js";
-import { MessageRole } from "../../src/types.js";
+import { ThalamusError } from "../src/errors.js";
+import { thalamus } from "../src/index.js";
+import { MessageRole } from "../src/types.js";
 
 const openaiLoad = vi.hoisted(() => ({ count: 0 }));
 
